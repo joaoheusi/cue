@@ -1,0 +1,10 @@
+[
+  "git rev-parse --abbrev-ref --symbolic-full-name @{{upstream}}",
+  "Publish against `{base}` with {draft_phrase} and {draft_flag}. Reply with the final URL.",
+  "{{clipbord}} {{ date }} {{constructor}} {{__proto__}}",
+  "Unclosed literal {{date} and {{",
+  "\\{{upstream}} \\\\{{upstream}}",
+  "{{unknown {{clipboard}} }}",
+  "{{{date}}}",
+  "{{a}}\nOlá 😃\n{{another\nplaceholder}}"
+]

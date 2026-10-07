@@ -1,0 +1,37 @@
+Open Pull Request or Merge Request
+
+Goal:
+Publish the current branch and open a pull request on GitHub or Bitbucket, or a merge request on GitLab. This is a publishing task, not a code-review task.
+
+Rules:
+- Use standard git plus the repository forge CLI for pull request or merge request operations: `gh` for GitHub, `glab` for GitLab, `bkt` for Bitbucket Cloud.
+- For Bitbucket, inspect `bkt auth status --json`: use the active Cloud context, or the only Cloud context when none is active; stop with a context-selection error if several remain. Pass `--context <context>` on every Bitbucket command and `--workspace <workspace> --repo <slug>` on writes, using identity from the git remote.
+- Inspect the current repo and existing pull request or merge request state before choosing commit messages, titles, bodies, or replies.
+- Prefer repository conventions and existing templates when present.
+- Create meaningful commit boundaries: split unrelated changes into separate commits and keep each commit focused.
+- Use Conventional Commits for all new commits (`type(scope): summary` or `type: summary`; types: feat, fix, chore, docs, refactor, test, perf, build, ci, style).
+- Use explicit push logic: check upstream with `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`; if absent, run `git push --set-upstream origin HEAD`, else run `git push`.
+- Execute commands non-interactively and continue until the requested outcome is complete.
+- For multi-line pull request or merge request content, write it to a temp file or heredoc and pass the file to the forge CLI instead of inline multi-line body text.
+- If a command fails, resolve the issue and retry rather than stopping early.
+
+Steps:
+1. Inspect only enough context to write accurate commit messages, title, and body: run `git status --short`, `git diff --stat`, and `git diff --cached --stat`, then inspect relevant uncommitted hunks only when the summaries are insufficient. Do not perform a code review, report findings, or change the implementation.
+2. If uncommitted changes exist, create meaningful commit(s): split clearly unrelated work into separate commits and use concise imperative messages grounded in the diff.
+3. Publish the branch explicitly: run `git rev-parse --abbrev-ref --symbolic-full-name @{{upstream}}`; if it fails, run `git push --set-upstream origin HEAD`; otherwise run `git push`.
+4. Inspect `git diff --stat {base}...HEAD` and the relevant hunks, treating this complete committed branch delta as the source of truth for the title and body. Then check for a pull request or merge request template (for example `.github/pull_request_template.md`, `pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE/*`, or `.gitlab/merge_request_templates/*`). If a template exists, follow its structure and headings, and only fill sections with concrete details.
+5. If no template exists, use:
+## Summary
+- 2-4 bullets covering scope and key implementation changes.
+## Testing
+- List the commands you actually ran, or `- Not run (not requested)` if you did not run anything.
+6. Write the body to a temp file or heredoc, then create a pull request or merge request{draft_phrase} targeting `{base}` with the right forge CLI. For Bitbucket use `body_file=<path>; bkt pr create --context <context> --workspace <workspace> --repo <slug> --source "$(git branch --show-current)" --target {base}{draft_flag} --title "<clear title>" --description "$(cat "$body_file")" --json`. For GitHub use `gh pr create --base {base}{draft_flag} --title "<clear title>" --body-file <path>`. For GitLab use `body_file=<path>; glab mr create --target-branch {base}{draft_flag} --title "<clear title>" -d "$(cat "$body_file")" --yes` after checking `glab mr create --help` if needed.
+7. Use real newlines in the body file and never include literal `\n` escapes or inline multi-line body text.
+
+Done:
+- The current branch is pushed to origin (with upstream configured if needed).
+- A pull request or merge request{draft_phrase} exists against `{base}` with a specific title and well-formatted markdown body.
+- If a pull request or merge request template exists, the final body follows that template structure.
+
+Reply:
+Output only the final pull request or merge request URL.

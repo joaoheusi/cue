@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cue:actions:v1",
+  "title": "Cue action export v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "exportedAt",
+    "actions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "exportedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "description",
+          "template",
+          "aliases",
+          "tags",
+          "category",
+          "deliveryMode",
+          "favorite",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "template": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Non-whitespace text, at most 65,536 UTF-8 bytes. Supports clipboard, date and time variables.",
+            "maxLength": 65536
+          },
+          "aliases": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 50
+            }
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 30
+            }
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 50
+              }
+            ]
+          },
+          "deliveryMode": {
+            "enum": [
+              "inherit",
+              "copy",
+              "paste"
+            ]
+          },
+          "favorite": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}
