@@ -1,0 +1,25 @@
+{
+  "identifier": "library",
+  "windows": ["library"],
+  "permissions": [
+    "allow-get-snapshot",
+    "allow-get-capabilities",
+    "allow-request-paste-permission",
+    "allow-close-library",
+    "allow-library-operation",
+    "allow-open-palette",
+    "allow-close-palette",
+    "allow-show-library",
+    "allow-copy-action",
+    "allow-configure-shortcut",
+    "allow-toggle-shortcuts",
+    "allow-preview-import",
+    "allow-commit-import",
+    "allow-export-actions",
+    "allow-quit-app",
+    "core:window:allow-hide",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}

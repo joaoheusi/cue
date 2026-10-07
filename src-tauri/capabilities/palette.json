@@ -1,0 +1,18 @@
+{
+  "identifier": "palette",
+  "windows": [
+    "palette"
+  ],
+  "permissions": [
+    "allow-get-snapshot",
+    "allow-get-capabilities",
+    "allow-palette-context",
+    "allow-open-palette",
+    "allow-close-palette",
+    "allow-show-library",
+    "allow-execute-action",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}
