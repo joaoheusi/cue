@@ -30,6 +30,11 @@ import CueKit
         if bindings.contains(where: { $0.key != owner && $0.value.shortcut == shortcut }) {
             throw CueError("SHORTCUT_CONFLICT", "This shortcut is already used in Cue. Choose another.")
         }
+        // Carbon rejects a second registration of the same chord, so keep the live one.
+        if let current = bindings[owner], current.shortcut == shortcut, current.ref != nil {
+            bindings[owner] = Binding(shortcut: shortcut, ref: current.ref, handler: handler)
+            return
+        }
         if paused {
             unregister(owner)
             bindings[owner] = Binding(shortcut: shortcut, ref: nil, handler: handler)
