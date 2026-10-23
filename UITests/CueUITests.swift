@@ -33,7 +33,7 @@ final class CueUITests: XCTestCase {
         search.typeKey("a", modifierFlags: .command)
         search.typeText("rewrite")
         XCTAssertTrue(app.staticTexts["Rewrite clearly"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Review current changes"].exists, "Search should filter out non-matching actions.")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForNonExistence(timeout: 5), "Search should filter out non-matching actions.")
 
         search.typeKey(.return, modifierFlags: .shift)
 

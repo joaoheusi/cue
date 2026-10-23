@@ -89,7 +89,8 @@ final class CommandPanel: NSPanel {
 
     func windowDidResignKey(_ notification: Notification) {
         // Clicking elsewhere closes the window, as Spotlight does. Delivery keeps its own invocation.
-        if panel.isVisible && !hiding && NSApp.modalWindow == nil { hide(cancel: true) }
+        // UI tests keep it open: activity elsewhere on the Mac must not close it mid-test.
+        if panel.isVisible && !hiding && NSApp.modalWindow == nil && !context.isUITesting { hide(cancel: true) }
     }
 
     /// Centers on the screen under the pointer and clamps to 90% of its visible area.

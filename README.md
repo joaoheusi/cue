@@ -41,7 +41,7 @@ Never commit `.env` or any credential. Notarization credentials belong in the Ke
 | `make run` | Build (Debug) and open Cue. |
 | `make test` | Unit tests, then the UI test. |
 | `make test-unit` | `swift test --package-path CueKit` |
-| `make test-ui` | The XCUITest keyboard workflow. It types into Cue and temporarily replaces the clipboard (plain text is restored afterwards). Do not use the Mac while it runs: if another app takes focus, the command window closes and the test fails. |
+| `make test-ui` | The XCUITest keyboard workflow. It types into Cue and temporarily replaces the clipboard (plain text is restored afterwards). Avoid using the Mac while it runs. |
 | `make release` | Release build, signed with `APPLE_SIGNING_IDENTITY` when set, then `codesign --verify`. |
 | `make dmg` | Release build in a drag-to-Applications disk image. See `docs/release-process.md`. |
 
