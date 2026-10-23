@@ -6,14 +6,12 @@ final class CommandPanel: NSPanel {
     var onCancel: () -> Void = {}
 
     init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 680, height: 480),
-                   styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView, .resizable],
+        super.init(contentRect: .zero,
+                   styleMask: [.nonactivatingPanel, .borderless, .resizable],
                    backing: .buffered, defer: true)
-        titleVisibility = .hidden
-        titlebarAppearsTransparent = true
-        standardWindowButton(.closeButton)?.isHidden = true
-        standardWindowButton(.miniaturizeButton)?.isHidden = true
-        standardWindowButton(.zoomButton)?.isHidden = true
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
         isMovableByWindowBackground = true
         level = .floating
         hidesOnDeactivate = false
@@ -44,7 +42,10 @@ final class CommandPanel: NSPanel {
         super.init()
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.hide(cancel: true) }
-        panel.contentViewController = NSHostingController(rootView: CommandRoot(state: state, content: content))
+        let host = NSHostingController(rootView: CommandRoot(state: state, content: content))
+        host.sizingOptions = [.minSize]
+        panel.contentViewController = host
+        panel.setContentSize(NSSize(width: 750, height: 475))
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -96,31 +97,73 @@ private struct CommandRoot: View {
     let content: (CommandScope) -> AnyView
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                ForEach(Array(CommandScope.allCases.enumerated()), id: \.element) { index, scope in
-                    Button {
-                        state.scope = scope
-                    } label: {
-                        Label(scope.title, systemImage: scope.symbol)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(state.scope == scope ? Color.accentColor.opacity(0.2) : .clear, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
-                    .help("\(scope.title) (⌘\(index + 1))")
-                    .accessibilityIdentifier("scope.\(scope.rawValue)")
-                }
-                Spacer()
-                Text("⌘1–3 switch · ↩ use · ⎋ close").font(.caption).foregroundStyle(.secondary)
+        content(state.scope)
+            .id("\(state.scope.rawValue)-\(state.openID)")
+            .overlay(alignment: .topTrailing) { switcher }
+            .frame(minWidth: 480, minHeight: 320)
+            .background(PanelBackground())
+            .clipShape(RoundedRectangle(cornerRadius: PanelBackground.radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: PanelBackground.radius, style: .continuous).strokeBorder(.primary.opacity(0.1))
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-            content(state.scope)
-                .id("\(state.scope.rawValue)-\(state.openID)")
-        }
-        .frame(minWidth: 480, minHeight: 320)
-        .background(.regularMaterial)
     }
+
+    private var switcher: some View {
+        HStack(spacing: 2) {
+            ForEach(Array(CommandScope.allCases.enumerated()), id: \.element) { index, scope in
+                let selected = state.scope == scope
+                Button {
+                    state.scope = scope
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: scope.symbol)
+                        if selected { Text(scope.title) }
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(selected ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.primary.opacity(selected ? 0.1 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selected ? .primary : .secondary)
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                .help("\(scope.title) (⌘\(index + 1))")
+                .accessibilityLabel(scope.title)
+                .accessibilityIdentifier("scope.\(scope.rawValue)")
+            }
+        }
+        .frame(height: CommandMetrics.searchHeight)
+        .padding(.trailing, 12)
+    }
+}
+
+private struct PanelBackground: NSViewRepresentable {
+    static let radius: CGFloat = 16
+
+    func makeNSView(context: Context) -> NSView {
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = Self.radius
+            return glass
+        }
+        let view = NSVisualEffectView()
+        view.material = .popover
+        view.blendingMode = .behindWindow
+        view.state = .active
+        let size = Self.radius * 2 + 1
+        let mask = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            NSBezierPath(roundedRect: rect, xRadius: Self.radius, yRadius: Self.radius).fill()
+            return true
+        }
+        mask.capInsets = NSEdgeInsets(top: Self.radius, left: Self.radius, bottom: Self.radius, right: Self.radius)
+        mask.resizingMode = .stretch
+        view.maskImage = mask
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }

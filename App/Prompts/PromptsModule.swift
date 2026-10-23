@@ -25,7 +25,7 @@ import SwiftUI
 
     func openLibrary(_ actionID: String?) {
         if window == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, nav: nav)))
+            let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, nav: nav).tint(.gray)))
             window.title = "Cue"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.setContentSize(NSSize(width: 1100, height: 780))

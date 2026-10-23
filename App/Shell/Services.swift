@@ -77,7 +77,7 @@ import UniformTypeIdentifiers
         switch SMAppService.mainApp.status {
         case .enabled: "On"
         case .requiresApproval: "Waiting for approval in Login Items"
-        case .notFound: "Unavailable for this copy of Cue. Move Cue to Applications."
+        case .notFound: "Unavailable for this copy of Cue. Move Cue to Applications"
         default: "Off"
         }
     }

@@ -45,7 +45,9 @@ struct MenuBarCommandView: View {
             case .loading:
                 LoadingView()
             case .failed(let error):
-                ErrorBanner(error: error) { Task { await module.start() } }.padding(16).frame(maxHeight: .infinity, alignment: .top)
+                ErrorBanner(error: error) { Task { await module.start() } }
+                    .padding([.horizontal, .bottom], 16).padding(.top, CommandMetrics.searchHeight)
+                    .frame(maxHeight: .infinity, alignment: .top)
             case .loaded where !module.settings.enabled:
                 EmptyStateView(symbol: "menubar.rectangle", title: "Menu bar hiding is off",
                                message: "Turn it on to hide menu-bar icons behind a chevron and reveal them with a shortcut.",
@@ -54,7 +56,17 @@ struct MenuBarCommandView: View {
                 VStack(spacing: 0) {
                     CommandList(query: $query, placeholder: "Search menu-bar items", items: rows, selection: $selection,
                                 row: row, onSubmit: { row, _ in submit(row) }, onKeyPress: keyPress)
-                    footer
+                    notices
+                    CommandFooter {
+                        EmptyView()
+                    } trailing: {
+                        if case .item(let entry)? = rows.first(where: { $0.id == selection }) {
+                            KeyHint(label: "Open", keys: ["↩"])
+                            if entry.item.movable { KeyHint(label: "Move", keys: ["⌥", "←", "→"]) }
+                        } else {
+                            KeyHint(label: "Run", keys: ["↩"])
+                        }
+                    }
                 }
             }
         }
@@ -83,9 +95,7 @@ struct MenuBarCommandView: View {
         switch row {
         case .item(let entry):
             CommandRow(title: entry.item.label, subtitle: "\(entry.section.title) · \(entry.item.appName)", symbol: entry.section.symbol, selected: selected) {
-                if selected {
-                    Text(entry.item.movable ? "↩ open · ⌥← ⌥→ move" : "↩ open · fixed by macOS").font(.caption)
-                }
+                if selected && !entry.item.movable { Text("Fixed by macOS") }
             }
         case .toggle(let revealed):
             CommandRow(title: row.title, subtitle: module.settings.shortcut.flatMap(Shortcut.init)?.display, symbol: revealed ? "chevron.right" : "chevron.left", selected: selected) { EmptyView() }
@@ -118,7 +128,7 @@ struct MenuBarCommandView: View {
         return .handled
     }
 
-    @ViewBuilder private var footer: some View {
+    @ViewBuilder private var notices: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !module.accessGranted {
                 HStack {
@@ -177,7 +187,7 @@ struct MenuBarSettingsView: View {
             Section("Behavior") {
                 LabeledContent("Hide again after") {
                     HStack {
-                        TextField("Seconds", text: $rehideText).frame(width: 60).multilineTextAlignment(.trailing)
+                        TextField("Seconds", text: $rehideText).labelsHidden().frame(width: 60).multilineTextAlignment(.trailing)
                             .onSubmit(saveRehide)
                         Text("seconds")
                         Button("Save", action: saveRehide).disabled(rehideText == String(module.settings.autoRehideSeconds))

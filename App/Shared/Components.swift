@@ -122,9 +122,10 @@ struct CommandList<Item: Identifiable, Row: View>: View {
         VStack(spacing: 0) {
             TextField(placeholder, text: $query)
                 .textFieldStyle(.plain)
-                .font(.system(size: 20))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .font(.system(size: 16))
+                .padding(.leading, 18)
+                .padding(.trailing, CommandMetrics.switcherWidth)
+                .frame(height: CommandMetrics.searchHeight)
                 .focused($focused)
                 .accessibilityIdentifier("command.search")
                 .onKeyPress(.downArrow) { move(1) }
@@ -141,7 +142,7 @@ struct CommandList<Item: Identifiable, Row: View>: View {
             Divider()
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 0) {
                         ForEach(items) { item in
                             row(item, item.id == selection)
                                 .contentShape(Rectangle())
@@ -152,7 +153,7 @@ struct CommandList<Item: Identifiable, Row: View>: View {
                                 .accessibilityAddTraits(item.id == selection ? .isSelected : [])
                         }
                     }
-                    .padding(6)
+                    .padding(8)
                 }
                 .onChange(of: selection) { _, id in
                     if let id { proxy.scrollTo(id) }
@@ -179,6 +180,11 @@ struct CommandList<Item: Identifiable, Row: View>: View {
     }
 }
 
+enum CommandMetrics {
+    static let searchHeight: CGFloat = 56
+    static let switcherWidth: CGFloat = 190
+}
+
 struct CommandRow<Accessory: View>: View {
     var title: String
     var subtitle: String?
@@ -188,19 +194,58 @@ struct CommandRow<Accessory: View>: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol).frame(width: 18).foregroundStyle(selected ? .white : .secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).lineLimit(1)
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle).font(.caption).lineLimit(1).foregroundStyle(selected ? .white.opacity(0.8) : .secondary)
-                }
+            Image(systemName: symbol)
+                .font(.system(size: 13))
+                .foregroundStyle(selected ? .primary : .secondary)
+                .frame(width: 20)
+            Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1).layoutPriority(1)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            accessory()
+            accessory().font(.system(size: 12)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .foregroundStyle(selected ? .white : .primary)
-        .background(selected ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .frame(height: 36)
+        .background(selected ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+struct CommandFooter<Leading: View, Trailing: View>: View {
+    @ViewBuilder var leading: () -> Leading
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(spacing: 14) {
+            leading()
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .background(Color.primary.opacity(0.03))
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
+struct KeyHint: View {
+    var label: String
+    var keys: [String]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(label).padding(.trailing, 3)
+            ForEach(keys, id: \.self) { key in
+                Text(key)
+                    .font(.system(size: 10, weight: .medium))
+                    .frame(minWidth: 17, minHeight: 17)
+                    .padding(.horizontal, 2)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .overlay { RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(.primary.opacity(0.08)) }
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }

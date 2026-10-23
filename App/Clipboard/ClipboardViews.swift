@@ -15,14 +15,7 @@ struct ClipboardCommandView: View {
     private var current: ClipItem? { results.first { $0.id == selection } }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if module.accessDenied && module.captureEnabled {
-                ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Settings", retry: module.openPasteSettings)
-                .padding(.horizontal, 12).padding(.bottom, 6)
-            }
-            content
-        }
-        .onAppear {
+        content.onAppear {
             module.commandStatus = nil
             module.recheckAccess()
         }
@@ -58,12 +51,15 @@ struct ClipboardCommandView: View {
             CommandList(query: $query, placeholder: "Search clipboard history", items: results, selection: $selection,
                         row: row, onSubmit: { item, alternate in Task { await module.use(item, paste: !alternate) } })
                 .overlay { emptyMessage.padding(.top, 48) }
+            if module.accessDenied && module.captureEnabled {
+                ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Settings", retry: module.openPasteSettings)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+            }
             if let status = module.commandStatus {
                 StatusLine(text: status.text, success: status.success)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12).padding(.vertical, 6)
             }
-            Divider()
             footer
         }
     }
@@ -103,7 +99,7 @@ struct ClipboardCommandView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        CommandFooter {
             Picker("Pinboard", selection: $pinboard) {
                 Text("All").tag(String?.none)
                 ForEach(module.pinboards) { Text($0.name).tag(Optional($0.id)) }
@@ -116,8 +112,9 @@ struct ClipboardCommandView: View {
                 .keyboardShortcut("[", modifiers: .command)
             Button("Next Pinboard", systemImage: "chevron.right") { cyclePinboard(1) }
                 .keyboardShortcut("]", modifiers: .command)
-            Spacer(minLength: 8)
-            Text("↩ paste · ⇧↩ copy").font(.caption).foregroundStyle(.secondary)
+        } trailing: {
+            KeyHint(label: "Paste", keys: ["↩"])
+            KeyHint(label: "Copy", keys: ["⇧", "↩"])
             Button(current?.isPinned == true ? "Unpin" : "Pin", systemImage: current?.isPinned == true ? "pin.slash" : "pin") {
                 if let current { Task { await module.togglePin(current) } }
             }
@@ -133,8 +130,6 @@ struct ClipboardCommandView: View {
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private func cyclePinboard(_ delta: Int) {
