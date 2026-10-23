@@ -62,6 +62,12 @@ public actor ClipboardStore {
 
     public func itemCount() throws -> Int { try db.scalar("SELECT COUNT(*) FROM items")?.int ?? 0 }
 
+    /// All rows, including any that cannot be decrypted. For diagnostics.
+    public func counts() throws -> (items: Int, pinned: Int) {
+        let row = try db.query("SELECT COUNT(*), COUNT(pinboard_id) FROM items").first
+        return (row?[0].int ?? 0, row?[1].int ?? 0)
+    }
+
     /// Verifies `key` against the stored key check, then decrypts every item into memory.
     /// A different key is accepted only when there are no items it would orphan.
     public func unlock(_ key: SymmetricKey) throws {
@@ -197,7 +203,7 @@ public actor ClipboardStore {
 
     /// Plaintext JSON of settings, pinboards, and every readable item.
     public func exportData(now: Date) throws -> Data {
-        _ = try requireCrypto()
+        if crypto == nil, try itemCount() > 0 { throw Self.keyUnavailable }
         let file = ClipboardExport(
             schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards,
             items: items().map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
@@ -207,8 +213,9 @@ public actor ClipboardStore {
     /// Replaces items, pinboards, and settings with the file's contents in one transaction.
     /// Nothing changes when validation or any write fails.
     public func importData(_ data: Data) throws {
-        let crypto = try requireCrypto()
         let file = try ClipboardExport.decode(data)
+        // A file without items needs no key, so settings can be imported before history is ever unlocked.
+        let crypto = file.items.isEmpty ? crypto : try requireCrypto()
         var digests = Set<Data>()
         try db.transaction {
             try db.execute("DELETE FROM items")
@@ -217,6 +224,7 @@ public actor ClipboardStore {
                 try db.execute("INSERT INTO pinboards(id, name, position) VALUES(?1, ?2, ?3)", [.text(board.id), .text(board.name), SQLValue(position)])
             }
             for (index, item) in file.items.enumerated() {
+                guard let crypto else { throw Self.keyUnavailable }
                 let digest = crypto.digest(item.text)
                 guard digests.insert(digest).inserted else { throw CueError.validation("Item \(index + 1) duplicates an earlier item.") }
                 try db.execute("INSERT INTO items(id, digest, text, created_at, last_used_at, pinboard_id) VALUES(?1, ?2, ?3, ?4, ?5, ?6)", [
@@ -228,7 +236,8 @@ public actor ClipboardStore {
         }
         settings = file.settings
         pinboards = file.pinboards
-        try load(crypto)
+        cache = [:]
+        if let crypto { try load(crypto) }
         try checkpoint()
     }
 

@@ -163,6 +163,19 @@ import Testing
         #expect(try SQLite(path: url).userVersion() == 99) // never reset
     }
 
+    @Test func settingsOnlyExportAndImportNeedNoKey() async throws {
+        let source = try ClipboardStore(url: nil)
+        var settings = await source.settings
+        settings.retention = .day
+        settings.shortcut = nil
+        try await source.save(settings)
+        let data = try await source.exportData(now: Date()) // locked, no items
+        let target = try ClipboardStore(url: nil)
+        try await target.importData(data)
+        #expect(await target.settings == settings)
+        #expect(await !target.isUnlocked)
+    }
+
     /// Capture → search → pin → expire → export → import into a fresh store → same results.
     @Test func endToEndHappyPath() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
