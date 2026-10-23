@@ -100,27 +100,35 @@ enum Delivery: Equatable {
     }
 
     private func check(_ target: PasteTarget, foreground: Bool) -> PasteFailure? {
-        if let failure = permissionFailure() { return failure }
-        if target.session != session || target.app.isTerminated { return .targetChanged }
+        PasteRules.check(observe(target), foreground: foreground)
+    }
+
+    /// Reads everything the paste rules need. Accessibility calls stay here; decisions live in `PasteRules`.
+    private func observe(_ target: PasteTarget) -> PasteRules.Observation {
+        var o = PasteRules.Observation()
+        o.canRead = canReadTarget
+        o.canPost = canPostPaste
+        o.sameSession = target.session == session
+        o.terminated = target.app.isTerminated
+        guard o.canRead, o.canPost, o.sameSession, !o.terminated else { return o }
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        if front != target.app.processIdentifier {
-            if front != ProcessInfo.processInfo.processIdentifier { return .targetChanged }
-            if foreground { return .focusTimeout }
-            // An inactive app may clear its focused element while Cue is open. Validate the
-            // retained target now; verify active focus after activation, just before pasting.
+        if front == target.app.processIdentifier {
+            o.front = .target
+            let window = element(target.application, kAXFocusedWindowAttribute)
+            let field = element(target.application, kAXFocusedUIElementAttribute)
+            o.focusedWindow = window.map { CFEqual($0, target.window) ? .same : .different } ?? .missing
+            o.focusedField = field.map { CFEqual($0, target.field) ? .same : .different } ?? .missing
+            o.secureField = field.map(isSecure) ?? false
+        } else if front == ProcessInfo.processInfo.processIdentifier {
+            o.front = .cue
             let windows = attribute(target.application, kAXWindowsAttribute) as? [AXUIElement] ?? []
-            let windowExists = windows.contains { CFEqual($0, target.window) }
-            let fieldExists = attribute(target.field, kAXRoleAttribute) is String
-            if isSecure(target.field) { return .protectedInput }
-            return windowExists && fieldExists ? nil : .targetChanged
+            o.windowExists = windows.contains { CFEqual($0, target.window) }
+            o.fieldExists = attribute(target.field, kAXRoleAttribute) is String
+            o.secureField = isSecure(target.field)
+        } else {
+            o.front = .other
         }
-        let window = element(target.application, kAXFocusedWindowAttribute)
-        let field = element(target.application, kAXFocusedUIElementAttribute)
-        if let field, isSecure(field) { return .protectedInput }
-        if let window, let field, CFEqual(window, target.window), CFEqual(field, target.field) { return nil }
-        let changed = (window.map { !CFEqual($0, target.window) } ?? false) || (field.map { !CFEqual($0, target.field) } ?? false)
-        // Activation can precede the app's focus update. Only an absent focus is retryable.
-        return (window == nil || field == nil) && !changed ? .focusTimeout : .targetChanged
+        return o
     }
 
     private func activate(_ target: PasteTarget) -> PasteFailure? {
@@ -178,7 +186,7 @@ enum Delivery: Equatable {
             if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
             guard let failure = send(target, generation: written) else { return .pasted }
             // Wait only for activation or released modifiers. Never retry a sent chord.
-            guard failure == .modifiersHeld || failure == .focusTimeout, Date() < deadline else {
+            guard PasteRules.isRetryable(failure), Date() < deadline else {
                 return .copiedNotPasted(failure.error)
             }
             try? await Task.sleep(for: .milliseconds(20))
@@ -186,10 +194,11 @@ enum Delivery: Equatable {
     }
 
     private func send(_ target: PasteTarget, generation: Int) -> PasteFailure? {
-        if let failure = check(target, foreground: true) { return failure }
-        if NSPasteboard.general.changeCount != generation { return .clipboardChanged }
         let held: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
-        if !CGEventSource.flagsState(.combinedSessionState).intersection(held).isEmpty { return .modifiersHeld }
+        if let failure = PasteRules.send(observe(target), clipboardUnchanged: NSPasteboard.general.changeCount == generation,
+                                         modifiersHeld: !CGEventSource.flagsState(.combinedSessionState).intersection(held).isEmpty) {
+            return failure
+        }
         guard let source = CGEventSource(stateID: .privateState),
               let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false)
@@ -223,26 +232,5 @@ enum Delivery: Equatable {
         let terminals: Set = ["com.apple.terminal", "com.googlecode.iterm2", "dev.warp.warp-stable", "com.mitchellh.ghostty",
                               "net.kovidgoyal.kitty", "org.alacritty", "org.wezfurlong.wezterm", "co.zeit.hyper"]
         return terminals.contains(app.bundleIdentifier?.lowercased() ?? "")
-    }
-}
-
-enum PasteFailure: Int {
-    case permission = 1, targetUnavailable, targetChanged, protectedInput, terminal, clipboardChanged, modifiersHeld,
-         unsupported, focusTimeout, cancelled, postPermission
-
-    var error: CueError {
-        switch self {
-        case .permission: CueError("PERMISSION_REQUIRED", "Cue cannot access your text field. Enable Cue in System Settings → Privacy & Security → Accessibility. If it is already on, turn it off and on, then quit and reopen Cue.")
-        case .targetUnavailable: CueError("TARGET_UNAVAILABLE", "Focus a text field in another app, then open Cue with your shortcut.")
-        case .targetChanged: CueError("TARGET_CHANGED", "The target window or text field changed. Reopen Cue from the field you want to paste into.")
-        case .protectedInput: CueError("PROTECTED_INPUT", "Automatic paste is unavailable in protected text fields.")
-        case .terminal: CueError("PASTE_UNSUPPORTED", "Terminal apps use Copy. Paste manually in your terminal.")
-        case .clipboardChanged: CueError("CLIPBOARD_CHANGED", "The clipboard changed. Reopen Cue to prepare the action again.")
-        case .modifiersHeld: CueError("MODIFIERS_HELD", "Release the shortcut keys and try again.")
-        case .unsupported: CueError("PASTE_UNSUPPORTED", "Automatic paste is unavailable. Use Copy.")
-        case .focusTimeout: CueError("FOCUS_TIMEOUT", "Could not return to the target window. Paste manually.")
-        case .cancelled: CueError("CANCELLED", "Paste cancelled.")
-        case .postPermission: CueError("PASTE_PERMISSION_REQUIRED", "macOS allows Cue to read the target but is blocking the paste shortcut. Refresh Cue’s Accessibility access, then quit and reopen Cue.")
-        }
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import CueKit
 import SwiftUI
 
 /// A Spotlight-style panel. It takes keyboard focus without activating Cue,
