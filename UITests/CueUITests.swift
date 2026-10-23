@@ -15,6 +15,9 @@ final class CueUITests: XCTestCase {
 
         let search = app.textFields["command.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 15), "The command window should open on launch in UI-testing mode.")
+        // macOS may refuse to bring a test-launched app forward (CI runners, or someone using the Mac), and typing then fails
+        // with "no keyboard focus". One click gives the field focus; everything after it is keyboard-only.
+        search.click()
 
         // "Rewrite clearly" inserts the clipboard text into its template. Restore the user's clipboard afterwards.
         let saved = NSPasteboard.general.string(forType: .string)
