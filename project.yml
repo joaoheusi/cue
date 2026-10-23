@@ -1,0 +1,81 @@
+name: Cue
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: 0.2.0
+    CURRENT_PROJECT_VERSION: 2
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+packages:
+  CueKit:
+    path: CueKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.0
+targets:
+  Cue:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: CueKit
+      - package: Sparkle
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Cue
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIconFile: AppIcon
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.productivity
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: Your prompts, clipboard, and menu bar, on cue.
+        # Sparkle auto-update. The appcast is attached to every GitHub release; `latest` redirects to the newest.
+        SUFeedURL: https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml
+        SUPublicEDKey: SU5Q3SRAb8XyQO5dDikWbab9z2uf136QrGSHUqboLso=
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: true
+        SUScheduledCheckInterval: 3600
+        SUEnableSystemProfiling: false
+        SUVerifyUpdateBeforeExtraction: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.cue.launcher
+        PRODUCT_NAME: Cue
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+  CueUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Cue
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.cue.launcher.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        TEST_TARGET_NAME: Cue
+schemes:
+  Cue:
+    build:
+      targets:
+        Cue: all
+        CueUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - CueUITests

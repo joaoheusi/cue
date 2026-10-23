@@ -1,9 +1,0 @@
-files = [defines["app"]]
-symlinks = {"Applications": "/Applications"}
-icon = defines["icon"]
-format = "UDZO"
-window_rect = ((100, 100), (660, 400))
-icon_locations = {"Cue.app": (180, 170), "Applications": (480, 170)}
-icon_size = 128
-text_size = 16
-hide_extensions = ["Cue.app"]
