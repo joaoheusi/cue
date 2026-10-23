@@ -37,7 +37,8 @@ enum ClipboardKeychain {
         for kind in [Kind.dataProtection, .legacy] {
             var query = base(service, kind)
             query[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
-            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            // The legacy keychain does not support this attribute (see SecItem.h).
+            if kind == .dataProtection { query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }
             query[kSecAttrLabel as String] = "Cue clipboard history key"
             let status = SecItemAdd(query as CFDictionary, nil)
             if status == errSecSuccess { return (key, kind) }

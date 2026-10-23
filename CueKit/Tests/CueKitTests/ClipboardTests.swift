@@ -176,6 +176,25 @@ import Testing
         #expect(await !target.isUnlocked)
     }
 
+    @Test func deletingPinboardUnpinsItemsOnDisk() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(ClipboardStore.fileName)
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let id = try await store.capture("keep me", source: nil, now: Date())
+        let work = try await store.createPinboard("Work")
+        try await store.setPinboard(id, work.id)
+        try await store.deletePinboard(work.id)
+        #expect(await store.items().first?.pinboardID == nil)
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().first?.pinboardID == nil)
+        #expect(await reopened.pinboards.map(\.name) == ["Pinned"])
+    }
+
     /// Capture → search → pin → expire → export → import into a fresh store → same results.
     @Test func endToEndHappyPath() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
