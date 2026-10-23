@@ -181,7 +181,7 @@ struct MenuBarSettingsView: View {
             Section {
                 Toggle("Hide menu bar items", isOn: Binding(get: { module.settings.enabled }, set: { value in Task { await module.setEnabled(value) } }))
                     .accessibilityIdentifier("menuBar.enabled")
-                Text("Hold ⌘ and drag icons to the left of the ‹ chevron to hide them. Click the chevron or press the shortcut to show them. ⌥-click the chevron to also show always-hidden icons.")
+                Text("Icons to the left of the ‹ chevron are hidden. Hold ⌘ and drag an icon to the right of the chevron to keep it visible. Click the chevron or press the shortcut to show them. ⌥-click the chevron to also show always-hidden icons.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Behavior") {

@@ -1,1 +1,17 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><rect width="1024" height="1024" rx="224" fill="#111113"/><path d="M749 293a312 312 0 1 0 0 438" fill="none" stroke="#f4f4f5" stroke-width="112" stroke-linecap="round"/><path d="M754 404v216" stroke="#ff7a45" stroke-width="93" stroke-linecap="round"/></svg>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3a3e"/>
+      <stop offset="1" stop-color="#0b0b0d"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.12"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  <path d="M674.6 349.4A230 230 0 1 0 674.6 674.6" fill="none" stroke="#ffffff" stroke-width="96" stroke-linecap="round"/>
+  <circle cx="742" cy="512" r="58" fill="#ffffff"/>
+</svg>

@@ -15,6 +15,7 @@ import CueKit
     private(set) var mode: Mode = .revealedAll
 
     override init() {
+        NSStatusItem.seedPosition("cue.menuBar.hidden", 1)
         hidden = NSStatusBar.system.statusItem(withLength: Self.width)
         alwaysHidden = NSStatusBar.system.statusItem(withLength: Self.width)
         super.init()
@@ -65,5 +66,12 @@ import CueKit
     var frames: MenuBarSeparatorFrames? {
         guard let a = hidden.button?.window?.frame, let b = alwaysHidden.button?.window?.frame else { return nil }
         return MenuBarSeparatorFrames(hidden: MenuBarSpan(minX: a.minX, maxX: a.maxX), alwaysHidden: MenuBarSpan(minX: b.minX, maxX: b.maxX))
+    }
+}
+
+extension NSStatusItem {
+    static func seedPosition(_ autosaveName: String, _ position: Double) {
+        let key = "NSStatusItem Preferred Position \(autosaveName)"
+        if UserDefaults.standard.object(forKey: key) == nil { UserDefaults.standard.set(position, forKey: key) }
     }
 }
