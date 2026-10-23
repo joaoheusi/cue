@@ -1,63 +1,171 @@
 # Cue
 
-Your prompts, on cue. A local desktop prompt launcher built with Tauri 2, React, TypeScript, Vite, and Rust. The interface follows the supplied [Cue design reference](https://claude.ai/artifact/VU7effrv5yrZYtfqvynTtj#page-3f2a63797740).
+Your prompts, clipboard, and menu bar, on cue. Cue is one native macOS menu-bar app with three tools:
 
-Cue defaults to Paste on macOS. It captures the previous app, window, and focused field before opening the palette, then returns there and sends one ⌘V after permission, focus, modifier, and clipboard checks. Accessibility permission is required. Shift+Enter copies instead. Windows, Linux, and the browser preview currently support Copy. Cue never sends Enter to the target app or executes prompt text. Automatic paste is verified in J4 Code; broader native acceptance testing is still pending.
+1. **Prompts** — a library of reusable instructions. Press a shortcut in any app, pick an action, and Cue pastes it into the field you were typing in.
+2. **Clipboard** — an encrypted, searchable clipboard history with pinboards and automatic expiration.
+3. **Menu Bar** — hide, reveal, and arrange other apps' menu-bar items with your own rules.
 
-![Cue library and action editor](docs/cue-editor.jpg)
+All three share one searchable command window, global shortcuts, and one settings screen. Everything stays on your Mac. Cue has no accounts, sync, telemetry, analytics, or hosted services.
+
+Built with Swift 6, SwiftUI, AppKit where needed, SQLite, and the macOS Keychain. Requires macOS 14 or later.
 
 ## Run
 
-Install Node.js 22 or newer, Rust, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Dependencies are locked in `package-lock.json` and `src-tauri/Cargo.lock`.
+Install Xcode 26 (or later). Then run one command:
 
 ```sh
-npm ci
-npm run desktop
+make run
 ```
 
-`npm run dev` opens the browser preview at `http://127.0.0.1:1420`. It supports editing, search, templates, import/export, and manual clipboard copying. It uses a separate IndexedDB library. Global shortcuts, the menu bar, and launch at login require the desktop app.
+This builds a debug copy and opens it. Quit any installed Cue first: only one copy runs at a time, and a second copy hands over to the running one and exits. Debug builds keep their data in `~/Library/Application Support/app.cue.launcher.dev`, separate from a release install. The first run opens setup for the prompt library. After that, Cue starts quietly in the menu bar.
 
-```sh
-npm run build
-npm test
-npm run test:native-paste
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
-npm run package:mac
+The repository includes the generated `Cue.xcodeproj`. If you change `project.yml`, install [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`); `make` regenerates the project automatically when it is installed.
+
+### Configuration and secrets
+
+Copy `.env.example` to `.env` (git-ignored) and fill in only what you need:
+
+| Variable | Purpose |
+| --- | --- |
+| `DEVELOPMENT_TEAM` | Signs builds with your Apple Development certificate, so Accessibility and Keychain access survive rebuilds. Leave empty for ad-hoc signing. |
+| `APPLE_SIGNING_IDENTITY` | `make dmg` only. Your Developer ID Application certificate name or SHA-1 fingerprint (needed when you have more than one). |
+| `NOTARY_KEYCHAIN_PROFILE` | `make dmg` only. A profile saved with `xcrun notarytool store-credentials`. |
+
+Never commit `.env` or any credential. Notarization credentials belong in the Keychain (`xcrun notarytool store-credentials`).
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `make run` | Build (Debug) and open Cue. |
+| `make test` | Unit tests, then the UI test. |
+| `make test-unit` | `swift test --package-path CueKit` |
+| `make test-ui` | The XCUITest keyboard workflow. It types into Cue and temporarily replaces the clipboard (plain text is restored afterwards). Avoid using the Mac while it runs. |
+| `make dmg` | Signed, notarized `build/release/Cue.dmg` plus a Sparkle `appcast.xml`. The same script CI runs. See `docs/release-process.md`. |
+
+## Using Cue
+
+| Shortcut (default) | Action |
+| --- | --- |
+| ⇧⌘Space | Open the command window on **Prompts** |
+| ⌥⌘V | Open the command window on **Clipboard** |
+| ⌥⌘B | Reveal or hide the hidden menu-bar section |
+
+Every shortcut can be changed in Settings. In the command window: type to search, ↑/↓ to move, ↩ to use, ⇧↩ to copy only, ⌘1–3 to switch tools, ⎋ to close. The menu-bar icon offers the same commands, plus Pause Shortcuts, Settings, and Quit.
+
+### Prompts
+
+- ↩ pastes into the app you were using (default) or copies, per action or globally. ⇧↩ always copies.
+- `{{clipboard}}`, `{{date}}`, and `{{time}}` are replaced once when you use an action. Other `{{…}}` text stays literal. A backslash escapes the three variables.
+- The library window (menu bar → Manage Prompts…) has favorites, recents, categories, aliases, an explicit-save editor with native undo, per-action shortcuts, JSON import with a preview, and JSON export.
+- Search covers names, aliases, tags, and categories. It ignores accents and never searches prompt bodies.
+
+### Clipboard
+
+- Off by default. Turning it on explains clipboard access first; macOS then asks once. Choose "Always Allow".
+- Saves plain text you copy after you turn it on, never what was already on the clipboard. Skips concealed, transient, and auto-generated items (password managers mark theirs), anything typed while secure input is on, Cue's own copies, text over 256 KiB, and apps you exclude. 1Password, Bitwarden, Keychain Access, Passwords, LastPass, Dashlane, and KeePassXC are excluded by default.
+- Item text and source app are encrypted with AES-GCM. The 256-bit key lives in the Keychain. Duplicates are detected with an HMAC, so no plain text is stored.
+- ↩ pastes the item into the app you were using; ⇧↩ copies only. ⌘P pins or unpins, ⌘⌫ deletes, ⌘[ / ⌘] switches pinboard. Right-click an item to pin it to any pinboard.
+- **Expiration:** unpinned items expire 1 hour, 1 day, 7 days (default), or 30 days after their last use, or never. At most 500 unpinned items are kept (configurable). Pinned items never expire. Expired items are deleted, not hidden.
+- If the Keychain key is missing or was replaced, Cue shows a recoverable error and offers **Reset History** after confirmation. It never silently creates a new key over old data.
+
+### Menu Bar
+
+- Off by default, because it changes your menu bar. Turn it on in Settings → Menu Bar or from the Menu Bar tool.
+- Cue adds a chevron (‹). Hold ⌘ and drag an icon to the left of the chevron to hide it. Click the chevron or press ⌥⌘B to show hidden icons. ⌥-click the chevron to also show the always-hidden section.
+- **Rules:** put any item in *Visible*, *Hidden*, or *Always Hidden*; hide again automatically after N seconds (default 10, 0 turns it off); show hidden icons while chosen apps are frontmost.
+- With Accessibility access, the Menu Bar tool lists every item by section. ↩ opens an item's menu (revealing it first). ⌥← / ⌥→ moves an item to the neighbouring section and saves that as a rule. **Apply Rules Now** moves items with a simulated ⌘-drag, one at a time, checks each move, and stops at the first failure.
+- When you turn the feature off or quit Cue, every icon comes back.
+
+## Permissions
+
+Cue asks for each permission only when you first use a feature that needs it, and explains why before macOS shows its prompt or Cue opens System Settings.
+
+| Permission | Needed for | Without it |
+| --- | --- | --- |
+| Accessibility | Pasting a prompt or clipboard item into the field you were typing in (Cue reads which field has focus and sends one ⌘V). Listing and arranging menu-bar items. | Prompts and clipboard items are copied; paste them yourself. Menu-bar hide/reveal still works. |
+| Clipboard access (macOS 15.4+ "Paste from other apps") | Saving clipboard history. Choose "Always Allow". | Clipboard history stays off. |
+| Login Items | Launch at login (optional, off by default). | Start Cue yourself. |
+
+Global shortcuts use the Carbon hot-key API and need no permission. Cue never records keystrokes or screen content. Automatic paste refuses secure text fields and terminals, checks that the exact window and field are still focused, requires an unchanged clipboard and released modifier keys, and sends at most one ⌘V.
+
+## Architecture
+
+```
+App/                   macOS app target (SwiftUI + AppKit)
+  Shell/               AppDelegate, menu-bar icon, command window (NSPanel), global hotkeys (Carbon),
+                       settings window, permissions, launch at login, Sparkle updater, file import/export
+  Shared/              PasteService (Accessibility paste), shared SwiftUI components
+  Prompts/             Prompt library model, palette, library window, editor, settings
+  Clipboard/           Clipboard monitor, history UI, settings
+  MenuBar/             Separators, Accessibility item listing, arranging, settings
+CueKit/                Swift package with all testable logic (no AppKit)
+  Sources/CueKit/Core/      SQLite wrapper, errors, shortcuts, safe file names, paste rules
+  Sources/CueKit/Prompts/   Templates, validation, search, PromptStore (SQLite)
+  Sources/CueKit/Clipboard/ Encryption, capture filter, expiration, search, store, export codec
+  Sources/CueKit/MenuBar/   Layout classification, move planning, rules, store, export codec
+  Tests/CueKitTests/        Swift Testing unit and end-to-end tests
+UITests/               One XCUITest for the core keyboard workflow
+project.yml            XcodeGen project definition
 ```
 
-Use `npm run package:mac` on macOS with Python 3 and a valid Developer ID Application certificate installed. The script selects the sole developer identity in the keychain; set `APPLE_SIGNING_IDENTITY` to a certificate name or SHA-1 fingerprint when several developers are present. It verifies the app signature before using pinned `dmgbuild` dependencies to create the drag-to-Applications layout. Unsigned installers are rejected because their identity changes on rebuild and invalidates Accessibility access. Use `--bundles nsis` on Windows and `--bundles appimage,deb` on Linux after the corresponding native compatibility tests. The CI workflow checks and builds all three targets; a successful build alone does not establish OS integration support.
+- Each tool owns one SQLite file. Each store is an actor that owns its connection, so database work never blocks the UI and never races.
+- Every write is a transaction. Schema versions use `PRAGMA user_version`. Cue refuses to open a database written by a newer version instead of resetting it, and backs up before migrating.
+- The command window is a non-activating panel. The app you were typing in stays frontmost, which is what makes paste-back reliable.
+- Decisions that matter for safety (paste rules, clipboard capture filter, expiration, menu-bar move planning) are pure functions in CueKit with unit tests.
 
-The macOS DMG contains Cue and an Applications shortcut. Drag Cue onto Applications, then open it from Applications. Installing a new app bundle preserves the existing Cue library in Application Support; it does not reset onboarding or delete saved actions.
+## Data location
 
-## Implemented
+| Path (in `~/Library/Application Support/app.cue.launcher/`) | Contents |
+| --- | --- |
+| `cue.sqlite3` | Prompt library, settings, and shortcuts. Readable SQLite; prompt text is not encrypted. |
+| `backups/cue-*.sqlite3` | Automatic library backups before migrations and imports (newest five kept). |
+| `clipboard.sqlite3` | Clipboard history and pinboards. Item text is encrypted (AES-GCM). |
+| `menubar.sqlite3` | Menu-bar settings and rules. |
 
-- Onboarding with optional editable starter actions. Setup commits its actions and settings in one transaction and runs once.
-- A warm separate palette window. It has search, arrow-key selection, Enter, Shift+Enter, Escape, action menus, and a saved-text preview.
-- A library and explicit-save editor. Create, duplicate, disable, delete, favorite, categorize, and alias actions. Closing to the menu bar preserves the unsaved editor. Navigating away or quitting with unsaved changes requires a discard decision. Typing, variable insertion, selection replacement, and Tab indentation use the text field's native undo/redo history.
-- Name/alias/tag/category search with accent-insensitive normalization and deterministic ranking. Prompt bodies are excluded from search.
-- One-pass `{{clipboard}}`, `{{date}}`, and `{{time}}` substitution. Other placeholders, including `@{{upstream}}`, stay literal. Escaping applies only to the three supported variables. Unicode, indentation, byte limits, and prohibited control characters are validated in Rust.
-- A Rust-owned SQLite database on a dedicated worker. Writes are transactional. Editor/import revisions protect against stale changes. Unsupported or damaged databases are not silently reset.
-- Native clipboard copying, serialized delivery, consumed/expiring palette invocations, library idempotency, and key-repeat suppression.
-- Configurable palette and direct-action global shortcuts. Requested and active bindings are distinct. Failed replacement preserves the prior working binding.
-- Strict JSON import previews and atomic commits. Imports reset delivery to Copy and remove shortcuts. Backups use SQLite's online backup API, retaining five files.
-- JSON export, recent-use counters, clear-usage confirmation, system/light/dark themes, tray access, single-instance handling, and optional launch at login.
-- Separate window permissions, caller checks, bundled assets, a restrictive CSP, blocked remote navigation, and disabled release developer tools.
+The clipboard encryption key is in your login Keychain under the service `app.cue.launcher.clipboard`. Debug builds use `app.cue.launcher.dev` for both the folder and the Keychain service. Settings → Data & Privacy shows the folder and opens it in Finder.
 
-## Local data
+### Upgrading from the Tauri version
 
-Release data lives in the OS application-data directory for `app.cue.launcher`. Debug builds use `app.cue.launcher.dev` data, separate from release data. On macOS, these directories are under `~/Library/Application Support/`.
+- Cue upgrades the library in place: same bundle ID, same folder, same `cue.sqlite3` tables. Your actions, categories, settings, and shortcuts carry over.
+- On first launch Cue backs up the library to `backups/` and marks it schema version 3. The Tauri version then refuses to open it ("created by a newer Cue") instead of failing. To go back, restore the backup.
+- The Tauri version started at login through `~/Library/LaunchAgents/Cue.plist`. Settings → General offers **Remove Old Login Item**; then turn on **Launch at login**, which uses the macOS Login Items service.
 
-The database is `cue.sqlite3`. Backups live in `backups/` inside that data directory. Action text, exports, and backups are readable local files. Live clipboard text is never persisted by Cue. Usage counts mean that text was copied, not that a task succeeded.
+## Export, import, and backup
 
-The original specification is preserved at [docs/quick-actions-spec.md](docs/quick-actions-spec.md). Stored starter prompts are content for the receiving app, not instructions to the implementation process.
+- **Prompts:** Library → More → Export Actions… writes JSON (`schemas/actions-v1.schema.json`). Import shows a preview first and backs up the library before it changes anything.
+- **Clipboard:** Settings → Clipboard → Export writes JSON with **plain text**. Store it somewhere safe. Import accepts the same format.
+- **Menu Bar:** Settings → Menu Bar → Export Rules / Import Rules.
+- **Diagnostics:** Settings → Data & Privacy → Export Diagnostics… writes versions, permission states, settings, counts, and recent error codes. It never includes prompt text, clipboard text, or menu-bar item names.
 
-The macOS paste regression suite runs the actual native adapter against a controlled Accessibility server and pasteboard. It checks inactive-app focus changes, activation, exact target matching, permission and session loss, clipboard changes, and modifier release. It posts no real input and needs no Accessibility grant. Native end-to-end checks remain separate.
+To back up everything, quit Cue and copy the whole `app.cue.launcher` folder. To restore, quit Cue and put the folder back. Clipboard history can only be decrypted with the Keychain key from the same Mac and user account. To move clipboard history to another Mac, use the clipboard export instead.
 
-The **Clipboard text** button inserts `{{clipboard}}` at the text cursor. When you use the action, Cue replaces that placeholder with the plain text then on your clipboard. For example, copy a paragraph and use Rewrite clearly to include it in the prompt. The editor button does not read or paste the clipboard. Tags are no longer exposed in the editor; existing tag data is preserved for import/export compatibility.
+## Uninstall
 
-## Release status
+1. Choose **Quit Cue** from the menu-bar icon.
+2. Turn off **Launch at login** in Settings → General (or remove Cue in System Settings → General → Login Items).
+3. Remove Cue from System Settings → Privacy & Security → **Accessibility** and **Paste**. Or run `tccutil reset Accessibility app.cue.launcher`.
+4. Delete `Cue.app` from Applications.
+5. Delete `~/Library/LaunchAgents/Cue.plist` if it exists (login item from the Tauri version).
+6. Delete `~/Library/Application Support/app.cue.launcher` (and `app.cue.launcher.dev` if you ran a debug build).
+7. Delete the clipboard key: `security delete-generic-password -s app.cue.launcher.clipboard` (and `-s app.cue.launcher.dev.clipboard`).
+8. Optional: `defaults delete app.cue.launcher` removes window positions and update preferences, and `rm -rf ~/Library/Caches/app.cue.launcher` removes downloaded updates.
 
-See [platform evidence](docs/platform-support.md), [manual checks](docs/manual-test-checklist.md), and [release instructions](docs/release-process.md). macOS target capture, focus restoration, paste injection, and copy-only recovery messages are implemented. macOS installers are Developer ID signed. Automatic paste is verified in J4 Code. Broader native acceptance testing and per-app preference controls remain pending. Windows/Linux runtime checks, Windows signing, macOS notarization, screen-reader coverage, and performance acceptance measurements are pending. Do not market this build as the full V1 specification.
+## Deliberately left out
 
-Closing the library keeps Cue running in the menu bar by default. Background login launches stay hidden. Use the shortcut for the palette, Manage Actions in the menu bar for the library, and Quit Cue to stop the process. The schema-2 migration backs up the existing library, switches the former prototype defaults to Paste and keep-running, and preserves action overrides.
+- Accounts, billing, telemetry, analytics, and any hosted control plane.
+- Cloud accounts and cross-device sync.
+- A third-party extension or plugin marketplace.
+- Automation that runs scripts or untrusted code. Cue only copies text, pastes once, and moves menu-bar items you chose.
+
+## Releases and automatic updates
+
+- **CI** (`.github/workflows/verify.yml`, `macos-26` runner): every push and pull request runs the unit tests, a build, and the UI test, and checks that `Cue.xcodeproj` matches `project.yml`.
+- **Release:** every push to `main` that passes the tests runs `scripts/release.sh`. It builds Cue `0.2.<commit count>`, signs it with Developer ID (hardened runtime, timestamp), notarizes and staples the DMG, signs the update with Sparkle's EdDSA key, and publishes a GitHub release `v0.2.<n>` with `Cue.dmg` and `appcast.xml`. It refuses to publish anything unsigned or unnotarized.
+- **Auto-update:** release builds use [Sparkle](https://sparkle-project.org) and check `https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml` every hour. Updates download in the background. Sparkle verifies the EdDSA signature and that the new app has the same Developer ID before installing. Because a menu-bar app rarely quits, Cue installs and relaunches as soon as it is idle: no keyboard or mouse input for a minute, no unsaved prompt edits, no open command window, no menu-bar arranging. The request carries no identifiers (system profiling is off).
+- **On by default.** Earlier versions only offered an opt-in check. Automatic updates are now on, as requested; turn them off in Settings → General → Updates. Debug builds never update.
+- **First install:** the Tauri version cannot update itself. Install the first Swift release manually from the release's `Cue.dmg`.
+- **Secrets:** `SPARKLE_ED_PRIVATE_KEY` is set. The private key also lives in your login Keychain (Sparkle account `cue`). Back it up: without it, installed copies can never verify another update. The Developer ID certificate and App Store Connect API key come from you: run `scripts/setup-release-secrets.sh` (see the comments at its top). Until they are set, the release job fails with a clear message and publishes nothing.
+
+See `docs/platform-support.md` for what was verified on which macOS version, and `docs/manual-test-checklist.md` for the checks that still need a person at the keyboard.

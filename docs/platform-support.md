@@ -1,28 +1,28 @@
 # Platform evidence
 
-Updated October 7, 2026. Tested locally on macOS 26.4.1 (25E253), Apple Silicon. Toolchain: Node 26.8.2, Cargo 1.97.1, Tauri 2.12.1.
+Updated October 22, 2026. Built and tested on macOS 26.4.1 (25E253), Apple Silicon, Xcode 26.6, Swift 6.3.3. Deployment target: macOS 14.
 
-| Feature | macOS local evidence | Windows | X11 Linux | Wayland Linux |
-| --- | --- | --- | --- | --- |
-| Package opens offline | Optimized release `.app` opened with bundled frontend and restricted window permissions | Build workflow provided; not run here | Build workflow provided; not run here | Not run here |
-| SQLite library | Native onboarding, six starters preserved after release restart, copy counters verified | Unit tests portable; native checks pending | Pending | Pending |
-| Clipboard write | Native Copy and palette Shift+Enter tested; copied text pasted manually into a local test field | Pending | Pending | Pending |
-| Palette global shortcut | Cmd+Shift+Space registered and opened search | Pending | Pending | Explicitly unavailable |
-| Direct shortcuts | Code and status handling implemented; manual checks pending | Pending | Pending | Explicitly unavailable |
-| Menu bar / tray | Native tray built; lifecycle checks pending | Pending | Pending | Availability depends on desktop |
-| Start at login | Opt-in plugin implemented; not enabled on this machine | Pending | Pending | Pending |
-| Target-window capture | Live trace confirms capture of J4's window and field before opening Cue | Unavailable | Unavailable | Unavailable |
-| Focus restoration | User confirmed return to J4 Code and successful paste in the installed signed build | Unavailable | Unavailable | Unavailable |
-| Automatic paste | User confirmed automatic paste in J4 Code after the target-focus fix | Unavailable | Unavailable | Unavailable |
+Cue is now macOS-only. The earlier Tauri build also targeted Windows and Linux; those targets were removed with the move to Swift, SwiftUI, and AppKit.
 
-The macOS adapter uses AppKit and Accessibility to retain the captured target, rejects secure fields and known terminals, checks clipboard generation and held modifiers, and posts one paste chord to the captured process. It cancels on session lock/sleep or changed focus. Permission failures happen before clipboard mutation. Errors after copying explicitly report that text was copied but not pasted. Successful event posting is not proof that the receiving app accepted the paste. The user confirmed successful automatic paste into J4 Code after the target-focus fix below.
+| Feature | Evidence on this machine | Notes |
+| --- | --- | --- |
+| Unit and end-to-end logic tests | `make test-unit` passes (Swift Testing) | Templates, validation, search, prompt store and legacy rows, paste rules, clipboard crypto/filter/expiry/store, menu-bar layout/planning/store |
+| Core keyboard workflow | `make test-ui` passes | Opens the command window, searches, moves the selection, copies with ⇧↩, checks the rendered text on the clipboard |
+| Prompt library compatibility | Unit tests read rows and settings written by the Rust version, migrate schema 1 and 2 to 3 with one backup, then edit them | Version 3 only marks the new optional settings keys, so the Tauri app reports "newer Cue" instead of failing |
+| Hidden main menu for edit keys | Verified by the UI test (⌘A in the search field) | Without it, ⌘A/⌘C/⌘V/⌘Z do nothing in a menu-bar-only app |
+| Menu-bar hide/reveal separator | Verified: a status item set to length 10,000 moved items on its left from x=830 to x=−4150; restoring the length brought them back. No permission needed. | A live run with the module on hid a probe item (x=−9175); it returned after Cue exited |
+| Menu-bar item identification | `CGWindowList` shows every status item as owned by Control Center with no name on macOS 26 | Cue uses Accessibility (`AXExtrasMenuBar`) instead |
+| Menu-bar listing, pressing, ⌘-drag arranging | **Not verified** | Needs an Accessibility grant, which this session could not give |
+| Clipboard pasteboard privacy | SDK confirms `NSPasteboard.accessBehavior` (macOS 15.4+) | Reading the general pasteboard triggers the system alert unless the user allows it; `changeCount` does not |
+| Global shortcuts (Carbon) | Built; not pressed by automation | Synthetic keystrokes do not trigger system hot keys reliably |
+| Automatic paste into another app | Rules unit-tested (ported from the former native suite); Accessibility calls **not verified** in this build | The previous build's paste was confirmed by the user in J4 Code; the Swift port keeps the same checks and order |
+| Auto-update (Sparkle 2.10.0) | `scripts/release.sh` ran end to end locally with the CI certificate and API key: Developer ID signing, notarization accepted, ticket stapled, Gatekeeper reports "Notarized Developer ID", Sparkle EdDSA signature and appcast written | The CI release job and an actual update install are **not verified** until the first merge to `main` |
+| Launch at login (`SMAppService`) | Built; not enabled on this machine | macOS may require approval in Login Items |
+| Keychain key storage | Clipboard tests inject a key; the real Keychain is not touched by tests | Data-protection Keychain needs a team-signed build; ad-hoc builds fall back to the login Keychain |
 
-October 7 permission investigation: reproduced System Settings showing Cue enabled while Cue reported no access. Restarting the unchanged app did not repair it. The old app had a linker-only ad-hoc signature with a build-specific `cdhash` designated requirement, so rebuilding changed its identity. The replacement app and DMG are now Developer ID signed with bundle `app.cue.launcher` and team `SC7RQ3BWQ6`; strict signature verification and DMG checksum verification passed. The installed signed app preserves Create Tea Task and settings. AX trust and event-posting permission are now reported independently. After refreshing the Accessibility entry and restarting Cue, both report available and the app displays Ready to paste. The temporary backup caused macOS to display Cue.previous.app; it is now archived as a ZIP outside Applications, the stale registration is removed, and System Settings visibly lists Cue.app enabled. At this stage, native paste remained unverified because automation could not reliably invoke the global shortcut and inspect the palette without changing focus. Frontend/signing tests: 22 passed. Rust tests: 21 passed. Clippy and release build passed.
+## Known limits
 
-The final release package was opened and tested on the built-in display. Its library button opened the palette with search focused. Native Copy produced the exact 403-character Resolve CI template, confirmed by manual paste into a temporary unsaved local draft. The draft was discarded. The global-shortcut keyboard check was verified in the earlier debug package; final-release shortcut delivery was subsequently confirmed by the user in J4 Code after the target-focus fix below.
-
-The palette uses the pointer monitor, then the primary monitor, and clamps its dimensions to 90% of the work area. Multi-monitor and high-scaling native checks are pending. No claims are made about P95 latency, memory, screen readers, or identical OS behavior.
-
-Remaining native acceptance checks include plain/multiline/Unicode text, existing drafts and selected text, multiple windows, changed focus, permission revocation, modifier timeout, clipboard changes, repeated invocation, and session lock. Per-app opt-in controls and retained-payload recovery are not implemented.
-
-October 7 target-check regression: the user reproduced `TARGET_CHANGED` in J4 Code. A temporary native trace confirmed that J4's window stayed the same but its focused field became absent while Cue owned focus. The native regression test reproduces that exact state. Preflight now checks that the captured window and field still exist. The exact active window and field are compared after activation, before event posting. Missing focus during activation is retried within the existing bounded wait; an explicitly different window or field stops delivery. All 28 native adapter assertions pass with a controlled Accessibility server and pasteboard, including checks that failures post no events and success posts one chord. These tests do not establish end-to-end acceptance in an external app. Automated keystrokes did not trigger the system global shortcut. The signed fix is installed, its executable matches the final app bundle, and both paste permissions remain available. The user retried the installed signed build in J4 Code and confirmed that automatic paste works. Temporary tracing was removed from the source and installed app.
+- Ad-hoc signed rebuilds change Cue's code signature. macOS then drops Accessibility access, and the login Keychain asks before releasing the clipboard key. Set `DEVELOPMENT_TEAM` in `.env` to avoid this.
+- Arranging menu-bar items treats every Control Center and System UI Server item as fixed, including movable ones such as Wi-Fi.
+- Menu-bar auto-hide waits while the pointer is in the menu bar, but it cannot see another app's open menu.
+- No claims are made about screen readers, multiple displays, or performance targets.
