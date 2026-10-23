@@ -1,8 +1,6 @@
 import Carbon.HIToolbox
 import CueKit
 
-/// System-wide shortcuts through Carbon `RegisterEventHotKey`. Needs no permission.
-/// Owners are stable strings such as `palette`, `clipboard`, or `action:<uuid>`.
 @MainActor final class HotKeyCenter {
     struct Status: Equatable {
         var requested: Shortcut?
@@ -21,16 +19,13 @@ import CueKit
     private var nextID: UInt32 = 1
     private var handlerInstalled = false
     private(set) var paused = false
-    /// Every requested shortcut with its live state, for settings and diagnostics.
     private(set) var statuses: [String: Status] = [:]
     var onChange: () -> Void = {}
 
-    /// Registers `shortcut` for `owner`. On failure the owner's previous working binding stays active.
     func register(_ owner: String, _ shortcut: Shortcut, handler: @escaping @MainActor () -> Void) throws(CueError) {
         if bindings.contains(where: { $0.key != owner && $0.value.shortcut == shortcut }) {
             throw CueError("SHORTCUT_CONFLICT", "This shortcut is already used in Cue. Choose another.")
         }
-        // Carbon rejects a second registration of the same chord, so keep the live one.
         if let current = bindings[owner], current.shortcut == shortcut, current.ref != nil {
             bindings[owner] = Binding(shortcut: shortcut, ref: current.ref, handler: handler)
             return
@@ -49,7 +44,6 @@ import CueKit
         onChange()
     }
 
-    /// Records a shortcut that could not be activated, so settings can show why.
     func markUnavailable(_ owner: String, _ shortcut: Shortcut?, reason: String) {
         unregister(owner)
         statuses[owner] = Status(requested: shortcut, active: false, error: reason)
@@ -63,7 +57,6 @@ import CueKit
         onChange()
     }
 
-    /// Pausing keeps every binding but releases it from the system. Resuming re-registers each one.
     func setPaused(_ value: Bool) {
         guard value != paused else { return }
         paused = value
@@ -124,7 +117,6 @@ import CueKit
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &key)
             guard let context else { return noErr }
             let id = key.id
-            // Carbon delivers hot keys on the main thread.
             MainActor.assumeIsolated {
                 Unmanaged<HotKeyCenter>.fromOpaque(context).takeUnretainedValue().fire(id)
             }

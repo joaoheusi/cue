@@ -1,6 +1,5 @@
 import Foundation
 
-/// Where a menu-bar item lives relative to Cue's two separators, ordered left to right.
 public enum MenuBarSection: String, Codable, CaseIterable, Sendable {
     case alwaysHidden, hidden, visible
 
@@ -12,7 +11,6 @@ public enum MenuBarSection: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// The neighbouring section to the right (`+1`) or left (`-1`), clamped at the ends.
     public func shifted(_ delta: Int) -> MenuBarSection {
         let all = Self.allCases
         let index = all.firstIndex(of: self)! + delta
@@ -20,7 +18,6 @@ public enum MenuBarSection: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// A horizontal extent in global screen points. AppKit and Core Graphics share x.
 public struct MenuBarSpan: Equatable, Sendable {
     public var minX: Double
     public var maxX: Double
@@ -32,7 +29,6 @@ public struct MenuBarSpan: Equatable, Sendable {
     }
 }
 
-/// Frames of Cue's separators. Their right edges stay put when they collapse.
 public struct MenuBarSeparatorFrames: Equatable, Sendable {
     public var hidden: MenuBarSpan
     public var alwaysHidden: MenuBarSpan
@@ -43,7 +39,6 @@ public struct MenuBarSeparatorFrames: Equatable, Sendable {
     }
 }
 
-/// Another app's menu-bar item as read through Accessibility.
 public struct MenuBarItem: Equatable, Sendable, Identifiable {
     public var key: String
     public var bundleID: String
@@ -63,11 +58,9 @@ public struct MenuBarItem: Equatable, Sendable, Identifiable {
     }
 }
 
-/// A user-defined placement for one item.
 public struct MenuBarRule: Codable, Equatable, Sendable, Identifiable {
     public var key: String
     public var bundleID: String
-    /// Display name for the rules list. Stays local; never logged.
     public var label: String
     public var section: MenuBarSection
     public var id: String { key }
@@ -84,11 +77,8 @@ public struct MenuBarSettings: Equatable, Sendable {
     public static let defaultShortcut = "Super+Alt+B"
 
     public var enabled = false
-    /// 0 turns auto-rehide off.
     public var autoRehideSeconds = 10
-    /// Bundle IDs. While one of these apps is frontmost, hidden items stay revealed.
     public var revealApps: [String] = []
-    /// Stored shortcut form, or nil when the user cleared it.
     public var shortcut: String? = defaultShortcut
 
     public init() {}
@@ -107,16 +97,12 @@ public struct MenuBarMove: Equatable, Sendable {
 }
 
 public enum MenuBarLayout {
-    /// Items whose center is at or right of a separator's right edge are on its right side.
     public static func section(of item: MenuBarSpan, separators: MenuBarSeparatorFrames) -> MenuBarSection {
         if item.midX >= separators.hidden.maxX { return .visible }
         if item.midX >= separators.alwaysHidden.maxX { return .hidden }
         return .alwaysHidden
     }
 
-    /// Moves needed to satisfy `rules`. Skips immovable items and items already in place.
-    /// Each move drops the item next to a separator, so the order keeps items' relative positions:
-    /// moves into Visible go right to left; moves into the hidden sections go left to right.
     public static func plan(items: [MenuBarItem], separators: MenuBarSeparatorFrames, rules: [MenuBarRule]) -> [MenuBarMove] {
         let targets = Dictionary(rules.map { ($0.key, $0.section) }, uniquingKeysWith: { _, last in last })
         let pending: [(item: MenuBarItem, move: MenuBarMove)] = items.compactMap { item in
@@ -131,7 +117,6 @@ public enum MenuBarLayout {
         }.map(\.move)
     }
 
-    /// Where to release a ⌘-drag so the item lands in `target`: on the far side of the separator's edge.
     public static func dropX(for target: MenuBarSection, separators: MenuBarSeparatorFrames) -> Double {
         switch target {
         case .visible: separators.hidden.maxX + 2
@@ -140,8 +125,6 @@ public enum MenuBarLayout {
         }
     }
 
-    /// Identity: bundle ID plus the first available of identifier, title, description, or index within the app.
-    /// Duplicates within one scan get a numeric suffix so every key is unique.
     public static func keys(for raw: [(bundleID: String, identifier: String?, title: String?, description: String?)]) -> [String] {
         var indexInApp: [String: Int] = [:]
         var seen: [String: Int] = [:]
@@ -167,7 +150,6 @@ public enum MenuBarLayout {
 }
 
 public enum MenuBarRules {
-    /// Replaces the rule with the same key, or appends it.
     public static func upsert(_ rule: MenuBarRule, into rules: [MenuBarRule]) -> [MenuBarRule] {
         var result = rules
         if let index = result.firstIndex(where: { $0.key == rule.key }) { result[index] = rule } else { result.append(rule) }
@@ -182,14 +164,11 @@ public enum MenuBarRules {
 public enum MenuBarReveal {
     public enum Cause: Sendable { case user, frontmostApp }
 
-    /// What to do when the frontmost app changes. True reveals, false hides, nil leaves things as they are.
-    /// Only a reveal caused by this rule is undone, so a manual reveal is never cut short.
     public static func onFrontmostChange(bundleID: String?, revealApps: [String], revealedBy: Cause?) -> Bool? {
         if let bundleID, revealApps.contains(bundleID) { return revealedBy == nil ? true : nil }
         return revealedBy == .frontmostApp ? false : nil
     }
 
-    /// Auto-rehide applies only to manual reveals, and waits while the pointer is over the menu bar.
     public static func shouldRehide(now: Date, revealedAt: Date, seconds: Int, cause: Cause, pointerInMenuBar: Bool) -> Bool {
         guard seconds > 0, cause == .user, !pointerInMenuBar else { return false }
         return now.timeIntervalSince(revealedAt) >= Double(seconds)

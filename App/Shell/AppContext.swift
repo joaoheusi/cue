@@ -1,7 +1,6 @@
 import AppKit
 import CueKit
 
-/// The three areas of Cue. Each one has its own command-window scope, settings tab, and data file.
 enum CommandScope: String, CaseIterable, Identifiable {
     case prompts, clipboard, menuBar
     var id: String { rawValue }
@@ -26,10 +25,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Services shared by every module. Created once by `AppDelegate`.
 @MainActor final class AppContext {
     let dataDirectory: URL
-    /// Set by UI tests: no global hotkeys, no permission prompts, temporary data.
     let isUITesting: Bool
     let hotKeys = HotKeyCenter()
     let paste = PasteService()
@@ -37,10 +34,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     let log = DiagnosticsLog()
     let updater: AppUpdater
 
-    /// The paste target captured just before the command window opened. Consumed by one delivery.
     var invocation: Invocation?
 
-    // Window routing. `AppDelegate` installs these closures.
     var openCommand: (CommandScope) -> Void = { _ in }
     var closeCommand: () -> Void = {}
     var showCommandPassively: () -> Void = {}
@@ -67,7 +62,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Keychain service that holds the clipboard-history key. Separate per data folder.
     var keychainService: String {
         let name = dataDirectory.lastPathComponent
         return name.hasPrefix("app.cue.launcher") ? "\(name).clipboard" : "app.cue.launcher.custom.\(name).clipboard"
@@ -78,7 +72,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// One opening of the command window. Paste delivery is allowed once per invocation.
 @MainActor final class Invocation {
     let id = UUID()
     let created = Date()
@@ -91,7 +84,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var expired: Bool { consumed || cancelled || Date().timeIntervalSince(created) > 300 }
 }
 
-/// Keeps the last 200 error codes for the diagnostics export. Never stores user content.
 @MainActor final class DiagnosticsLog {
     private(set) var entries: [String] = []
 

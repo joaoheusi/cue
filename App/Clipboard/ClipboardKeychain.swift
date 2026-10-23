@@ -3,8 +3,6 @@ import CueKit
 import Foundation
 import Security
 
-/// The clipboard-history master key, stored as a generic password.
-/// Tries the data-protection keychain first. Ad-hoc signed builds lack its entitlement, so they use the legacy keychain.
 enum ClipboardKeychain {
     enum Kind: String, Sendable {
         case dataProtection = "data-protection", legacy
@@ -12,11 +10,7 @@ enum ClipboardKeychain {
 
     private static let account = "history-key"
 
-    /// Returns the stored key. When none exists, creates one if `create` is true, otherwise returns nil.
-    /// Blocking: run it off the main actor, because the legacy keychain may show a system prompt.
     static func load(service: String, create: Bool) throws -> (SymmetricKey, Kind)? {
-        // Search both keychains before concluding the key is missing: a key saved by an ad-hoc build
-        // must still be found by a later, properly signed build.
         for kind in [Kind.dataProtection, .legacy] {
             var query = base(service, kind)
             query[kSecReturnData as String] = true
@@ -37,7 +31,6 @@ enum ClipboardKeychain {
         for kind in [Kind.dataProtection, .legacy] {
             var query = base(service, kind)
             query[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
-            // The legacy keychain does not support this attribute (see SecItem.h).
             if kind == .dataProtection { query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }
             query[kSecAttrLabel as String] = "Cue clipboard history key"
             let status = SecItemAdd(query as CFDictionary, nil)

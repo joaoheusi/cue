@@ -12,7 +12,6 @@ import SwiftUI
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // One owner for the databases and shortcuts: hand over to a running copy and exit.
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         if !context.isUITesting, let running = others.first {
@@ -36,7 +35,6 @@ import SwiftUI
                 (.data, "Data & Privacy", "lock.shield", AnyView(DataSettingsView(context: context, diagnostics: diagnosticsReport))),
             ]
         }
-        // Hotkeys and menu items toggle: pressing the same shortcut again closes the window.
         context.openCommand = { [unowned self] in command.toggle($0) }
         context.closeCommand = { [unowned self] in command.hide(cancel: false) }
         context.showCommandPassively = { [unowned self] in command.showPassively() }
@@ -52,14 +50,12 @@ import SwiftUI
         context.updater.isIdle = { [unowned self] in
             !command.isVisible && !prompts.hasUnsavedChanges && !menuBar.arranging && NSApp.modalWindow == nil
         }
-        // Create Cue's own item first so it sits right of the menu-bar module's separators.
         installStatusItem()
         Task {
             await prompts.start()
             await clipboard.start()
             await menuBar.start()
             if context.isUITesting {
-                // The test runner launches Cue in the background; take focus so typing reaches the panel.
                 NSApp.activate()
                 command.show(.prompts)
             }
@@ -83,7 +79,6 @@ import SwiftUI
         context.hotKeys.unregisterAll()
     }
 
-    /// Menu-bar apps show no main menu, but text fields still need its key equivalents (⌘A, ⌘C, ⌘V, ⌘Z…).
     private func installMainMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
@@ -106,8 +101,6 @@ import SwiftUI
     }
 
     @objc private func showSettings() { context.openSettings(.general) }
-
-    // MARK: Menu bar icon
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -143,12 +136,10 @@ import SwiftUI
         let item = NSMenuItem(title: title, action: #selector(MenuAction.run), keyEquivalent: key)
         let target = MenuAction(action)
         item.target = target
-        item.representedObject = target // keeps the target alive
+        item.representedObject = target
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         menu.addItem(item)
     }
-
-    // MARK: Diagnostics
 
     private func diagnosticsReport() async -> String {
         var sections: [(String, [(String, String)])] = []
@@ -166,7 +157,6 @@ import SwiftUI
             ("Accessibility (post paste)", context.paste.canPostPaste ? "granted" : "not granted"),
         ]))
         sections.append(("Shortcuts", context.hotKeys.statuses.sorted { $0.key < $1.key }.map { owner, status in
-            // Action shortcuts are listed by ID only, never by name.
             (owner, "\(status.requested?.description ?? "none") — \(status.active ? "active" : status.error ?? "inactive")")
         }))
         sections.append(("Updates", context.updater.diagnostics))

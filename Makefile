@@ -1,4 +1,3 @@
-# Cue — run `make run` for a local debug build with isolated data.
 -include .env
 export
 
@@ -14,7 +13,6 @@ run: build
 build: project
 	$(XCODEBUILD) -configuration Debug build
 
-# Regenerates the Xcode project from project.yml when XcodeGen is installed.
 project:
 	@if command -v xcodegen >/dev/null; then xcodegen generate --quiet; fi
 
@@ -26,7 +24,6 @@ test-unit:
 test-ui: project
 	$(XCODEBUILD) -configuration Debug -only-testing:CueUITests -retry-tests-on-failure -test-iterations 3 test
 
-# Signed, notarized DMG plus Sparkle appcast in build/release. See docs/release-process.md.
 dmg: project
 	scripts/release.sh
 

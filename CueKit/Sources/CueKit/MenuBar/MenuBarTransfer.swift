@@ -1,6 +1,5 @@
 import Foundation
 
-/// The rules export file. `enabled` is not exported: importing must never change the menu bar by itself.
 public enum MenuBarTransfer {
     public static let schemaVersion = 1
     public static let maxBytes = 1 << 20
@@ -31,7 +30,6 @@ public enum MenuBarTransfer {
         return try encoder.encode(document)
     }
 
-    /// Parses and validates an export. Throws a user-facing error naming the first problem.
     public static func decode(_ data: Data) throws(CueError) -> (settings: Settings, rules: [MenuBarRule]) {
         guard data.count <= maxBytes else { throw CueError("OUTPUT_TOO_LARGE", "The file is larger than 1 MB.") }
         let document: Document

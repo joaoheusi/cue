@@ -29,7 +29,7 @@ import Testing
         #expect(decide([text, own], read: &read) == .skip(.ownWrite))
         #expect(decide([text], secure: true, read: &read) == .skip(.secureInput))
         #expect(!read)
-        #expect(decide([text], app: "com.apple.passwords", read: &read) == .skip(.excludedApp)) // case-insensitive
+        #expect(decide([text], app: "com.apple.passwords", read: &read) == .skip(.excludedApp))
         #expect(!read)
         #expect(decide(["public.png"], read: &read) == .skip(.notText))
         #expect(!read)
@@ -49,7 +49,7 @@ import Testing
         var tampered = sealed
         tampered[tampered.count / 2] ^= 0x01
         #expect(throws: (any Error).self) { try crypto.open(tampered, context: "a.text") }
-        #expect(throws: (any Error).self) { try crypto.open(sealed, context: "b.text") } // moved to another row
+        #expect(throws: (any Error).self) { try crypto.open(sealed, context: "b.text") }
         #expect(throws: (any Error).self) { try ClipboardCrypto(master: SymmetricKey(size: .bits256)).open(sealed, context: "a.text") }
     }
 
@@ -124,7 +124,7 @@ import Testing
             return try JSONSerialization.data(withJSONObject: object)
         }
         let decoded = try ClipboardExport.decode(try file())
-        #expect(decoded.items.first?.createdAt == "2026-10-22T09:00:00.000Z") // canonical form
+        #expect(decoded.items.first?.createdAt == "2026-10-22T09:00:00.000Z")
         #expect(decoded.settings.shortcut == nil)
         let reencoded = String(decoding: try decoded.encoded(), as: UTF8.self)
         #expect(reencoded.contains(#""pinboardID" : ""#) && reencoded.contains(#""shortcut" : null"#))
@@ -156,11 +156,11 @@ import Testing
         try await store.capture("secret", source: nil, now: Date())
         await #expect(throws: ClipboardStore.keyUnavailable) { try await store.unlock(SymmetricKey(size: .bits256)) }
         try await store.resetHistory()
-        try await store.unlock(SymmetricKey(size: .bits256)) // allowed once nothing would be orphaned
+        try await store.unlock(SymmetricKey(size: .bits256))
 
         try SQLite(path: url).executeScript("PRAGMA user_version=99")
         #expect(throws: CueError.self) { try ClipboardStore(url: url) }
-        #expect(try SQLite(path: url).userVersion() == 99) // never reset
+        #expect(try SQLite(path: url).userVersion() == 99)
     }
 
     @Test func settingsOnlyExportAndImportNeedNoKey() async throws {
@@ -169,7 +169,7 @@ import Testing
         settings.retention = .day
         settings.shortcut = nil
         try await source.save(settings)
-        let data = try await source.exportData(now: Date()) // locked, no items
+        let data = try await source.exportData(now: Date())
         let target = try ClipboardStore(url: nil)
         try await target.importData(data)
         #expect(await target.settings == settings)
@@ -195,7 +195,6 @@ import Testing
         #expect(await reopened.pinboards.map(\.name) == ["Pinned"])
     }
 
-    /// Capture → search → pin → expire → export → import into a fresh store → same results.
     @Test func endToEndHappyPath() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -209,7 +208,7 @@ import Testing
         let again = try await store.capture("Meeting notes: Café at 10", source: "com.apple.Notes", now: t0.addingTimeInterval(120))
         #expect(again == first)
         #expect(try await store.itemCount() == 2)
-        #expect(await store.items().first?.id == first) // the duplicate moved to the top
+        #expect(await store.items().first?.id == first)
 
         let hits = ClipboardSearch.filter(await store.items(), query: "cafe")
         #expect(hits.map(\.id) == [first])
@@ -225,7 +224,6 @@ import Testing
         let expected = await store.items()
         #expect(expected.map(\.id) == [fresh, first])
 
-        // Nothing readable on disk, including the write-ahead log.
         for suffix in ["", "-wal"] {
             let bytes = (try? Data(contentsOf: URL(fileURLWithPath: url.path + suffix))) ?? Data()
             #expect(!bytes.contains(Data("Meeting".utf8)) && !bytes.contains(Data("purge".utf8)) && !bytes.contains(Data("Notes".utf8)))
@@ -246,7 +244,6 @@ import Testing
         #expect(ClipboardSearch.filter(imported, query: "CAFÉ").map(\.id) == [first])
         #expect(try await other.purge(now: t0.addingTimeInterval(3 * 3600)) == 0)
 
-        // A failed import changes nothing.
         await #expect(throws: CueError.self) { try await other.importData(Data("{\"schemaVersion\":1}".utf8)) }
         #expect(await other.items().map(\.id) == expected.map(\.id))
 

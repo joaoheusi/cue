@@ -2,7 +2,6 @@ import AppKit
 import CueKit
 import SwiftUI
 
-/// Explicit-save editor. Typing and variable insertion use the text view's native undo.
 struct EditorView: View {
     let model: PromptsModel
     @Bindable var nav: LibraryNavigation
@@ -155,7 +154,6 @@ struct EditorView: View {
 @MainActor final class TemplateEditorController {
     weak var textView: NSTextView?
 
-    /// Inserts at the cursor, replacing the selection, as one undoable step.
     func insert(_ text: String) {
         guard let textView else { return }
         textView.window?.makeFirstResponder(textView)
@@ -163,7 +161,6 @@ struct EditorView: View {
     }
 }
 
-/// A plain-text editor with native undo, Tab indentation, and no smart substitutions.
 struct TemplateEditor: NSViewRepresentable {
     @Binding var text: String
     let controller: TemplateEditorController

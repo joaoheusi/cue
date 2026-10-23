@@ -1,8 +1,6 @@
 import AppKit
 import XCTest
 
-/// Core keyboard workflow: open the command window, search, move the selection, and copy with ⇧↩.
-/// Runs against a temporary library seeded with the starter actions. No hotkeys or permissions are used.
 final class CueUITests: XCTestCase {
     func testPaletteSearchAndCopyWithKeyboardOnly() throws {
         let data = FileManager.default.temporaryDirectory.appendingPathComponent("cue-ui-\(UUID().uuidString)")
@@ -15,11 +13,8 @@ final class CueUITests: XCTestCase {
 
         let search = app.textFields["command.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 15), "The command window should open on launch in UI-testing mode.")
-        // macOS may refuse to bring a test-launched app forward (CI runners, or someone using the Mac), and typing then fails
-        // with "no keyboard focus". One click gives the field focus; everything after it is keyboard-only.
         search.click()
 
-        // "Rewrite clearly" inserts the clipboard text into its template. Restore the user's clipboard afterwards.
         let saved = NSPasteboard.general.string(forType: .string)
         addTeardownBlock {
             NSPasteboard.general.clearContents()
@@ -32,7 +27,6 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
         search.typeKey(.downArrow, modifierFlags: [])
         search.typeKey(.upArrow, modifierFlags: [])
-        // Replace the query entirely from the keyboard.
         search.typeKey("a", modifierFlags: .command)
         search.typeText("rewrite")
         XCTAssertTrue(app.staticTexts["Rewrite clearly"].waitForExistence(timeout: 5))

@@ -1,7 +1,6 @@
 import Foundation
 
 public enum Timestamp {
-    /// RFC 3339 UTC with milliseconds, the format stored in every Cue database.
     public static func now() -> String { iso(Date()) }
 
     public static func iso(_ date: Date) -> String {
@@ -13,7 +12,6 @@ public enum Timestamp {
         return try? Date(value, strategy: .iso8601)
     }
 
-    /// `yyyyMMddTHHmmss.SSS` in UTC. Lexical order equals chronological order.
     public static func sortable(_ date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -23,8 +21,6 @@ public enum Timestamp {
 }
 
 public enum SafeFilename {
-    /// Builds a file name that is valid on APFS and FAT, never hidden, and never a path.
-    /// Example: `make("Cue: Diagnostics", ext: "txt", date: d)` → `Cue- Diagnostics 2026-10-22 101500.txt`.
     public static func make(_ base: String, ext: String, date: Date? = nil) -> String {
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters).union(.newlines)
         var name = String(String.UnicodeScalarView(base.unicodeScalars.map { forbidden.contains($0) ? "-" : $0 }))
@@ -45,8 +41,6 @@ public enum SafeFilename {
 }
 
 public enum TextLimits {
-    /// Rejects C0 controls except tab, newline, and carriage return, plus DEL.
-    /// Returns the 1-based Unicode scalar position of the first invalid character.
     public static func firstInvalidControl(in text: String) -> Int? {
         for (index, scalar) in text.unicodeScalars.enumerated() {
             let v = scalar.value
@@ -56,7 +50,6 @@ public enum TextLimits {
     }
 }
 
-/// Reads a user-chosen file with a hard size limit so a huge file cannot exhaust memory.
 public enum BoundedFile {
     public static func read(_ url: URL, maxBytes: Int) throws -> Data {
         let handle = try FileHandle(forReadingFrom: url)

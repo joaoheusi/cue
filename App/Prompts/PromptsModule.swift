@@ -2,7 +2,6 @@ import AppKit
 import CueKit
 import SwiftUI
 
-/// The prompt library: palette, library window, editor, and paste delivery.
 @MainActor final class PromptsModule {
     let model: PromptsModel
     private let nav = LibraryNavigation()
@@ -12,21 +11,18 @@ import SwiftUI
 
     func start() async {
         await model.load()
-        // First run opens the library for setup. Later launches start quietly in the menu bar.
         if case .loaded(let snapshot) = model.state, !snapshot.settings.onboarded, !model.context.isUITesting {
             openLibrary(nil)
         }
         if case .failed = model.state { openLibrary(nil) }
     }
 
-    /// Nothing to flush: every write is already committed, and SQLite replays its WAL on next open.
     func stop() {}
 
     func commandView() -> AnyView { AnyView(PaletteView(model: model)) }
     func settingsView() -> AnyView { AnyView(PromptsSettingsView(model: model)) }
     func generalSettingsView() -> AnyView { AnyView(GeneralSettingsView(model: model)) }
 
-    /// Shows the library. `actionID` selects an action; `"new"` starts a new one.
     func openLibrary(_ actionID: String?) {
         if window == nil {
             let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, nav: nav)))
@@ -43,7 +39,6 @@ import SwiftUI
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// Unsaved edits need an explicit decision before quitting.
     func canQuit() -> Bool {
         guard nav.isDirty else { return true }
         openLibrary(nil)

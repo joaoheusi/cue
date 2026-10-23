@@ -1,17 +1,13 @@
 import CueKit
 import SwiftUI
 
-/// The Prompts scope of the command window. ↩ uses the default delivery, ⇧↩ copies,
-/// ⌘E edits, ⌘N creates, ⌘, opens settings.
 struct PaletteView: View {
     let model: PromptsModel
     @State private var query = ""
     @State private var selection: String?
     @State private var busy = false
     @State private var error: CueError?
-    /// True while the window is shown passively after a failed paste.
     @State private var recovering = false
-    /// Ranking uses the usage order from when the window opened, so rows never jump mid-search.
     @State private var frozenUsage: [String: String]
 
     init(model: PromptsModel) {
@@ -47,7 +43,6 @@ struct PaletteView: View {
             copy.lastUsedAt = frozenUsage[action.id]
             return copy
         }
-        // Rank with frozen usage, then return the live actions so revisions stay current.
         let live = Dictionary(uniqueKeysWithValues: snapshot.actions.map { ($0.id, $0) })
         return ActionSearch.search(actions, query: query).compactMap { live[$0.id] }
     }

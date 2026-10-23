@@ -3,7 +3,6 @@ import CueKit
 import ServiceManagement
 import UniformTypeIdentifiers
 
-/// Explains each permission at the moment a feature needs it, before macOS shows its own prompt.
 @MainActor final class PermissionCoordinator {
     enum Kind {
         case accessibility(reason: String)
@@ -33,7 +32,6 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Shows the explanation. Returns true when the user chooses to continue.
     func explain(_ kind: Kind, continueTitle: String = "Continue") -> Bool {
         let alert = NSAlert()
         alert.messageText = kind.title
@@ -51,7 +49,6 @@ import UniformTypeIdentifiers
     }
 }
 
-/// Launch at login through `SMAppService`. macOS may require approval in Login Items settings.
 @MainActor enum LaunchAtLogin {
     static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
     static var needsApproval: Bool { SMAppService.mainApp.status == .requiresApproval }
@@ -65,7 +62,6 @@ import UniformTypeIdentifiers
         if enabled && needsApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
-    /// The LaunchAgent written by the earlier Tauri version. It starts Cue a second way at login.
     static let legacyAgent = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/Cue.plist")
     static var hasLegacyAgent: Bool { FileManager.default.fileExists(atPath: legacyAgent.path) }
 
@@ -87,9 +83,7 @@ import UniformTypeIdentifiers
     }
 }
 
-/// Save and open panels with safe names, size limits, and atomic writes.
 @MainActor enum FileTransfer {
-    /// Returns false when the user cancels.
     static func save(_ data: Data, suggestedName: String, type: UTType) throws(CueError) -> Bool {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
@@ -105,7 +99,6 @@ import UniformTypeIdentifiers
         return true
     }
 
-    /// Returns nil when the user cancels.
     static func open(type: UTType, maxBytes: Int) throws(CueError) -> Data? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [type]

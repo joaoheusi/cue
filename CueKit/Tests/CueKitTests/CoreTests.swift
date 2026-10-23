@@ -30,7 +30,7 @@ import Testing
     }
 
     @Test func safeFilenames() {
-        let date = Date(timeIntervalSince1970: 1_792_670_100) // 2026-10-22 11:55:00 UTC
+        let date = Date(timeIntervalSince1970: 1_792_670_100)
         #expect(SafeFilename.make("../etc/passwd", ext: "json") == "etc-passwd.json")
         #expect(SafeFilename.make("  ..hidden  ", ext: "txt") == "hidden.txt")
         #expect(SafeFilename.make("a:b*c?\n", ext: "JSON!") == "a-b-c.json")
@@ -46,7 +46,7 @@ import Testing
         #expect(palette.display == "⇧⌘Space")
         #expect(palette.keyCode == 0x31)
         #expect(Shortcut("CommandOrControl+Alt+v")?.description == "Super+Alt+V")
-        #expect(Shortcut("Shift+A") == nil) // would capture ordinary typing
+        #expect(Shortcut("Shift+A") == nil)
         #expect(Shortcut("Shift+F5") != nil)
         #expect(Shortcut("Super+Nope") == nil)
         #expect(Shortcut("Space") == nil)

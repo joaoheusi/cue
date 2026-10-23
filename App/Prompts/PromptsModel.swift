@@ -2,12 +2,9 @@ import AppKit
 import CueKit
 import UniformTypeIdentifiers
 
-/// State and operations for the prompt library. All UI reads from `state`; every write reloads it.
 @MainActor @Observable final class PromptsModel {
     private(set) var state: LoadState<LibrarySnapshot> = .loading
-    /// A short result shown by the library window, for example "Saved." or a recoverable error.
     var notice: (text: String, success: Bool)?
-    /// A validated import waiting for the user's choice in the library window.
     var pendingImport: ImportPreview?
     @ObservationIgnored private var store: PromptStore?
     @ObservationIgnored let context: AppContext
@@ -19,8 +16,6 @@ import UniformTypeIdentifiers
     var snapshot: LibrarySnapshot? {
         if case .loaded(let snapshot) = state { snapshot } else { nil }
     }
-
-    // MARK: Loading
 
     func load() async {
         do {
@@ -45,7 +40,6 @@ import UniformTypeIdentifiers
         state = .loaded(try await store.snapshot())
     }
 
-    /// Runs a store operation, reloads, and reports the outcome. Returns nil on failure.
     @discardableResult
     func perform<T: Sendable>(_ success: String? = nil, _ operation: (PromptStore) async throws -> T) async -> T? {
         guard let store else {
@@ -82,11 +76,8 @@ import UniformTypeIdentifiers
         applyTheme()
     }
 
-    // MARK: Shortcuts
-
     static func owner(_ action: Action) -> String { "action:\(action.id)" }
 
-    /// Registers the palette shortcut and every stored direct-action shortcut.
     func restoreShortcuts() {
         guard !context.isUITesting, let snapshot else { return }
         let palette = snapshot.bindings["palette"] ?? snapshot.settings.paletteShortcut
@@ -122,7 +113,6 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Changes the palette shortcut. The previous shortcut keeps working if registration fails.
     func setPaletteShortcut(_ shortcut: Shortcut) async {
         do {
             try context.hotKeys.register("palette", shortcut) { [weak self] in self?.context.openCommand(.prompts) }
@@ -134,7 +124,6 @@ import UniformTypeIdentifiers
         await saveSettings { $0.paletteShortcut = shortcut.description }
     }
 
-    /// Stores and activates (or clears) an action's direct shortcut.
     func setShortcut(_ shortcut: Shortcut?, for action: Action) async {
         let owner = Self.owner(action)
         if let shortcut {
@@ -149,8 +138,6 @@ import UniformTypeIdentifiers
             context.hotKeys.unregister(owner)
         }
     }
-
-    // MARK: Library operations
 
     @discardableResult
     func save(_ action: Action) async -> Action? {
@@ -203,15 +190,10 @@ import UniformTypeIdentifiers
 
     func commitImport(_ preview: ImportPreview, update: Bool) async {
         await perform("Imported.") { try await $0.commitImport(token: preview.token, update: update) }
-        // Imported actions replace shortcuts for updated IDs. Re-register from the stored bindings.
         for owner in context.hotKeys.statuses.keys where owner.hasPrefix("action:") { context.hotKeys.unregister(owner) }
         restoreShortcuts()
     }
 
-    // MARK: Delivery
-
-    /// Delivers from the command window. Returns a failure without consuming the invocation
-    /// when paste is blocked, so the user can fix it or press Shift-Return to copy instead.
     func deliver(_ action: Action, copyOnly: Bool) async -> Result<Delivery, CueError> {
         guard let invocation = context.invocation, !invocation.expired else {
             return .failure(CueError("INVOCATION_EXPIRED", "Reopen the palette to use this action."))
@@ -219,7 +201,6 @@ import UniformTypeIdentifiers
         return await deliver(action, copyOnly: copyOnly, invocation: invocation)
     }
 
-    /// Copies from the library window. Never pastes.
     func copy(_ action: Action) async {
         let result = await deliver(action, copyOnly: true, invocation: Invocation(target: .failure(PasteFailure.targetUnavailable.error)))
         switch result {
@@ -228,7 +209,6 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// A direct-action shortcut: capture the focused field now, then deliver without opening a window.
     private func runDirect(actionID: String) async {
         guard let action = snapshot?.actions.first(where: { $0.id == actionID }) else { return }
         let paste = willPaste(action, copyOnly: false)
@@ -299,8 +279,6 @@ import UniformTypeIdentifiers
         try? await reload()
         return .success(delivery)
     }
-
-    // MARK: Diagnostics
 
     func diagnostics() -> [(String, String)] {
         guard let snapshot else {

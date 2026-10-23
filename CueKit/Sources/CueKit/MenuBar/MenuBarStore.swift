@@ -1,6 +1,5 @@
 import Foundation
 
-/// Menu-bar settings and placement rules in `menubar.sqlite3`. Every failure maps to a `CueError`.
 public actor MenuBarStore {
     public static let version = 1
     private let db: SQLite
@@ -34,7 +33,6 @@ public actor MenuBarStore {
             for row in try db.query("SELECT key, value FROM settings") {
                 if let key = row[0].string, let value = row[1].string { values[key] = value }
             }
-            // Unreadable values fall back to defaults instead of failing the whole load.
             var settings = MenuBarSettings()
             if let value = values["enabled"] { settings.enabled = value == "1" }
             if let value = values["auto_rehide_seconds"].flatMap(Int.init), (0...MenuBarValidation.maxRehideSeconds).contains(value) {
@@ -79,8 +77,6 @@ public actor MenuBarStore {
         }
     }
 
-    /// Merges imported rules (same key wins from the file) and settings in one transaction.
-    /// Keeps `enabled` as it is.
     public func importConfig(settings imported: MenuBarTransfer.Settings, rules: [MenuBarRule]) throws(CueError) {
         do {
             try db.transaction {

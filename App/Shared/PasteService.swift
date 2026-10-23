@@ -3,7 +3,6 @@ import ApplicationServices
 import Carbon.HIToolbox
 import CueKit
 
-/// The text field Cue will paste into, captured before the command window takes focus.
 @MainActor final class PasteTarget {
     let app: NSRunningApplication
     let application: AXUIElement
@@ -38,11 +37,7 @@ enum Delivery: Equatable {
     var succeeded: Bool { self == .pasted || self == .copied }
 }
 
-/// Copies text and pastes it into a captured text field with Accessibility.
-/// Safety rules: it rejects secure fields and terminals, checks the exact window and field,
-/// requires an unchanged clipboard and released modifiers, and posts at most one ⌘V per delivery.
 @MainActor final class PasteService {
-    /// Marks Cue's own clipboard writes so the clipboard history can skip them.
     static let originType = NSPasteboard.PasteboardType("app.cue.launcher.origin")
 
     private var session = 0
@@ -59,13 +54,9 @@ enum Delivery: Equatable {
         }
     }
 
-    // MARK: Permissions
-
-    /// Reading the target and posting the paste key are separate grants on macOS. Report both.
     var canReadTarget: Bool { AXIsProcessTrusted() }
     var canPostPaste: Bool { CGPreflightPostEventAccess() }
 
-    /// Shows the system prompt and opens Accessibility settings. Call only after explaining why.
     func requestAccess() {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
@@ -76,8 +67,6 @@ enum Delivery: Equatable {
         if !canReadTarget { return .permission }
         return canPostPaste ? nil : .postPermission
     }
-
-    // MARK: Target
 
     func capture() -> Result<PasteTarget, CueError> {
         if let failure = permissionFailure() { return .failure(failure.error) }
@@ -94,7 +83,6 @@ enum Delivery: Equatable {
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
     }
 
-    /// Verifies the captured window and field still exist and that nothing else took focus.
     func check(_ target: PasteTarget) -> CueError? {
         check(target, foreground: false)?.error
     }
@@ -103,7 +91,6 @@ enum Delivery: Equatable {
         PasteRules.check(observe(target), foreground: foreground)
     }
 
-    /// Reads everything the paste rules need. Accessibility calls stay here; decisions live in `PasteRules`.
     private func observe(_ target: PasteTarget) -> PasteRules.Observation {
         var o = PasteRules.Observation()
         o.canRead = canReadTarget
@@ -138,11 +125,8 @@ enum Delivery: Equatable {
         return nil
     }
 
-    // MARK: Clipboard
-
     var changeCount: Int { NSPasteboard.general.changeCount }
 
-    /// Writes plain text. With `expected`, refuses to overwrite a clipboard that changed since preflight.
     @discardableResult
     func write(_ text: String, expected: Int? = nil) throws(CueError) -> Int {
         let board = NSPasteboard.general
@@ -155,7 +139,6 @@ enum Delivery: Equatable {
         return board.changeCount
     }
 
-    /// Reads plain text from the clipboard. Used only in direct response to a user action.
     func readText() throws(CueError) -> String {
         guard let text = NSPasteboard.general.string(forType: .string) else {
             throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.")
@@ -163,11 +146,6 @@ enum Delivery: Equatable {
         return text
     }
 
-    // MARK: Delivery
-
-    /// Copies `text`, then (when `paste` is true) returns focus to `target` and sends one ⌘V.
-    /// `generation` is the clipboard change count read during preflight.
-    /// `hide` runs after the copy succeeds and before focus moves.
     func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
         let written: Int
         do {
@@ -179,13 +157,11 @@ enum Delivery: Equatable {
         guard paste, let target else { return .copied }
         if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
         if let failure = activate(target) { return .copiedNotPasted(failure.error) }
-        // Let AppKit finish activation before verifying the exact window and field.
         try? await Task.sleep(for: .milliseconds(80))
         let deadline = Date().addingTimeInterval(0.8)
         while true {
             if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
             guard let failure = send(target, generation: written) else { return .pasted }
-            // Wait only for activation or released modifiers. Never retry a sent chord.
             guard PasteRules.isRetryable(failure), Date() < deadline else {
                 return .copiedNotPasted(failure.error)
             }
@@ -205,13 +181,10 @@ enum Delivery: Equatable {
         else { return .unsupported }
         down.flags = .maskCommand
         up.flags = .maskCommand
-        // Route both events to the captured process. Never retry after this point.
         down.postToPid(target.app.processIdentifier)
         up.postToPid(target.app.processIdentifier)
         return nil
     }
-
-    // MARK: Accessibility helpers
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?

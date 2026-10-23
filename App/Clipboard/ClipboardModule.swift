@@ -10,7 +10,6 @@ struct ClipboardStatus: Equatable {
     var success: Bool
 }
 
-/// Encrypted clipboard history. Owns the durable state; the command window rebuilds its view on every opening.
 @MainActor @Observable final class ClipboardModule {
     enum Phase: Equatable {
         case loading, ready
@@ -22,7 +21,6 @@ struct ClipboardStatus: Equatable {
     private(set) var pinboards: [Pinboard] = []
     private(set) var settings = ClipboardSettings()
     private(set) var captureEnabled = false
-    /// macOS is set to deny Cue clipboard access. Capture is paused until the user allows it.
     private(set) var accessDenied = false
     private(set) var hotKeyError: String?
     var commandStatus: ClipboardStatus?
@@ -46,11 +44,9 @@ struct ClipboardStatus: Equatable {
 
     init(context: AppContext) { self.context = context }
 
-    /// Opens storage and registers the hotkey. Failures become visible state; this never throws.
     func start() async {
         await openStore()
         activateSavedHotKey()
-        // The Keychain may show a system prompt, so the other modules do not wait for it.
         Task { await loadHistory() }
         purgeTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -60,7 +56,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// Called before quit. Stops capture and flushes pending writes.
     func stop() {
         pollTask?.cancel()
         purgeTask?.cancel()
@@ -70,7 +65,6 @@ struct ClipboardStatus: Equatable {
 
     func settingsView() -> AnyView { AnyView(ClipboardSettingsView(module: self)) }
 
-    /// Counts and settings only. Never clipboard content, source apps, or pinboard names.
     func diagnostics() async -> [(String, String)] {
         var rows: [(String, String)] = []
         switch phase {
@@ -97,8 +91,6 @@ struct ClipboardStatus: Equatable {
         return rows
     }
 
-    // MARK: Loading
-
     private func openStore() async {
         let url = context.dataDirectory.appendingPathComponent(ClipboardStore.fileName)
         do {
@@ -112,8 +104,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// Purges, unlocks when needed, and starts capture. The Keychain is touched only when there is
-    /// history to read or capture is on.
     private func loadHistory() async {
         guard !loading else { return }
         loading = true
@@ -168,9 +158,6 @@ struct ClipboardStatus: Equatable {
         phase = .failed(error.cueError)
     }
 
-    // MARK: Capture
-
-    /// Turning capture on explains clipboard access first, as macOS asks before Cue can read it.
     func setCaptureEnabled(_ enabled: Bool) {
         guard let store, enabled != captureEnabled else { return }
         if enabled, !context.permissions.explain(.clipboard, continueTitle: "Turn On") { return }
@@ -192,8 +179,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// Starts polling the change count. Only changes after this moment are read, so whatever was
-    /// already on the clipboard is never saved.
     private func startCapture() {
         pollTask?.cancel()
         pollTask = nil
@@ -213,7 +198,6 @@ struct ClipboardStatus: Equatable {
         pollTask = nil
     }
 
-    /// Re-checks clipboard access after the user changed it in System Settings.
     func recheckAccess() {
         if captureEnabled, phase == .ready, pollTask == nil { startCapture() }
     }
@@ -265,10 +249,6 @@ struct ClipboardStatus: Equatable {
         return "unavailable"
     }
 
-    // MARK: Command actions
-
-    /// Return pastes into the app that was focused before Cue opened. Shift-Return only copies.
-    /// Without a usable target, Cue copies and keeps the window open to say why.
     func use(_ item: ClipItem, paste: Bool) async {
         commandStatus = nil
         let invocation = context.invocation
@@ -295,7 +275,6 @@ struct ClipboardStatus: Equatable {
         case .pasted, .copied:
             commandStatus = fallback ? ClipboardStatus(text: "Copied, not pasted. \(reason ?? "") Press ⌘V to paste.", success: false)
                                      : ClipboardStatus(text: delivery.message, success: true)
-            // Show why without taking focus, so ⌘V goes to the app the user was typing in.
             if fallback { context.showCommandPassively() }
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .copiedNotPasted(let error):
@@ -310,7 +289,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// ⌘P: unpins, or pins to the first pinboard.
     func togglePin(_ item: ClipItem) async {
         await run(.command) { store in
             try await store.setPinboard(item.id, item.isPinned ? nil : store.defaultPinboard().id)
@@ -325,8 +303,6 @@ struct ClipboardStatus: Equatable {
         await run(.command) { try await $0.delete(item.id) }
     }
 
-    // MARK: Settings actions
-
     func update(_ edit: (inout ClipboardSettings) -> Void) {
         var next = settings
         edit(&next)
@@ -339,12 +315,10 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// Registers the new shortcut first. If macOS refuses it, the previous shortcut stays active and saved.
     func setShortcut(_ shortcut: Shortcut?) {
         if registerHotKey(shortcut) { update { $0.shortcut = shortcut?.description } }
     }
 
-    /// Registers the saved shortcut. On failure, records it as unavailable so settings and diagnostics show why.
     private func activateSavedHotKey() {
         let shortcut = settings.shortcut.flatMap(Shortcut.init)
         if !registerHotKey(shortcut), let shortcut {
@@ -352,7 +326,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// Returns false when registration failed. The reason is in `hotKeyError`.
     @discardableResult
     private func registerHotKey(_ shortcut: Shortcut?) -> Bool {
         hotKeyError = nil
@@ -423,7 +396,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// For a missing or unreadable key: deletes the unreadable items and the old key, then starts fresh.
     func resetHistory() {
         guard let store,
               confirm("Reset clipboard history?",
@@ -459,7 +431,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    /// Validates the whole file before asking to replace anything.
     func importHistory() {
         guard let store else { return }
         Task {
@@ -482,8 +453,6 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    // MARK: Helpers
-
     func appName(_ bundleID: String) -> String {
         if let name = appNames[bundleID] { return name }
         let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
@@ -495,7 +464,6 @@ struct ClipboardStatus: Equatable {
 
     enum Surface { case command, settings }
 
-    /// Runs a store change, refreshes, and reports failure on `surface`. Returns true on success.
     @discardableResult
     private func run(_ surface: Surface, _ body: (ClipboardStore) async throws -> Void) async -> Bool {
         guard let store else { return false }

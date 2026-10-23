@@ -21,22 +21,18 @@ public enum PasteFailure: Int, Sendable {
     }
 }
 
-/// The decision rules behind automatic paste, separated from Accessibility calls so they can be tested.
 public enum PasteRules {
     public enum Front: Sendable { case target, cue, other }
     public enum Focus: Sendable { case same, different, missing }
 
-    /// What Cue observed about the captured target at one moment.
     public struct Observation: Sendable {
         public var canRead = true
         public var canPost = true
         public var sameSession = true
         public var terminated = false
         public var front = Front.target
-        /// While the target is inactive: does the captured window still exist, and does the field still answer?
         public var windowExists = true
         public var fieldExists = true
-        /// While the target is frontmost: how its focused window and field compare with the captured ones.
         public var focusedWindow = Focus.same
         public var focusedField = Focus.same
         public var secureField = false
@@ -44,7 +40,6 @@ public enum PasteRules {
         public init() {}
     }
 
-    /// `foreground` is true just before posting the paste key, when the target must already be active.
     public static func check(_ o: Observation, foreground: Bool) -> PasteFailure? {
         if !o.canRead { return .permission }
         if !o.canPost { return .postPermission }
@@ -54,20 +49,16 @@ public enum PasteRules {
             return .targetChanged
         case .cue:
             if foreground { return .focusTimeout }
-            // An inactive app may clear its focused element while Cue is open. Validate the
-            // retained target now; verify active focus after activation, just before pasting.
             if o.secureField { return .protectedInput }
             return o.windowExists && o.fieldExists ? nil : .targetChanged
         case .target:
             if o.secureField { return .protectedInput }
             if o.focusedWindow == .same && o.focusedField == .same { return nil }
-            // Activation can precede the app's focus update. Only an absent focus is retryable.
             let changed = o.focusedWindow == .different || o.focusedField == .different
             return changed ? .targetChanged : .focusTimeout
         }
     }
 
-    /// The final gate before posting ⌘V. Never retry after this returns nil.
     public static func send(_ o: Observation, clipboardUnchanged: Bool, modifiersHeld: Bool) -> PasteFailure? {
         if let failure = check(o, foreground: true) { return failure }
         if !clipboardUnchanged { return .clipboardChanged }
@@ -75,7 +66,6 @@ public enum PasteRules {
         return nil
     }
 
-    /// Only activation delays and held keys are worth waiting for.
     public static func isRetryable(_ failure: PasteFailure) -> Bool {
         failure == .modifiersHeld || failure == .focusTimeout
     }

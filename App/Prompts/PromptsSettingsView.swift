@@ -1,7 +1,6 @@
 import CueKit
 import SwiftUI
 
-/// General tab: appearance, launch at login, update check, and shortcut pause.
 struct GeneralSettingsView: View {
     let model: PromptsModel
     @State private var launchStatus = LaunchAtLogin.statusText
@@ -82,7 +81,6 @@ struct GeneralSettingsView: View {
     }
 }
 
-/// Prompts tab: palette shortcut, delivery, paste permission, direct shortcuts, and library data.
 struct PromptsSettingsView: View {
     let model: PromptsModel
     @State private var confirmClear = false

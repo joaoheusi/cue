@@ -3,7 +3,6 @@ import Testing
 @testable import CueKit
 
 @Suite struct MenuBarTests {
-    // Always-hidden separator at 300–310, hidden separator at 400–410. Collapsed frames keep the right edge.
     let separators = MenuBarSeparatorFrames(hidden: MenuBarSpan(minX: 400, maxX: 410), alwaysHidden: MenuBarSpan(minX: 300, maxX: 310))
 
     func item(_ name: String, _ minX: Double, width: Double = 20, movable: Bool = true) -> MenuBarItem {
@@ -20,13 +19,12 @@ import Testing
             MenuBarLayout.section(of: MenuBarSpan(minX: minX, maxX: maxX), separators: separators)
         }
         #expect(section(500, 520) == .visible)
-        #expect(section(410, 430) == .visible) // starts exactly at the hidden separator's right edge
-        #expect(section(400, 420) == .visible) // center exactly on the edge counts as right
-        #expect(section(380, 400) == .hidden) // ends exactly at the separator's left edge
+        #expect(section(410, 430) == .visible)
+        #expect(section(400, 420) == .visible)
+        #expect(section(380, 400) == .hidden)
         #expect(section(310, 330) == .hidden)
         #expect(section(280, 300) == .alwaysHidden)
-        #expect(section(-4150, -4130) == .alwaysHidden) // pushed off-screen by a collapsed separator
-        // A collapsed hidden separator spans far left but keeps its right edge.
+        #expect(section(-4150, -4130) == .alwaysHidden)
         let collapsed = MenuBarSeparatorFrames(hidden: MenuBarSpan(minX: -4088, maxX: 928), alwaysHidden: MenuBarSpan(minX: -9000, maxX: -4124))
         #expect(MenuBarLayout.section(of: MenuBarSpan(minX: -4120, maxX: -4100), separators: collapsed) == .hidden)
         #expect(MenuBarLayout.section(of: MenuBarSpan(minX: 930, maxX: 950), separators: collapsed) == .visible)
@@ -47,8 +45,6 @@ import Testing
     }
 
     @Test func planOrderKeepsRelativePositions() {
-        // Into Visible: each drop lands just right of the separator, so the rightmost item goes first.
-        // Into hidden sections: each drop lands just left of a separator, so the leftmost item goes first.
         let items = [item("p", 100), item("q", 150), item("r", 500), item("s", 600), item("t", 320)]
         let rules = [rule("p", .visible), rule("q", .visible), rule("s", .alwaysHidden), rule("r", .alwaysHidden), rule("t", .alwaysHidden)]
         let moves = MenuBarLayout.plan(items: items, separators: separators, rules: rules)
@@ -140,7 +136,7 @@ import Testing
         #expect(code(document(settings: #"{"autoRehideSeconds":3601,"revealApps":[],"shortcut":null}"#)) == "VALIDATION")
         #expect(code(document(settings: #"{"autoRehideSeconds":5,"revealApps":["nope"],"shortcut":null}"#)) == "VALIDATION")
         #expect(code(document(settings: #"{"autoRehideSeconds":5,"revealApps":[],"shortcut":"Shift+A"}"#)) == "VALIDATION")
-        #expect(code(document(settings: #"{"autoRehideSeconds":5,"revealApps":[]}"#)) == nil) // no shortcut
+        #expect(code(document(settings: #"{"autoRehideSeconds":5,"revealApps":[]}"#)) == nil)
         #expect(code(Data(count: MenuBarTransfer.maxBytes + 1)) == "OUTPUT_TOO_LARGE")
     }
 
@@ -156,7 +152,6 @@ import Testing
         #expect(try SQLite(path: url).scalar("SELECT COUNT(*) FROM rules")?.int == 1)
     }
 
-    /// Store → rules → plan → export → import into a fresh store → identical rules and plan.
     @Test func endToEndHappyPath() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -191,7 +186,7 @@ import Testing
         let imported = try await fresh.load()
         #expect(imported.rules == loaded.rules)
         #expect(imported.settings.autoRehideSeconds == 30 && imported.settings.revealApps == ["com.apple.Safari"] && imported.settings.shortcut == nil)
-        #expect(imported.settings.enabled == false) // import never turns the feature on
+        #expect(imported.settings.enabled == false)
         #expect(MenuBarLayout.plan(items: items, separators: separators, rules: imported.rules) == plan)
     }
 }

@@ -7,7 +7,6 @@ enum LibraryFilter: Hashable {
     case category(String)
 }
 
-/// Selection and the unsaved editor draft. Survives closing the window, so closing never loses edits.
 @MainActor @Observable final class LibraryNavigation {
     var filter: LibraryFilter = .all
     var query = ""
@@ -34,7 +33,6 @@ enum LibraryFilter: Hashable {
         draft = value
     }
 
-    /// Selects an action unless that would discard edits; then it asks first.
     func select(_ id: String?, in snapshot: LibrarySnapshot) {
         guard id != draft?.id else { return }
         if isDirty {
@@ -143,7 +141,6 @@ struct LibraryView: View {
                         .contextMenu {
                             Button("Rename…") { renaming = (name, name) }
                             Button("Delete Category", role: .destructive) {
-                                // Its actions stay in the library without a category.
                                 Task { await model.perform { try await $0.category(old: name, name: "", revision: snapshot.revision) } }
                             }
                         }
@@ -213,7 +210,6 @@ private struct IdentifiedPreview: Identifiable {
 
 private struct ImportSheet: View {
     let preview: ImportPreview
-    /// nil cancels. false adds everything as new; true updates matching IDs.
     let finish: (Bool?) -> Void
 
     var body: some View {
@@ -237,7 +233,6 @@ private struct ImportSheet: View {
     }
 }
 
-/// First run: optional starter actions and the palette shortcut. Saved in one transaction.
 struct OnboardingView: View {
     let model: PromptsModel
     @State private var starters = Starters.actions()

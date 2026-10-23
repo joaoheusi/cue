@@ -1,7 +1,6 @@
 import Testing
 @testable import CueKit
 
-/// Ports the scenarios of the former native paste regression suite to the extracted rules.
 @Suite struct PasteRulesTests {
     private func observe(_ change: (inout PasteRules.Observation) -> Void = { _ in }) -> PasteRules.Observation {
         var o = PasteRules.Observation()
@@ -18,19 +17,15 @@ import Testing
     @Test func activeTargetMustKeepTheExactWindowAndField() {
         #expect(PasteRules.check(observe { $0.secureField = true }, foreground: false) == .protectedInput)
         #expect(PasteRules.check(observe { $0.focusedField = .different }, foreground: false) == .targetChanged)
-        // Activation can precede the focus update: an absent focus is retryable.
         #expect(PasteRules.check(observe { $0.focusedField = .missing }, foreground: true) == .focusTimeout)
-        // A changed window blocks even when the field is missing.
         #expect(PasteRules.check(observe { $0.focusedWindow = .different; $0.focusedField = .missing }, foreground: true) == .targetChanged)
     }
 
     @Test func inactiveTargetIsValidatedByExistenceWhileCueIsOpen() {
-        // The regression behind TARGET_CHANGED: the app clears its focused field while Cue owns focus.
         #expect(PasteRules.check(observe { $0.front = .cue; $0.focusedField = .missing }, foreground: false) == nil)
         #expect(PasteRules.check(observe { $0.front = .cue; $0.windowExists = false }, foreground: false) == .targetChanged)
         #expect(PasteRules.check(observe { $0.front = .cue; $0.fieldExists = false }, foreground: false) == .targetChanged)
         #expect(PasteRules.check(observe { $0.front = .cue; $0.secureField = true }, foreground: false) == .protectedInput)
-        // Never paste before activation.
         #expect(PasteRules.check(observe { $0.front = .cue }, foreground: true) == .focusTimeout)
     }
 

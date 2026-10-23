@@ -7,7 +7,6 @@ import UniformTypeIdentifiers
     var tab: SettingsTab = .general
 }
 
-/// The single settings screen. Each module contributes one tab.
 @MainActor final class SettingsWindowController {
     private let selection = SettingsSelection()
     private var window: NSWindow?
@@ -52,7 +51,6 @@ private struct SettingsRoot: View {
     }
 }
 
-/// Data location, diagnostics export, and uninstall steps. Shared by all modules.
 struct DataSettingsView: View {
     let context: AppContext
     let diagnostics: () async -> String

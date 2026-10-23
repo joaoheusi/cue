@@ -34,8 +34,6 @@ private enum MenuBarRow: Identifiable {
     }
 }
 
-// MARK: Command window
-
 struct MenuBarCommandView: View {
     let module: MenuBarModule
     @State private var query = ""
@@ -61,7 +59,6 @@ struct MenuBarCommandView: View {
             }
         }
         .task { await module.refreshItems() }
-        // The view survives closing the window, so re-read positions on every opening.
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             if (note.object as? NSWindow)?.accessibilityIdentifier() == "command.window" {
                 Task { await module.refreshItems() }
@@ -150,8 +147,6 @@ struct MenuBarCommandView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-
-// MARK: Settings
 
 struct MenuBarSettingsView: View {
     let module: MenuBarModule

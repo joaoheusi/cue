@@ -1,8 +1,6 @@
 import CryptoKit
 import Foundation
 
-/// Encrypted clipboard history in its own SQLite file, so clearing history really deletes it.
-/// Opening and purging need no key; reading and writing item text needs `unlock(_:)`.
 public actor ClipboardStore {
     public static let fileName = "clipboard.sqlite3"
     static let schemaVersion = 1
@@ -16,14 +14,11 @@ public actor ClipboardStore {
 
     private let db: SQLite
     private var crypto: ClipboardCrypto?
-    // ponytail: every item stays decrypted in memory (bounded by maxItems plus pinned, at most 256 KiB each).
-    // Page from SQLite if very large histories ever matter.
     private var cache: [String: ClipItem] = [:]
     public private(set) var settings: ClipboardSettings
     public private(set) var captureEnabled: Bool
     public private(set) var pinboards: [Pinboard] = []
 
-    /// Opens or creates the database. Refuses a newer schema instead of resetting it. Pass nil for in-memory.
     public init(url: URL?) throws {
         let db = try url.map { try SQLite(path: $0) } ?? SQLite()
         try db.executeScript("PRAGMA secure_delete=ON; PRAGMA journal_mode=WAL;")
@@ -62,14 +57,11 @@ public actor ClipboardStore {
 
     public func itemCount() throws -> Int { try db.scalar("SELECT COUNT(*) FROM items")?.int ?? 0 }
 
-    /// All rows, including any that cannot be decrypted. For diagnostics.
     public func counts() throws -> (items: Int, pinned: Int) {
         let row = try db.query("SELECT COUNT(*), COUNT(pinboard_id) FROM items").first
         return (row?[0].int ?? 0, row?[1].int ?? 0)
     }
 
-    /// Verifies `key` against the stored key check, then decrypts every item into memory.
-    /// A different key is accepted only when there are no items it would orphan.
     public func unlock(_ key: SymmetricKey) throws {
         let crypto = ClipboardCrypto(master: key)
         if try db.scalar("SELECT value FROM meta WHERE key='key_check'")?.data != crypto.keyCheck {
@@ -79,12 +71,8 @@ public actor ClipboardStore {
         try load(crypto)
     }
 
-    /// Every readable item, last used first.
     public func items() -> [ClipItem] { cache.values.sorted { $0.lastUsedAt > $1.lastUsedAt } }
 
-    // MARK: Items
-
-    /// Saves `text`, or moves an existing identical item to the top. Returns the item's ID.
     @discardableResult
     public func capture(_ text: String, source: String?, now: Date) throws -> String {
         let crypto = try requireCrypto()
@@ -109,7 +97,6 @@ public actor ClipboardStore {
         cache[id]?.lastUsedAt = date
     }
 
-    /// Pins to `pinboardID`, or unpins with nil.
     public func setPinboard(_ id: String, _ pinboardID: String?) throws {
         if let pinboardID, !pinboards.contains(where: { $0.id == pinboardID }) { throw CueError.validation("That pinboard no longer exists.") }
         try db.execute("UPDATE items SET pinboard_id=?1 WHERE id=?2", [SQLValue(pinboardID), .text(id)])
@@ -122,12 +109,10 @@ public actor ClipboardStore {
         try checkpoint()
     }
 
-    /// Deletes expired and excess unpinned items with real `DELETE`s. Works without the key.
     @discardableResult
     public func purge(now: Date) throws -> Int {
         let candidates = try db.query("SELECT id, last_used_at, pinboard_id FROM items").compactMap { row -> PurgeCandidate? in
             guard let id = row[0].string else { return nil }
-            // An unparsable date counts as oldest, so damaged rows expire instead of lingering.
             let used = row[1].string.flatMap(Timestamp.parse) ?? .distantPast
             return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null)
         }
@@ -147,7 +132,6 @@ public actor ClipboardStore {
         try checkpoint()
     }
 
-    /// Deletes every item and forgets the key check, so a new key can be used. Pinboards and settings stay.
     public func resetHistory() throws {
         try db.transaction {
             try db.execute("DELETE FROM items")
@@ -158,8 +142,6 @@ public actor ClipboardStore {
         try checkpoint()
     }
 
-    // MARK: Pinboards
-
     public func createPinboard(_ name: String) throws -> Pinboard {
         let board = Pinboard(id: Self.newID(), name: try Pinboard.validName(name, existing: pinboards))
         try db.execute("INSERT INTO pinboards(id, name, position) VALUES(?1, ?2, (SELECT COALESCE(MAX(position), -1) + 1 FROM pinboards))",
@@ -168,7 +150,6 @@ public actor ClipboardStore {
         return board
     }
 
-    /// The first pinboard, created as "Pinned" when there is none. Used by ⌘P.
     public func defaultPinboard() throws -> Pinboard {
         try pinboards.first ?? createPinboard("Pinned")
     }
@@ -179,14 +160,11 @@ public actor ClipboardStore {
         if let index = pinboards.firstIndex(where: { $0.id == id }) { pinboards[index].name = clean }
     }
 
-    /// Deletes the pinboard. Its items become unpinned and can expire again.
     public func deletePinboard(_ id: String) throws {
         try db.execute("DELETE FROM pinboards WHERE id=?1", [.text(id)])
         pinboards.removeAll { $0.id == id }
         for (itemID, item) in cache where item.pinboardID == id { cache[itemID]?.pinboardID = nil }
     }
-
-    // MARK: Settings
 
     public func save(_ settings: ClipboardSettings) throws {
         try settings.validate()
@@ -199,9 +177,6 @@ public actor ClipboardStore {
         captureEnabled = enabled
     }
 
-    // MARK: Export and import
-
-    /// Plaintext JSON of settings, pinboards, and every readable item.
     public func exportData(now: Date) throws -> Data {
         if crypto == nil, try itemCount() > 0 { throw Self.keyUnavailable }
         let file = ClipboardExport(
@@ -210,11 +185,8 @@ public actor ClipboardStore {
         return try file.encoded()
     }
 
-    /// Replaces items, pinboards, and settings with the file's contents in one transaction.
-    /// Nothing changes when validation or any write fails.
     public func importData(_ data: Data) throws {
         let file = try ClipboardExport.decode(data)
-        // A file without items needs no key, so settings can be imported before history is ever unlocked.
         let crypto = file.items.isEmpty ? crypto : try requireCrypto()
         var digests = Set<Data>()
         try db.transaction {
@@ -241,13 +213,9 @@ public actor ClipboardStore {
         try checkpoint()
     }
 
-    // MARK: Helpers
-
-    /// Decrypts every item into memory.
     private func load(_ crypto: ClipboardCrypto) throws {
         var cache: [String: ClipItem] = [:]
         for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id FROM items") {
-            // A row that fails authentication is skipped, never shown. It still expires through `purge`.
             guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
                   let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse)
             else { continue }
@@ -263,7 +231,6 @@ public actor ClipboardStore {
         return crypto
     }
 
-    /// Moves deleted pages out of the write-ahead log so `secure_delete` covers them too.
     private func checkpoint() throws { try db.executeScript("PRAGMA wal_checkpoint(TRUNCATE)") }
 
     private static func write(_ settings: ClipboardSettings, _ db: SQLite) throws {
@@ -277,7 +244,6 @@ public actor ClipboardStore {
         }
     }
 
-    /// Millisecond precision, so the in-memory date equals the stored one.
     private static func stamp(_ date: Date) -> (String, Date) {
         let text = Timestamp.iso(date)
         return (text, Timestamp.parse(text) ?? date)
@@ -286,7 +252,6 @@ public actor ClipboardStore {
     static func newID() -> String { UUID().uuidString.lowercased() }
 }
 
-/// The export file. Text is plaintext so the file is useful anywhere; the app warns before saving.
 public struct ClipboardExport: Codable, Equatable, Sendable {
     public static let currentVersion = 1
     public static let maxBytes = 20 * 1024 * 1024
@@ -320,7 +285,7 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
             try c.encode(text, forKey: .text)
             try c.encode(createdAt, forKey: .createdAt)
             try c.encode(lastUsedAt, forKey: .lastUsedAt)
-            try c.encode(pinboardID, forKey: .pinboardID) // explicit null when unpinned
+            try c.encode(pinboardID, forKey: .pinboardID)
         }
     }
 
@@ -330,7 +295,6 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
         return try encoder.encode(self)
     }
 
-    /// Decodes and validates strictly. Dates come back in Cue's canonical timestamp form.
     public static func decode(_ data: Data) throws(CueError) -> ClipboardExport {
         guard data.count <= maxBytes else { throw .validation("The file is larger than 20 MB.") }
         let version = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["schemaVersion"] as? Int
@@ -365,6 +329,5 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
         return file
     }
 
-    /// Lowercase UUID, the form Cue writes.
     static func isCanonicalID(_ id: String) -> Bool { UUID(uuidString: id)?.uuidString.lowercased() == id }
 }

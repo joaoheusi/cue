@@ -4,7 +4,6 @@ public enum DeliveryMode: String, Codable, Sendable, CaseIterable {
     case inherit, copy, paste
 }
 
-/// A saved prompt. The JSON keys match the `actions.data` column written by earlier Cue versions.
 public struct Action: Codable, Sendable, Identifiable, Equatable {
     public var id: String
     public var name: String
@@ -42,7 +41,6 @@ public struct Action: Codable, Sendable, Identifiable, Equatable {
         updatedAt = createdAt
     }
 
-    // Optional values are written as `null`, as the export schema requires.
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
@@ -68,7 +66,6 @@ public struct Action: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
-/// The portable subset of an action (schema version 1).
 public struct ExportAction: Codable, Sendable, Equatable {
     public var id: String
     public var name: String
@@ -117,8 +114,6 @@ public enum Theme: String, Codable, Sendable, CaseIterable {
     case system, light, dark
 }
 
-/// App settings stored in the prompt library. Missing keys fall back to defaults,
-/// so libraries written by earlier versions open unchanged.
 public struct PromptSettings: Codable, Sendable, Equatable {
     public var theme: Theme = .system
     public var defaultDelivery: DeliveryMode = .paste
@@ -143,21 +138,16 @@ public struct PromptSettings: Codable, Sendable, Equatable {
     }
 }
 
-// MARK: - Templates
-
 public enum Template {
     public static let outputLimit = 1_048_576
     public static let templateLimit = 65_536
     private static let tokens = ["{{clipboard}}", "{{date}}", "{{time}}"]
 
-    /// One-pass substitution of `{{clipboard}}`, `{{date}}`, and `{{time}}`.
-    /// A backslash escapes only these three tokens. Every other `{{…}}` stays literal.
     public static func render(_ template: String, clipboard: String, date: String, time: String) throws(CueError) -> String {
         var used = false
         return try render(template, clipboard: clipboard, date: date, time: time, clipboardUsed: &used)
     }
 
-    /// Renders with the local date (`yyyy-MM-dd`) and time (`HH:mm`) of one instant.
     public static func renderLocal(_ template: String, clipboard: String, now: Date = Date()) throws(CueError) -> String {
         let c = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
         return try render(template, clipboard: clipboard,
@@ -247,12 +237,9 @@ public enum Template {
     }
 }
 
-// MARK: - Validation
-
 public enum ActionRules {
     public static let libraryLimit = 5000
 
-    /// Trimmed, NFKC, lowercased. Used for duplicate names, aliases, and categories.
     public static func key(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCompatibilityMapping.lowercased()
     }
@@ -264,7 +251,6 @@ public enum ActionRules {
         }
     }
 
-    /// Validates and normalizes an action in place. Mirrors the rules of earlier Cue versions.
     public static func validate(_ a: inout Action) throws(CueError) {
         guard UUID(uuidString: a.id) != nil else { throw CueError.validation("Action ID is invalid.") }
         a.name = a.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -298,10 +284,7 @@ public enum ActionRules {
     }
 }
 
-// MARK: - Search
-
 public enum ActionSearch {
-    /// NFKD, combining marks removed, lowercased: "Revisão" matches "revisao".
     public static func normalize(_ text: String) -> String {
         let scalars = text.decomposedStringWithCompatibilityMapping.unicodeScalars.filter {
             switch $0.properties.generalCategory {
@@ -312,7 +295,6 @@ public enum ActionSearch {
         return String(String.UnicodeScalarView(scalars)).lowercased()
     }
 
-    /// 0 exact, 1 prefix, 2 word prefix, 3 substring, 4 subsequence, nil no match.
     static func match(_ query: String, _ field: String) -> Int? {
         let q = Array(query.unicodeScalars), f = Array(field.unicodeScalars)
         if q.count > f.count { return nil }
@@ -325,7 +307,6 @@ public enum ActionSearch {
         return p == q.count ? 4 : nil
     }
 
-    /// Ranks by name, aliases, tags, then category. Prompt bodies are never searched.
     public static func search(_ actions: [Action], query: String, enabledOnly: Bool = true) -> [Action] {
         let q = normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
         let tokens = q.split(whereSeparator: \.isWhitespace).map(String.init)
@@ -355,8 +336,6 @@ public enum ActionSearch {
         }.map(\.action)
     }
 }
-
-// MARK: - Starters
 
 public enum Starters {
     public static func actions() -> [Action] {

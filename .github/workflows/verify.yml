@@ -1,6 +1,4 @@
 name: CI
-# Every push and pull request is tested. A push to main also publishes a signed, notarized
-# release with a Sparkle appcast, which installed copies of Cue pick up automatically.
 on:
   push:
   pull_request:
@@ -9,7 +7,6 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.ref }}
-  # Never cancel a main build mid-release; supersede stale branch builds.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -46,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # the build number is the commit count
+          fetch-depth: 0
       - name: Require signing and notarization secrets
         env:
           P12: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}

@@ -35,13 +35,11 @@ public struct SQLiteError: Error, CustomStringConvertible {
 }
 
 extension Error {
-    /// Maps any failure to a user-facing error without leaking SQL or file paths.
     public var cueError: CueError { self as? CueError ?? .storage(self) }
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// A single SQLite connection. Not thread-safe: own it from one actor.
 public final class SQLite {
     private var handle: OpaquePointer?
     public let url: URL?
@@ -52,7 +50,6 @@ public final class SQLite {
         try open(path.path)
     }
 
-    /// An in-memory database for tests.
     public init() throws {
         url = nil
         try open(":memory:")
@@ -76,7 +73,6 @@ public final class SQLite {
         SQLiteError(code: sqlite3_extended_errcode(handle), message: String(cString: sqlite3_errmsg(handle)))
     }
 
-    /// Runs one or more statements without parameters.
     public func executeScript(_ sql: String) throws {
         guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else { throw lastError() }
     }
@@ -128,7 +124,6 @@ public final class SQLite {
 
     public func userVersion() throws -> Int { try scalar("PRAGMA user_version")?.int ?? 0 }
 
-    /// Runs `body` in an immediate transaction. Any thrown error rolls back every change.
     public func transaction<T>(_ body: () throws -> T) throws -> T {
         try executeScript("BEGIN IMMEDIATE")
         do {
@@ -141,7 +136,6 @@ public final class SQLite {
         }
     }
 
-    /// Copies a consistent snapshot with SQLite's online backup API and keeps the newest `retain` files.
     @discardableResult
     public func backup(into directory: URL, prefix: String, retain: Int = 5) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -160,7 +154,6 @@ public final class SQLite {
             try? FileManager.default.removeItem(at: target)
             throw SQLiteError(code: step, message: "Backup did not complete.")
         }
-        // Names start with a sortable timestamp, so lexical order is chronological.
         let existing = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix("\(prefix)-") && $0.hasSuffix(".sqlite3") }
             .sorted()

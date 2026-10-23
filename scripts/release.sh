@@ -1,13 +1,4 @@
 #!/bin/bash
-# Builds a signed, notarized Cue.dmg and a Sparkle appcast for it.
-# Used by `make dmg` and by CI. Refuses to produce anything unsigned or unnotarized.
-#
-# Required:  DEVELOPMENT_TEAM, and one notarization method:
-#   NOTARY_KEYCHAIN_PROFILE                                  (local: xcrun notarytool store-credentials)
-#   APPLE_API_KEY_PATH, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID (CI: App Store Connect API key)
-# Optional:  APPLE_SIGNING_IDENTITY (default "Developer ID Application"),
-#            SPARKLE_ED_PRIVATE_KEY (CI; locally the "cue" key in the login keychain is used),
-#            BUILD / VERSION (default: commit count / 0.2.<count>), RELEASE_URL_BASE.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -23,7 +14,6 @@ else
   fail "Set NOTARY_KEYCHAIN_PROFILE, or APPLE_API_KEY_PATH, APPLE_API_KEY_ID, and APPLE_API_ISSUER_ID."
 fi
 
-# The commit count only grows on main, so every release has a higher build number than the last.
 BUILD="${BUILD:-$(git rev-list --count HEAD)}"
 VERSION="${VERSION:-0.2.$BUILD}"
 REPO_URL="${RELEASE_URL_BASE:-https://github.com/joaoheusi/cue/releases/download}"
@@ -43,7 +33,6 @@ if ! xcodebuild -project Cue.xcodeproj -scheme Cue -configuration Release -deriv
 fi
 
 echo "==> Signing Sparkle helpers and the app with hardened runtime"
-# xcodebuild does not re-sign Sparkle's nested helpers with the release identity. Inner code first.
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
 sign() { codesign --force --options runtime --timestamp --sign "$IDENTITY" "$@"; }
 sign "$SPARKLE/XPCServices/Installer.xpc"

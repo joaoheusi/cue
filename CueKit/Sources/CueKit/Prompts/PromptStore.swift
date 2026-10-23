@@ -5,7 +5,6 @@ public struct LibrarySnapshot: Sendable, Equatable {
     public var categories: [String]
     public var settings: PromptSettings
     public var revision: Int
-    /// Shortcut owner (`palette` or `action:<id>`) → stored chord.
     public var bindings: [String: String]
 }
 
@@ -18,8 +17,6 @@ public struct ImportPreview: Sendable, Equatable {
     public var revision: Int
 }
 
-/// The prompt library in `cue.sqlite3`. Reads and writes the schema created by earlier Cue versions.
-/// Every write is one transaction and bumps the library revision, which guards against stale edits.
 public actor PromptStore {
     private let db: SQLite
     private let directory: URL
@@ -43,7 +40,6 @@ public actor PromptStore {
                 try db.execute("INSERT INTO settings VALUES(1,?1)", [.text(defaults)])
             }
         } else if version < 3 {
-            // One backup before upgrading a library written by an earlier Cue.
             try db.backup(into: backups, prefix: "cue")
         }
         if version < 2 {
@@ -56,8 +52,6 @@ public actor PromptStore {
             }
         }
         if version < 3 {
-            // Version 3 marks libraries written by the Swift app. The Tauri app then reports
-            // "created by a newer Cue" instead of editing data it was not written for.
             try db.transaction {
                 try db.executeScript("""
                     INSERT OR IGNORE INTO schema_migrations VALUES(3, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
@@ -80,8 +74,6 @@ public actor PromptStore {
         INSERT INTO schema_migrations VALUES(1, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
         PRAGMA user_version=1;
         """
-
-    // MARK: Reads
 
     public func revision() throws -> Int {
         guard let value = try db.scalar("SELECT revision FROM library_state WHERE id=1")?.int else { throw CueError.storage() }
@@ -115,8 +107,6 @@ public actor PromptStore {
         ExportFile(actions: try snapshot().actions.map(\.export))
     }
 
-    // MARK: Writes
-
     private func bump() throws { try db.execute("UPDATE library_state SET revision=revision+1") }
 
     private func encode(_ action: Action) throws -> SQLValue {
@@ -127,7 +117,6 @@ public actor PromptStore {
         if try revision() != expected { throw CueError("REVISION_CONFLICT", message) }
     }
 
-    /// Uses the existing spelling of a category with the same key, or registers a new one.
     private func canonicalCategory(_ name: String?) throws -> String? {
         guard let name else { return nil }
         let normalized = ActionRules.key(name)
@@ -136,7 +125,6 @@ public actor PromptStore {
         return name
     }
 
-    /// Creates (revision 0) or updates (matching revision) an action. Usage counters are preserved.
     @discardableResult
     public func save(_ input: Action) throws -> Action {
         var a = input
@@ -182,7 +170,6 @@ public actor PromptStore {
         }
     }
 
-    /// First-run setup. Saves starter actions and settings atomically and runs once.
     public func onboard(_ actions: [Action], settings input: PromptSettings, revision: Int) throws {
         if try settings().onboarded { return }
         try checkRevision(revision, "The library changed. Try setup again.")
@@ -226,7 +213,6 @@ public actor PromptStore {
         return try save(a)
     }
 
-    /// Deletes an action and its direct shortcut.
     public func delete(_ id: String, revision: Int) throws {
         let a = try get(id)
         guard a.revision == revision else { throw CueError("REVISION_CONFLICT", "Action changed. Reload before continuing.") }
@@ -246,7 +232,6 @@ public actor PromptStore {
         }
     }
 
-    /// Renames (`old` set, non-empty `name`), removes (`old` set, empty `name`), or creates (`old` nil) a category.
     public func category(old: String?, name input: String, revision: Int) throws {
         let name = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.unicodeScalars.count > 50 { throw CueError.validation("Category names are limited to 50 characters.") }
@@ -294,9 +279,6 @@ public actor PromptStore {
         }
     }
 
-    // MARK: Import
-
-    /// Validates an export file strictly and holds it for five minutes until `commitImport`.
     public func preview(_ data: Data) throws -> ImportPreview {
         if data.count > 10 * 1024 * 1024 { throw CueError("OUTPUT_TOO_LARGE", "Import files must be smaller than 10 MiB.") }
         guard let raw = try? JSONSerialization.jsonObject(with: data) else {
@@ -337,8 +319,6 @@ public actor PromptStore {
                              newCategories: newCategories.sorted { $0.key < $1.key }.map(\.value), revision: snapshot.revision)
     }
 
-    /// Imports the previewed actions. `update` replaces actions with the same ID; otherwise all are added as new.
-    /// Imported actions use Copy delivery and lose direct shortcuts. A backup is taken first.
     public func commitImport(token: String, update: Bool) throws {
         guard let p = pending else { throw CueError("REVISION_CONFLICT", "Import preview expired. Choose the file again.") }
         pending = nil

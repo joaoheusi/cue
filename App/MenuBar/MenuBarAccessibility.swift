@@ -2,18 +2,14 @@ import AppKit
 import ApplicationServices
 import CueKit
 
-/// One item read through Accessibility, with the element needed to press or verify it.
 struct ScannedItem: @unchecked Sendable, Identifiable {
-    // AXUIElement is a CFType that can be used from any thread.
     let element: AXUIElement
     var item: MenuBarItem
-    /// Vertical center in Core Graphics coordinates (top-left origin).
     let midY: Double
     var section: MenuBarSection = .visible
     var id: String { item.key }
 }
 
-/// Lists, presses, and moves other apps' menu-bar items. Requires Accessibility.
 @MainActor enum MenuBarAccess {
     private struct App: Sendable {
         let pid: pid_t
@@ -21,11 +17,8 @@ struct ScannedItem: @unchecked Sendable, Identifiable {
         let name: String
     }
 
-    // ponytail: every Control Center and SystemUIServer item counts as fixed, including movable
-    // ones like Wi-Fi. Match exact AX identifiers if users want to arrange those.
     private nonisolated static let fixedOwners: Set = ["com.apple.controlcenter", "com.apple.systemuiserver"]
 
-    /// Reads every app's status items off the main thread. Apps that do not answer within 0.1 s are skipped.
     static func scan() async -> [ScannedItem] {
         let own = ProcessInfo.processInfo.processIdentifier
         let apps = NSWorkspace.shared.runningApplications.compactMap { app -> App? in
@@ -59,12 +52,10 @@ struct ScannedItem: @unchecked Sendable, Identifiable {
         }
     }
 
-    /// Opens the item's menu, as a click would.
     static func press(_ item: ScannedItem) -> Bool {
         AXUIElementPerformAction(item.element, kAXPressAction as CFString) == .success
     }
 
-    /// Simulates a ⌘-drag, the system gesture for rearranging menu-bar items, then puts the pointer back.
     static func drag(from start: CGPoint, to end: CGPoint) async -> Bool {
         let saved = CGEvent(source: nil)?.location
         defer { if let saved { CGWarpMouseCursorPosition(saved) } }
@@ -87,8 +78,6 @@ struct ScannedItem: @unchecked Sendable, Identifiable {
         try? await Task.sleep(for: .milliseconds(100))
         return post(.leftMouseUp, end)
     }
-
-    // MARK: Accessibility helpers
 
     private nonisolated static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?

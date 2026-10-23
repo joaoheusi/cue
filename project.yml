@@ -37,7 +37,6 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHumanReadableCopyright: Your prompts, clipboard, and menu bar, on cue.
-        # Sparkle auto-update. The appcast is attached to every GitHub release; `latest` redirects to the newest.
         SUFeedURL: https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml
         SUPublicEDKey: SU5Q3SRAb8XyQO5dDikWbab9z2uf136QrGSHUqboLso=
         SUEnableAutomaticChecks: true

@@ -59,7 +59,7 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
     }
 
     @Test func limitsCountUnicodeScalarsNotGraphemes() throws {
-        var ok = sample(String(repeating: "🇧🇷", count: 50)) // 100 scalars, 50 graphemes
+        var ok = sample(String(repeating: "🇧🇷", count: 50))
         try ActionRules.validate(&ok)
         var tooLong = sample(String(repeating: "🇧🇷", count: 50) + "x")
         #expect(throws: CueError.self) { try ActionRules.validate(&tooLong) }
@@ -122,7 +122,6 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
             let store = try PromptStore(directory: dir)
             try await store.save(action)
         }
-        // Rewind to schema 1 with the prototype defaults, as earlier Cue versions left it.
         do {
             let raw = try SQLite(path: dir.appendingPathComponent("cue.sqlite3"))
             try raw.executeScript("UPDATE settings SET data=json_set(data, '$.defaultDelivery', 'copy', '$.keepRunning', json('false')); DELETE FROM schema_migrations WHERE version=2; PRAGMA user_version=1;")
@@ -134,7 +133,6 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         #expect(try await store.get(action.id).template == action.template)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path).count == 1)
         #expect(try SQLite(path: dir.appendingPathComponent("cue.sqlite3")).userVersion() == 3)
-        // Reopening a current library takes no further backup.
         _ = try PromptStore(directory: dir)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path).count == 1)
     }

@@ -37,7 +37,6 @@ struct LoadingView: View {
     }
 }
 
-/// A recoverable error with an optional retry. Never shows raw system errors.
 struct ErrorBanner: View {
     var error: CueError
     var retryTitle = "Try Again"
@@ -56,7 +55,6 @@ struct ErrorBanner: View {
     }
 }
 
-/// A short success or failure line at the bottom of a view.
 struct StatusLine: View {
     var text: String
     var success: Bool
@@ -68,7 +66,6 @@ struct StatusLine: View {
     }
 }
 
-/// Records a global shortcut. Escape cancels. The recorded chord must include ⌘, ⌃, or ⌥.
 struct ShortcutRecorder: View {
     var value: Shortcut?
     var onChange: (Shortcut?) -> Void
@@ -111,8 +108,6 @@ struct ShortcutRecorder: View {
     }
 }
 
-/// The keyboard-first list used by every command-window scope.
-/// ↑/↓ move, Return submits, Shift-Return submits the alternate action, Escape closes the window.
 struct CommandList<Item: Identifiable, Row: View>: View {
     @Binding var query: String
     var placeholder: String
@@ -120,7 +115,6 @@ struct CommandList<Item: Identifiable, Row: View>: View {
     @Binding var selection: Item.ID?
     var row: (Item, Bool) -> Row
     var onSubmit: (Item, _ alternate: Bool) -> Void
-    /// Extra keys handled by the scope, for example ⌘P to pin.
     var onKeyPress: ((Item, KeyPress) -> KeyPress.Result)?
     @FocusState private var focused: Bool
 
@@ -166,7 +160,6 @@ struct CommandList<Item: Identifiable, Row: View>: View {
             }
         }
         .onAppear {
-            // Focus requested before the panel is key is ignored, so ask again on the next turn.
             focused = true
             DispatchQueue.main.async { focused = true }
             if current == nil { selection = items.first?.id }
@@ -180,14 +173,12 @@ struct CommandList<Item: Identifiable, Row: View>: View {
 
     private func move(_ delta: Int) -> KeyPress.Result {
         guard !items.isEmpty else { return .handled }
-        // Wraps around, like the original palette.
         let index = items.firstIndex { $0.id == selection } ?? (delta > 0 ? -1 : 0)
         selection = items[(index + delta + items.count) % items.count].id
         return .handled
     }
 }
 
-/// Standard row styling for command lists.
 struct CommandRow<Accessory: View>: View {
     var title: String
     var subtitle: String?

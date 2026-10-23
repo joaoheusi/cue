@@ -1,13 +1,4 @@
 #!/bin/bash
-# Uploads the release secrets CI needs to sign and notarize Cue. Run it yourself in Terminal.
-# Nothing is printed or written to disk. Requires the GitHub CLI (`gh auth login`).
-#
-#   scripts/setup-release-secrets.sh <DeveloperID.p12> <AuthKey_XXXX.p8> <key-id> <issuer-id>
-#
-# DeveloperID.p12: in Keychain Access, select only your "Developer ID Application" certificate
-#   (with its private key), File → Export Items…, format .p12, and set a password.
-# AuthKey .p8, key ID, issuer ID: App Store Connect → Users and Access → Integrations →
-#   App Store Connect API → Team Keys. A "Developer" role is enough for notarization.
 set -euo pipefail
 REPO="${REPO:-joaoheusi/cue}"
 [[ $# -eq 4 ]] || { sed -n 2,11p "$0"; exit 1; }

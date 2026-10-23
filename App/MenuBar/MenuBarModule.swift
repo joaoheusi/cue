@@ -3,7 +3,6 @@ import CueKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Hides, reveals, and arranges menu-bar items with two separators and user-defined rules.
 @MainActor @Observable final class MenuBarModule {
     struct Reveal {
         var cause: MenuBarReveal.Cause
@@ -23,7 +22,6 @@ import UniformTypeIdentifiers
     private(set) var storage: LoadState<MenuBarStore> = .loading
     private(set) var settings = MenuBarSettings()
     private(set) var rules: [MenuBarRule] = []
-    /// nil until listed, or when listing is not possible (feature off or no Accessibility).
     private(set) var items: LoadState<[ScannedItem]>?
     private(set) var reveal: Reveal?
     private(set) var accessGranted = false
@@ -37,9 +35,6 @@ import UniformTypeIdentifiers
         if case .loaded(let store) = storage { store } else { nil }
     }
 
-    // MARK: Lifecycle
-
-    /// Opens storage, creates separators if enabled, and registers the hotkey. Never throws.
     func start() async {
         guard store == nil else { return }
         storage = .loading
@@ -66,7 +61,6 @@ import UniformTypeIdentifiers
         if settings.enabled { activate() }
     }
 
-    /// Called before quit. Opens both separators so nothing stays off-screen; quitting removes them.
     func stop() {
         rehideTask?.cancel()
         separators?.apply(.revealedAll)
@@ -94,8 +88,6 @@ import UniformTypeIdentifiers
         hotKeyError = nil
         items = nil
     }
-
-    // MARK: Hide and reveal
 
     var isRevealed: Bool { reveal != nil }
 
@@ -150,8 +142,6 @@ import UniformTypeIdentifiers
         return NSScreen.screens.contains { $0.frame.contains(point) && point.y >= $0.frame.maxY - NSStatusBar.system.thickness }
     }
 
-    // MARK: Hotkey
-
     private func registerHotKey() {
         let owner = Self.hotKeyOwner
         hotKeyError = nil
@@ -172,8 +162,6 @@ import UniformTypeIdentifiers
             context.log.record(error, "menuBar")
         }
     }
-
-    // MARK: Settings
 
     @discardableResult
     private func update(_ change: (inout MenuBarSettings) -> Void) async -> Bool {
@@ -239,8 +227,6 @@ import UniformTypeIdentifiers
         registerHotKey()
     }
 
-    // MARK: Rules
-
     func setRule(_ rule: MenuBarRule) async {
         guard let store else { return }
         do {
@@ -261,7 +247,6 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Creates or updates the rule that puts `entry` in the next section left (-1) or right (+1), then applies it.
     func shift(_ entry: ScannedItem, by delta: Int) async {
         guard entry.item.movable else {
             status = ("macOS does not allow moving this item.", false)
@@ -275,13 +260,10 @@ import UniformTypeIdentifiers
         await applyRules(only: [item.key])
     }
 
-    // MARK: Accessibility
-
     func refreshAccess() {
         accessGranted = context.paste.canReadTarget
     }
 
-    /// Explains why first, then shows the macOS prompt.
     func requestAccess() {
         guard !context.isUITesting else { return }
         if context.permissions.explain(.accessibility(reason: Self.accessReason)) {
@@ -312,7 +294,6 @@ import UniformTypeIdentifiers
         })
     }
 
-    /// Reveals the item's section, then opens its menu. Closes the command window first.
     func open(_ entry: ScannedItem) async {
         context.closeCommand()
         let needsReveal = switch entry.section {
@@ -329,8 +310,6 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Moves items to match the rules, one ⌘-drag at a time, verifying each move.
-    /// Stops at the first failure. Restores the pointer and the previous reveal state.
     func applyRules(only keys: Set<String>? = nil) async {
         guard settings.enabled, let separators, !arranging else { return }
         refreshAccess()
@@ -356,7 +335,6 @@ import UniformTypeIdentifiers
             }
             let scanned = await MenuBarAccess.scan()
             let plan = MenuBarLayout.plan(items: scanned.map(\.item), separators: frames, rules: selected)
-            // Each verified move removes one entry from the plan, so the first plan's size bounds the loop.
             if budget == nil { budget = plan.count }
             guard let move = plan.first, moved < budget!, let entry = scanned.first(where: { $0.item.key == move.key }) else { break }
             let start = CGPoint(x: entry.item.frame.midX, y: entry.midY)
@@ -382,8 +360,6 @@ import UniformTypeIdentifiers
         await refreshItems()
     }
 
-    // MARK: Import and export
-
     func exportRules() {
         do {
             let data = try MenuBarTransfer.encode(settings: settings, rules: rules, exportedAt: Date())
@@ -396,7 +372,6 @@ import UniformTypeIdentifiers
         }
     }
 
-    /// Merges rules from a file. Never turns the feature on.
     func importRules() async {
         guard let store else { return }
         do {
@@ -419,13 +394,10 @@ import UniformTypeIdentifiers
         status = (error.message, false)
     }
 
-    // MARK: Views
-
     func commandView() -> AnyView { AnyView(MenuBarCommandView(module: self)) }
 
     func settingsView() -> AnyView { AnyView(MenuBarSettingsView(module: self)) }
 
-    /// Counts and settings only. Never item names, labels, keys, or bundle IDs.
     func diagnostics() async -> [(String, String)] {
         var counts = "not listed"
         if case .loaded(let entries) = items {

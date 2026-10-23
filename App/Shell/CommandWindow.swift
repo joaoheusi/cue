@@ -2,8 +2,6 @@ import AppKit
 import CueKit
 import SwiftUI
 
-/// A Spotlight-style panel. It takes keyboard focus without activating Cue,
-/// so the app you were typing in stays frontmost for paste delivery.
 final class CommandPanel: NSPanel {
     var onCancel: () -> Void = {}
 
@@ -32,7 +30,6 @@ final class CommandPanel: NSPanel {
 
 @MainActor @Observable final class CommandState {
     var scope: CommandScope = .prompts
-    /// Changes on every opening so scopes can reset their query and selection.
     var openID = UUID()
 }
 
@@ -52,7 +49,6 @@ final class CommandPanel: NSPanel {
 
     var isVisible: Bool { panel.isVisible }
 
-    /// Opens `scope`. Pressing the same shortcut again closes the window.
     func toggle(_ scope: CommandScope) {
         if panel.isVisible && state.scope == scope && panel.isKeyWindow {
             hide(cancel: true)
@@ -62,8 +58,6 @@ final class CommandPanel: NSPanel {
     }
 
     func show(_ scope: CommandScope) {
-        // A hidden or passively shown window starts a fresh invocation. Capture the target
-        // before Cue takes keyboard focus.
         if !panel.isVisible || !panel.isKeyWindow {
             context.invocation = Invocation(target: context.isUITesting ? .failure(PasteFailure.targetUnavailable.error) : context.paste.capture())
             state.openID = UUID()
@@ -73,13 +67,10 @@ final class CommandPanel: NSPanel {
         panel.makeKeyAndOrderFront(nil)
     }
 
-    /// Shows the window without taking keyboard focus, so a recovery message stays visible
-    /// while the user pastes manually in the target app.
     func showPassively() {
         panel.orderFrontRegardless()
     }
 
-    /// Hides the window. `cancel` stops any delivery that has not posted its paste yet.
     func hide(cancel: Bool) {
         if cancel { context.invocation?.cancelled = true }
         hiding = true
@@ -88,12 +79,9 @@ final class CommandPanel: NSPanel {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        // Clicking elsewhere closes the window, as Spotlight does. Delivery keeps its own invocation.
-        // UI tests keep it open: activity elsewhere on the Mac must not close it mid-test.
         if panel.isVisible && !hiding && NSApp.modalWindow == nil && !context.isUITesting { hide(cancel: true) }
     }
 
-    /// Centers on the screen under the pointer and clamps to 90% of its visible area.
     private func position() {
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
@@ -129,7 +117,6 @@ private struct CommandRoot: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 6)
-            // A fresh view per opening resets each scope's query and selection.
             content(state.scope)
                 .id("\(state.scope.rawValue)-\(state.openID)")
         }

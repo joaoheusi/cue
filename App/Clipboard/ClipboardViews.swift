@@ -2,12 +2,10 @@ import AppKit
 import CueKit
 import SwiftUI
 
-/// The Clipboard scope of the command window. ↩ pastes, ⇧↩ copies, ⌘P pins, ⌘⌫ deletes, ⌘[ and ⌘] switch pinboards.
 struct ClipboardCommandView: View {
     let module: ClipboardModule
     @State private var query = ""
     @State private var selection: String?
-    /// Nil shows all items.
     @State private var pinboard: String?
 
     private var results: [ClipItem] {
@@ -146,7 +144,6 @@ struct ClipboardCommandView: View {
     }
 }
 
-/// The Clipboard tab in Settings.
 struct ClipboardSettingsView: View {
     let module: ClipboardModule
     @State private var newBundleID = ""
@@ -267,7 +264,6 @@ struct ClipboardSettingsView: View {
     }
 }
 
-/// Rename with Return. An invalid name reverts.
 private struct PinboardRow: View {
     let board: Pinboard
     let module: ClipboardModule

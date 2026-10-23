@@ -1,13 +1,10 @@
 import Foundation
 
-/// A global keyboard chord. The stored form matches the former Tauri format,
-/// for example `Super+Shift+Space`, so existing libraries keep their shortcuts.
 public struct Shortcut: Hashable, Sendable, CustomStringConvertible {
     public var command = false
     public var control = false
     public var option = false
     public var shift = false
-    /// Canonical key name from `Shortcut.keyCodes`, for example `A`, `1`, `Space`, or `F5`.
     public var key: String
 
     public init(key: String, command: Bool = false, control: Bool = false, option: Bool = false, shift: Bool = false) {
@@ -18,8 +15,6 @@ public struct Shortcut: Hashable, Sendable, CustomStringConvertible {
         self.shift = shift
     }
 
-    /// Parses `Super+Control+Alt+Shift+Key`. Accepts common aliases. Returns nil for unknown keys
-    /// or chords that would capture ordinary typing (no Command, Control, or Option, except function keys).
     public init?(_ text: String) {
         let parts = text.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
         guard parts.count >= 2, let last = parts.last else { return nil }
@@ -41,13 +36,11 @@ public struct Shortcut: Hashable, Sendable, CustomStringConvertible {
         Self.keyCodes[key] != nil && (command || control || option || (key.hasPrefix("F") && key.count > 1))
     }
 
-    /// Stored form, ordered Super, Control, Alt, Shift.
     public var description: String {
         ([command ? "Super" : nil, control ? "Control" : nil, option ? "Alt" : nil, shift ? "Shift" : nil].compactMap { $0 } + [key])
             .joined(separator: "+")
     }
 
-    /// Menu-style symbols, for example `⌃⌥⇧⌘Space`.
     public var display: String {
         (control ? "⌃" : "") + (option ? "⌥" : "") + (shift ? "⇧" : "") + (command ? "⌘" : "") + key
     }
@@ -65,7 +58,6 @@ public struct Shortcut: Hashable, Sendable, CustomStringConvertible {
         "up": "ArrowUp", "down": "ArrowDown", "grave": "Backquote",
     ]
 
-    /// macOS ANSI virtual key codes (Carbon `kVK_*`).
     public static let keyCodes: [String: UInt32] = [
         "A": 0x00, "S": 0x01, "D": 0x02, "F": 0x03, "H": 0x04, "G": 0x05, "Z": 0x06, "X": 0x07,
         "C": 0x08, "V": 0x09, "B": 0x0B, "Q": 0x0C, "W": 0x0D, "E": 0x0E, "R": 0x0F, "Y": 0x10,
