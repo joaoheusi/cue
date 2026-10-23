@@ -133,6 +133,10 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         #expect(try await store.get(action.id).deliveryMode == .copy)
         #expect(try await store.get(action.id).template == action.template)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path).count == 1)
+        #expect(try SQLite(path: dir.appendingPathComponent("cue.sqlite3")).userVersion() == 3)
+        // Reopening a current library takes no further backup.
+        _ = try PromptStore(directory: dir)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path).count == 1)
     }
 
     @Test func readsRowsWrittenByTheRustVersion() async throws {

@@ -62,11 +62,12 @@ final class CommandPanel: NSPanel {
     }
 
     func show(_ scope: CommandScope) {
-        if !panel.isVisible {
-            // Capture the target before Cue takes keyboard focus.
+        // A hidden or passively shown window starts a fresh invocation. Capture the target
+        // before Cue takes keyboard focus.
+        if !panel.isVisible || !panel.isKeyWindow {
             context.invocation = Invocation(target: context.isUITesting ? .failure(PasteFailure.targetUnavailable.error) : context.paste.capture())
             state.openID = UUID()
-            position()
+            if !panel.isVisible { position() }
         }
         state.scope = scope
         panel.makeKeyAndOrderFront(nil)

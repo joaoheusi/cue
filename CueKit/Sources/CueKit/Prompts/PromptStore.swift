@@ -29,26 +29,39 @@ public actor PromptStore {
         self.directory = directory
         let db = try SQLite(path: directory.appendingPathComponent("cue.sqlite3"))
         let version = try db.userVersion()
-        if version > 2 {
+        if version > 3 {
             throw CueError("STORAGE_FAILURE", "This library was created by a newer Cue. Update Cue to open it.")
         }
+        let backups = directory.appendingPathComponent("backups")
         if version == 0 {
             if try db.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")?.int ?? 0 > 0 {
-                try db.backup(into: directory.appendingPathComponent("backups"), prefix: "cue")
+                try db.backup(into: backups, prefix: "cue")
             }
             let defaults = String(decoding: try JSONEncoder().encode(PromptSettings()), as: UTF8.self)
             try db.transaction {
                 try db.executeScript(Self.initialSchema)
                 try db.execute("INSERT INTO settings VALUES(1,?1)", [.text(defaults)])
             }
+        } else if version < 3 {
+            // One backup before upgrading a library written by an earlier Cue.
+            try db.backup(into: backups, prefix: "cue")
         }
         if version < 2 {
-            if version == 1 { try db.backup(into: directory.appendingPathComponent("backups"), prefix: "cue") }
             try db.transaction {
                 try db.executeScript("""
                     UPDATE settings SET data=json_set(data, '$.defaultDelivery', 'paste', '$.keepRunning', json('true'));
-                    INSERT INTO schema_migrations VALUES(2, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+                    INSERT OR IGNORE INTO schema_migrations VALUES(2, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
                     PRAGMA user_version=2;
+                    """)
+            }
+        }
+        if version < 3 {
+            // Version 3 adds optional settings keys (update check). The Tauri app rejects unknown
+            // keys, so the bump makes it report "created by a newer Cue" instead of failing obscurely.
+            try db.transaction {
+                try db.executeScript("""
+                    INSERT OR IGNORE INTO schema_migrations VALUES(3, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+                    PRAGMA user_version=3;
                     """)
             }
         }

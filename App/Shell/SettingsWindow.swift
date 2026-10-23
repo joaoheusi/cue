@@ -99,7 +99,7 @@ struct DataSettingsView: View {
     1. Choose Quit Cue from the menu bar.
     2. Turn off Launch at Login in General (or remove Cue in System Settings → General → Login Items).
     3. Remove Cue from System Settings → Privacy & Security → Accessibility and Paste.
-    4. Delete Cue.app from Applications.
+    4. Delete Cue.app from Applications, and ~/Library/LaunchAgents/Cue.plist if it exists.
     5. Delete ~/Library/Application Support/app.cue.launcher (prompts, settings, clipboard history, backups).
     6. Delete the clipboard key: security delete-generic-password -s app.cue.launcher.clipboard
     """

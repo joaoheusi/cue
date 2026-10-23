@@ -9,6 +9,7 @@ struct GeneralSettingsView: View {
     @State private var update: UpdateChecker.Outcome?
     @State private var checking = false
     @State private var paused = false
+    @State private var legacyAgent = LaunchAtLogin.hasLegacyAgent
 
     var body: some View {
         Form {
@@ -32,6 +33,17 @@ struct GeneralSettingsView: View {
                     }))
                     Text("Status: \(launchStatus). Cue starts quietly in the menu bar.").font(.caption).foregroundStyle(.secondary)
                     if let launchError { ErrorBanner(error: CueError("AUTOSTART_FAILED", launchError)) }
+                    if legacyAgent {
+                        ErrorBanner(error: CueError("LEGACY_LOGIN_ITEM", "An older Cue login item (~/Library/LaunchAgents/Cue.plist) also starts Cue. Remove it and use Launch at login instead."),
+                                    retryTitle: "Remove Old Login Item") {
+                            do {
+                                try LaunchAtLogin.removeLegacyAgent()
+                            } catch {
+                                launchError = error.cueError.message
+                            }
+                            legacyAgent = LaunchAtLogin.hasLegacyAgent
+                        }
+                    }
                 }
                 Section("Updates") {
                     Toggle("Check for updates", isOn: Binding(get: { settings.updateCheck }, set: { on in Task { await model.saveSettings { $0.updateCheck = on } } }))

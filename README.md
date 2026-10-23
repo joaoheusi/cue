@@ -18,7 +18,7 @@ Install Xcode 26 (or later). Then run one command:
 make run
 ```
 
-This builds a debug copy and opens it. Debug builds keep their data in `~/Library/Application Support/app.cue.launcher.dev`, separate from a release install. The first run opens setup for the prompt library. After that, Cue starts quietly in the menu bar.
+This builds a debug copy and opens it. Quit any installed Cue first: only one copy runs at a time, and a second copy hands over to the running one and exits. Debug builds keep their data in `~/Library/Application Support/app.cue.launcher.dev`, separate from a release install. The first run opens setup for the prompt library. After that, Cue starts quietly in the menu bar.
 
 The repository includes the generated `Cue.xcodeproj`. If you change `project.yml`, install [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`); `make` regenerates the project automatically when it is installed.
 
@@ -41,7 +41,7 @@ Never commit `.env` or any credential. Notarization credentials belong in the Ke
 | `make run` | Build (Debug) and open Cue. |
 | `make test` | Unit tests, then the UI test. |
 | `make test-unit` | `swift test --package-path CueKit` |
-| `make test-ui` | The XCUITest keyboard workflow. It types into Cue, so do not use the Mac while it runs. |
+| `make test-ui` | The XCUITest keyboard workflow. It types into Cue and temporarily replaces the clipboard (plain text is restored afterwards). Do not use the Mac while it runs: if another app takes focus, the command window closes and the test fails. |
 | `make release` | Release build, signed with `APPLE_SIGNING_IDENTITY` when set, then `codesign --verify`. |
 | `make dmg` | Release build in a drag-to-Applications disk image. See `docs/release-process.md`. |
 
@@ -127,7 +127,11 @@ project.yml            XcodeGen project definition
 
 The clipboard encryption key is in your login Keychain under the service `app.cue.launcher.clipboard`. Debug builds use `app.cue.launcher.dev` for both the folder and the Keychain service. Settings → Data & Privacy shows the folder and opens it in Finder.
 
-Cue upgrades the library from the earlier Tauri version in place: same bundle ID, same folder, same `cue.sqlite3` schema. Your actions, categories, settings, and shortcuts carry over.
+### Upgrading from the Tauri version
+
+- Cue upgrades the library in place: same bundle ID, same folder, same `cue.sqlite3` tables. Your actions, categories, settings, and shortcuts carry over.
+- On first launch Cue backs up the library to `backups/` and marks it schema version 3. The Tauri version then refuses to open it ("created by a newer Cue") instead of failing. To go back, restore the backup.
+- The Tauri version started at login through `~/Library/LaunchAgents/Cue.plist`. Settings → General offers **Remove Old Login Item**; then turn on **Launch at login**, which uses the macOS Login Items service.
 
 ## Export, import, and backup
 
@@ -144,9 +148,10 @@ To back up everything, quit Cue and copy the whole `app.cue.launcher` folder. To
 2. Turn off **Launch at login** in Settings → General (or remove Cue in System Settings → General → Login Items).
 3. Remove Cue from System Settings → Privacy & Security → **Accessibility** and **Paste**. Or run `tccutil reset Accessibility app.cue.launcher`.
 4. Delete `Cue.app` from Applications.
-5. Delete `~/Library/Application Support/app.cue.launcher` (and `app.cue.launcher.dev` if you ran a debug build).
-6. Delete the clipboard key: `security delete-generic-password -s app.cue.launcher.clipboard` (and `-s app.cue.launcher.dev.clipboard`).
-7. Optional: `defaults delete app.cue.launcher` removes window positions.
+5. Delete `~/Library/LaunchAgents/Cue.plist` if it exists (login item from the Tauri version).
+6. Delete `~/Library/Application Support/app.cue.launcher` (and `app.cue.launcher.dev` if you ran a debug build).
+7. Delete the clipboard key: `security delete-generic-password -s app.cue.launcher.clipboard` (and `-s app.cue.launcher.dev.clipboard`).
+8. Optional: `defaults delete app.cue.launcher` removes window positions.
 
 ## Deliberately left out
 
@@ -157,5 +162,7 @@ To back up everything, quit Cue and copy the whole `app.cue.launcher` folder. To
 - Automatic updates. The update check is opt-in, sends one request, and only links to the release page.
 
 ## Status
+
+The GitHub Actions workflow (`.github/workflows/verify.yml`, `macos-26` runner) has not been run yet.
 
 See `docs/platform-support.md` for what was verified on which macOS version, and `docs/manual-test-checklist.md` for the checks that still need a person at the keyboard.

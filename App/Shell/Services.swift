@@ -65,6 +65,18 @@ import UniformTypeIdentifiers
         if enabled && needsApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
+    /// The LaunchAgent written by the earlier Tauri version. It starts Cue a second way at login.
+    static let legacyAgent = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/Cue.plist")
+    static var hasLegacyAgent: Bool { FileManager.default.fileExists(atPath: legacyAgent.path) }
+
+    static func removeLegacyAgent() throws(CueError) {
+        do {
+            try FileManager.default.removeItem(at: legacyAgent)
+        } catch {
+            throw CueError("AUTOSTART_FAILED", "Could not remove the old login item. Delete ~/Library/LaunchAgents/Cue.plist yourself.")
+        }
+    }
+
     static var statusText: String {
         switch SMAppService.mainApp.status {
         case .enabled: "On"

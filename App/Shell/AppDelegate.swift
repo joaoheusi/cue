@@ -12,6 +12,14 @@ import SwiftUI
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One owner for the databases and shortcuts: hand over to a running copy and exit.
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        if !context.isUITesting, let running = others.first {
+            running.activate()
+            NSApp.terminate(nil)
+            return
+        }
         command = CommandWindowController(context: context) { [unowned self] scope in
             switch scope {
             case .prompts: prompts.commandView()

@@ -9,6 +9,8 @@ struct PaletteView: View {
     @State private var selection: String?
     @State private var busy = false
     @State private var error: CueError?
+    /// True while the window is shown passively after a failed paste.
+    @State private var recovering = false
     /// Ranking uses the usage order from when the window opened, so rows never jump mid-search.
     @State private var frozenUsage: [String: String]
 
@@ -99,6 +101,7 @@ struct PaletteView: View {
                         model.context.paste.requestAccess()
                     }
                     self.error = nil
+                    if recovering { model.context.closeCommand() }
                 }
             }
             HStack {
@@ -138,6 +141,7 @@ struct PaletteView: View {
             switch await model.deliver(action, copyOnly: copyOnly) {
             case .success(.copiedNotPasted(let failure)):
                 error = CueError(failure.code, "Text copied, but not pasted. \(failure.message)")
+                recovering = true
                 model.context.showCommandPassively()
             case .success(.failedBeforeCopy(let failure)):
                 error = failure

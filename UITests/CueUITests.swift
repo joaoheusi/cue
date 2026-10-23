@@ -16,7 +16,12 @@ final class CueUITests: XCTestCase {
         let search = app.textFields["command.search"]
         XCTAssertTrue(search.waitForExistence(timeout: 15), "The command window should open on launch in UI-testing mode.")
 
-        // "Rewrite clearly" inserts the clipboard text into its template.
+        // "Rewrite clearly" inserts the clipboard text into its template. Restore the user's clipboard afterwards.
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("move the deploy to Thursday", forType: .string)
 

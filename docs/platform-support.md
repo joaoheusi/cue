@@ -8,7 +8,7 @@ Cue is now macOS-only. The earlier Tauri build also targeted Windows and Linux; 
 | --- | --- | --- |
 | Unit and end-to-end logic tests | `make test-unit` passes (Swift Testing) | Templates, validation, search, prompt store and legacy rows, paste rules, clipboard crypto/filter/expiry/store, menu-bar layout/planning/store |
 | Core keyboard workflow | `make test-ui` passes | Opens the command window, searches, moves the selection, copies with ⇧↩, checks the rendered text on the clipboard |
-| Prompt library compatibility | Unit test reads rows and settings written by the Rust version, then edits them | Same `cue.sqlite3` schema (version 2); no migration needed |
+| Prompt library compatibility | Unit tests read rows and settings written by the Rust version, migrate schema 1 and 2 to 3 with one backup, then edit them | Version 3 only marks the new optional settings keys, so the Tauri app reports "newer Cue" instead of failing |
 | Hidden main menu for edit keys | Verified by the UI test (⌘A in the search field) | Without it, ⌘A/⌘C/⌘V/⌘Z do nothing in a menu-bar-only app |
 | Menu-bar hide/reveal separator | Verified: a status item set to length 10,000 moved items on its left from x=830 to x=−4150; restoring the length brought them back. No permission needed. | A live run with the module on hid a probe item (x=−9175); it returned after Cue exited |
 | Menu-bar item identification | `CGWindowList` shows every status item as owned by Control Center with no name on macOS 26 | Cue uses Accessibility (`AXExtrasMenuBar`) instead |
