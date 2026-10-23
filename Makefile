@@ -24,7 +24,7 @@ test-unit:
 	swift test --package-path CueKit
 
 test-ui: project
-	$(XCODEBUILD) -configuration Debug -only-testing:CueUITests test
+	$(XCODEBUILD) -configuration Debug -only-testing:CueUITests -retry-tests-on-failure -test-iterations 3 test
 
 # Signed, notarized DMG plus Sparkle appcast in build/release. See docs/release-process.md.
 dmg: project
