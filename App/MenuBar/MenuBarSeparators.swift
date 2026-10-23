@@ -30,6 +30,10 @@ import CueKit
         alwaysHidden.isVisible = true
         install(chevron, in: hidden, identifier: "menuBar.separator.hidden")
         install(marker, in: alwaysHidden, identifier: "menuBar.separator.alwaysHidden")
+        // Only the chevron responds to clicks; the always-hidden separator is a marker.
+        hidden.button?.target = self
+        hidden.button?.action = #selector(clicked)
+        hidden.button?.sendAction(on: [.leftMouseUp])
         marker.image = NSImage(systemSymbolName: "chevron.compact.left", accessibilityDescription: nil)
         alwaysHidden.button?.setAccessibilityLabel("Always-hidden menu bar items start left of here")
         apply(.revealedAll)
@@ -38,9 +42,6 @@ import CueKit
     /// Pins the glyph to the trailing edge so it stays on-screen while the item is 10,000 points wide.
     private func install(_ view: NSImageView, in item: NSStatusItem, identifier: String) {
         guard let button = item.button else { return }
-        button.target = self
-        button.action = #selector(clicked)
-        button.sendAction(on: [.leftMouseUp])
         button.setAccessibilityIdentifier(identifier)
         view.frame = NSRect(x: button.bounds.width - 20, y: 0, width: 16, height: button.bounds.height)
         view.autoresizingMask = [.minXMargin, .height]
