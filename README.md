@@ -64,7 +64,12 @@ Every shortcut can be changed in Settings. In the command window: type to search
 
 ### Clipboard
 
-<!-- CLIPBOARD -->
+- Off by default. Turning it on explains clipboard access first; macOS then asks once. Choose "Always Allow".
+- Saves plain text you copy after you turn it on, never what was already on the clipboard. Skips concealed, transient, and auto-generated items (password managers mark theirs), anything typed while secure input is on, Cue's own copies, text over 256 KiB, and apps you exclude. 1Password, Bitwarden, Keychain Access, Passwords, LastPass, Dashlane, and KeePassXC are excluded by default.
+- Item text and source app are encrypted with AES-GCM. The 256-bit key lives in the Keychain. Duplicates are detected with an HMAC, so no plain text is stored.
+- ↩ pastes the item into the app you were using; ⇧↩ copies only. ⌘P pins or unpins, ⌘⌫ deletes, ⌘[ / ⌘] switches pinboard. Right-click an item to pin it to any pinboard.
+- **Expiration:** unpinned items expire 1 hour, 1 day, 7 days (default), or 30 days after their last use, or never. At most 500 unpinned items are kept (configurable). Pinned items never expire. Expired items are deleted, not hidden.
+- If the Keychain key is missing or was replaced, Cue shows a recoverable error and offers **Reset History** after confirmation. It never silently creates a new key over old data.
 
 ### Menu Bar
 

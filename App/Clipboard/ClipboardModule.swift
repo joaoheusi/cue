@@ -290,15 +290,18 @@ struct ClipboardStatus: Equatable {
         let fallback = paste && target == nil
         let delivery = await context.paste.deliver(
             item.text, paste: target != nil, target: target, generation: context.paste.changeCount,
-            isCancelled: { invocation?.cancelled ?? false }, hide: fallback ? {} : context.closeCommand)
+            isCancelled: { invocation?.cancelled ?? false }, hide: context.closeCommand)
         switch delivery {
         case .pasted, .copied:
             commandStatus = fallback ? ClipboardStatus(text: "Copied, not pasted. \(reason ?? "") Press ⌘V to paste.", success: false)
                                      : ClipboardStatus(text: delivery.message, success: true)
+            // Show why without taking focus, so ⌘V goes to the app the user was typing in.
+            if fallback { context.showCommandPassively() }
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .copiedNotPasted(let error):
             context.log.record(error, "clipboard")
             commandStatus = ClipboardStatus(text: delivery.message, success: false)
+            context.showCommandPassively()
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .failedBeforeCopy(let error):
             report(error, .command)
