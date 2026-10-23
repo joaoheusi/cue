@@ -68,7 +68,11 @@ Every shortcut can be changed in Settings. In the command window: type to search
 
 ### Menu Bar
 
-<!-- MENUBAR -->
+- Off by default, because it changes your menu bar. Turn it on in Settings → Menu Bar or from the Menu Bar tool.
+- Cue adds a chevron (‹). Hold ⌘ and drag an icon to the left of the chevron to hide it. Click the chevron or press ⌥⌘B to show hidden icons. ⌥-click the chevron to also show the always-hidden section.
+- **Rules:** put any item in *Visible*, *Hidden*, or *Always Hidden*; hide again automatically after N seconds (default 10, 0 turns it off); show hidden icons while chosen apps are frontmost.
+- With Accessibility access, the Menu Bar tool lists every item by section. ↩ opens an item's menu (revealing it first). ⌥← / ⌥→ moves an item to the neighbouring section and saves that as a rule. **Apply Rules Now** moves items with a simulated ⌘-drag, one at a time, checks each move, and stops at the first failure.
+- When you turn the feature off or quit Cue, every icon comes back.
 
 ## Permissions
 
