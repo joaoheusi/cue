@@ -28,7 +28,8 @@ import SwiftUI
                 (.data, "Data & Privacy", "lock.shield", AnyView(DataSettingsView(context: context, diagnostics: diagnosticsReport))),
             ]
         }
-        context.openCommand = { [unowned self] in command.show($0) }
+        // Hotkeys and menu items toggle: pressing the same shortcut again closes the window.
+        context.openCommand = { [unowned self] in command.toggle($0) }
         context.closeCommand = { [unowned self] in command.hide(cancel: false) }
         context.showCommandPassively = { [unowned self] in command.showPassively() }
         context.openSettings = { [unowned self] in
