@@ -170,7 +170,7 @@ struct LibraryView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
                         Text(action.name).lineLimit(1)
-                        if action.favorite { Image(systemName: "star.fill").font(.caption).foregroundStyle(.yellow) }
+                        if action.favorite { Image(systemName: "star.fill").font(.caption).foregroundStyle(.secondary) }
                         if !action.enabled { Text("Disabled").font(.caption).foregroundStyle(.secondary) }
                     }
                     Text(action.description.isEmpty ? (action.category ?? "Text action") : action.description)

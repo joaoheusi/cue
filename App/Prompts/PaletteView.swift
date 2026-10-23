@@ -26,7 +26,8 @@ struct PaletteView: View {
                 ErrorBanner(error: error) { Task { await model.load() } }
                 Spacer()
             }
-            .padding()
+            .padding([.horizontal, .bottom])
+            .padding(.top, CommandMetrics.searchHeight)
         case .loaded(let snapshot):
             if !snapshot.actions.contains(where: \.enabled) {
                 EmptyStateView(symbol: "text.badge.plus", title: "No actions yet", message: "Add your first reusable instruction.",
@@ -69,7 +70,6 @@ struct PaletteView: View {
                 }
                 .frame(maxHeight: 120)
             }
-            Divider()
             footer(current, snapshot: snapshot)
         }
         .onChange(of: query) { error = nil }
@@ -89,7 +89,7 @@ struct PaletteView: View {
     }
 
     @ViewBuilder private func footer(_ current: Action?, snapshot: LibrarySnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(spacing: 0) {
             if let error {
                 ErrorBanner(error: error, retryTitle: permissionError(error) ? "Allow Paste…" : "Dismiss") {
                     if permissionError(error), model.context.permissions.explain(.accessibility(reason: PromptsModel.pasteReason)) {
@@ -98,18 +98,22 @@ struct PaletteView: View {
                     self.error = nil
                     if recovering { model.context.closeCommand() }
                 }
+                .padding(.horizontal, 12).padding(.vertical, 8)
             }
-            HStack {
+            CommandFooter {
                 if busy { ProgressView().controlSize(.small) }
-                let paste = current.map { model.willPaste($0, copyOnly: false) } ?? false
-                Text(paste ? "↩ Paste  ⇧↩ Copy  ⌘E Edit  ⌘N New" : "↩ Copy  ⌘E Edit  ⌘N New")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text("\(snapshot.actions.filter(\.enabled).count) actions").font(.caption).foregroundStyle(.secondary)
+                Text("\(snapshot.actions.filter(\.enabled).count) actions")
+            } trailing: {
+                if current.map({ model.willPaste($0, copyOnly: false) }) ?? false {
+                    KeyHint(label: "Paste", keys: ["↩"])
+                    KeyHint(label: "Copy", keys: ["⇧", "↩"])
+                } else {
+                    KeyHint(label: "Copy", keys: ["↩"])
+                }
+                KeyHint(label: "Edit", keys: ["⌘", "E"])
+                KeyHint(label: "New", keys: ["⌘", "N"])
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
     private func permissionError(_ error: CueError) -> Bool {

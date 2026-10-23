@@ -48,6 +48,7 @@ private struct SettingsRoot: View {
         }
         .padding(12)
         .frame(minWidth: 560, minHeight: 460)
+        .tint(.gray)
     }
 }
 
