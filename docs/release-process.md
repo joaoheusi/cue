@@ -4,6 +4,8 @@ Releases are automatic. Every push to `main` that passes CI becomes a GitHub rel
 
 ## One-time setup
 
+Done on October 22, 2026: all six repository secrets are set. The notarization key is App Store Connect team key "Cue CI" (`53MZL42XUM`, Developer role); its only copy is `~/.appstoreconnect/private_keys/AuthKey_53MZL42XUM.p8`. Repeat the steps below only to rotate credentials.
+
 1. `SPARKLE_ED_PRIVATE_KEY` is already a repository secret. The same key is in your login Keychain under the Sparkle account `cue`. Back it up (`generate_keys --account cue -x <file>` from Sparkle's `bin/`, then store the file somewhere safe). If it is lost, installed copies can never accept another update.
 2. Export your **Developer ID Application** certificate with its private key from Keychain Access as a `.p12` with a password. Export only that one item.
 3. Create an **App Store Connect API key** (Users and Access → Integrations → Team Keys, role Developer). Download the `.p8` and note the key ID and issuer ID.

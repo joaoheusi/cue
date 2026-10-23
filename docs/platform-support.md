@@ -16,7 +16,7 @@ Cue is now macOS-only. The earlier Tauri build also targeted Windows and Linux; 
 | Clipboard pasteboard privacy | SDK confirms `NSPasteboard.accessBehavior` (macOS 15.4+) | Reading the general pasteboard triggers the system alert unless the user allows it; `changeCount` does not |
 | Global shortcuts (Carbon) | Built; not pressed by automation | Synthetic keystrokes do not trigger system hot keys reliably |
 | Automatic paste into another app | Rules unit-tested (ported from the former native suite); Accessibility calls **not verified** in this build | The previous build's paste was confirmed by the user in J4 Code; the Swift port keeps the same checks and order |
-| Auto-update (Sparkle 2.10.0) | Release build carries the feed URL and public key; `scripts/release.sh` built, Developer ID–signed (team, runtime, timestamp checks passed), and made a DMG locally; `sign_update` signed it | Notarization, the CI release job, and an actual update install are **not verified**: CI signing secrets are not set yet |
+| Auto-update (Sparkle 2.10.0) | `scripts/release.sh` ran end to end locally with the CI certificate and API key: Developer ID signing, notarization accepted, ticket stapled, Gatekeeper reports "Notarized Developer ID", Sparkle EdDSA signature and appcast written | The CI release job and an actual update install are **not verified** until the first merge to `main` |
 | Launch at login (`SMAppService`) | Built; not enabled on this machine | macOS may require approval in Login Items |
 | Keychain key storage | Clipboard tests inject a key; the real Keychain is not touched by tests | Data-protection Keychain needs a team-signed build; ad-hoc builds fall back to the login Keychain |
 
