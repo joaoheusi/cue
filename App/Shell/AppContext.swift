@@ -35,6 +35,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     let paste = PasteService()
     let permissions = PermissionCoordinator()
     let log = DiagnosticsLog()
+    let updater: AppUpdater
 
     /// The paste target captured just before the command window opened. Consumed by one delivery.
     var invocation: Invocation?
@@ -49,6 +50,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     init() {
         let environment = ProcessInfo.processInfo.environment
         isUITesting = CommandLine.arguments.contains("--ui-testing")
+        #if DEBUG
+        updater = AppUpdater(enabled: false)
+        #else
+        updater = AppUpdater(enabled: !isUITesting)
+        #endif
         if let custom = environment["CUE_DATA_DIR"], custom.hasPrefix("/") {
             dataDirectory = URL(fileURLWithPath: custom, isDirectory: true)
         } else {

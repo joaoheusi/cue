@@ -56,8 +56,8 @@ public actor PromptStore {
             }
         }
         if version < 3 {
-            // Version 3 adds optional settings keys (update check). The Tauri app rejects unknown
-            // keys, so the bump makes it report "created by a newer Cue" instead of failing obscurely.
+            // Version 3 marks libraries written by the Swift app. The Tauri app then reports
+            // "created by a newer Cue" instead of editing data it was not written for.
             try db.transaction {
                 try db.executeScript("""
                     INSERT OR IGNORE INTO schema_migrations VALUES(3, strftime('%Y-%m-%dT%H:%M:%SZ','now'));

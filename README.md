@@ -29,8 +29,8 @@ Copy `.env.example` to `.env` (git-ignored) and fill in only what you need:
 | Variable | Purpose |
 | --- | --- |
 | `DEVELOPMENT_TEAM` | Signs builds with your Apple Development certificate, so Accessibility and Keychain access survive rebuilds. Leave empty for ad-hoc signing. |
-| `CUE_UPDATE_URL` | Optional GitHub "latest release" API URL for the opt-in update check. Empty disables update checks. |
-| `APPLE_SIGNING_IDENTITY` | Release packaging only (`make release`, `make dmg`). |
+| `APPLE_SIGNING_IDENTITY` | `make dmg` only. Your Developer ID Application certificate name or SHA-1 fingerprint (needed when you have more than one). |
+| `NOTARY_KEYCHAIN_PROFILE` | `make dmg` only. A profile saved with `xcrun notarytool store-credentials`. |
 
 Never commit `.env` or any credential. Notarization credentials belong in the Keychain (`xcrun notarytool store-credentials`).
 
@@ -42,8 +42,7 @@ Never commit `.env` or any credential. Notarization credentials belong in the Ke
 | `make test` | Unit tests, then the UI test. |
 | `make test-unit` | `swift test --package-path CueKit` |
 | `make test-ui` | The XCUITest keyboard workflow. It types into Cue and temporarily replaces the clipboard (plain text is restored afterwards). Avoid using the Mac while it runs. |
-| `make release` | Release build, signed with `APPLE_SIGNING_IDENTITY` when set, then `codesign --verify`. |
-| `make dmg` | Release build in a drag-to-Applications disk image. See `docs/release-process.md`. |
+| `make dmg` | Signed, notarized `build/release/Cue.dmg` plus a Sparkle `appcast.xml`. The same script CI runs. See `docs/release-process.md`. |
 
 ## Using Cue
 
@@ -96,13 +95,13 @@ Global shortcuts use the Carbon hot-key API and need no permission. Cue never re
 ```
 App/                   macOS app target (SwiftUI + AppKit)
   Shell/               AppDelegate, menu-bar icon, command window (NSPanel), global hotkeys (Carbon),
-                       settings window, permissions, launch at login, update check, file import/export
+                       settings window, permissions, launch at login, Sparkle updater, file import/export
   Shared/              PasteService (Accessibility paste), shared SwiftUI components
   Prompts/             Prompt library model, palette, library window, editor, settings
   Clipboard/           Clipboard monitor, history UI, settings
   MenuBar/             Separators, Accessibility item listing, arranging, settings
 CueKit/                Swift package with all testable logic (no AppKit)
-  Sources/CueKit/Core/      SQLite wrapper, errors, shortcuts, safe file names, paste rules, update check
+  Sources/CueKit/Core/      SQLite wrapper, errors, shortcuts, safe file names, paste rules
   Sources/CueKit/Prompts/   Templates, validation, search, PromptStore (SQLite)
   Sources/CueKit/Clipboard/ Encryption, capture filter, expiration, search, store, export codec
   Sources/CueKit/MenuBar/   Layout classification, move planning, rules, store, export codec
@@ -151,7 +150,7 @@ To back up everything, quit Cue and copy the whole `app.cue.launcher` folder. To
 5. Delete `~/Library/LaunchAgents/Cue.plist` if it exists (login item from the Tauri version).
 6. Delete `~/Library/Application Support/app.cue.launcher` (and `app.cue.launcher.dev` if you ran a debug build).
 7. Delete the clipboard key: `security delete-generic-password -s app.cue.launcher.clipboard` (and `-s app.cue.launcher.dev.clipboard`).
-8. Optional: `defaults delete app.cue.launcher` removes window positions.
+8. Optional: `defaults delete app.cue.launcher` removes window positions and update preferences, and `rm -rf ~/Library/Caches/app.cue.launcher` removes downloaded updates.
 
 ## Deliberately left out
 
@@ -159,10 +158,14 @@ To back up everything, quit Cue and copy the whole `app.cue.launcher` folder. To
 - Cloud accounts and cross-device sync.
 - A third-party extension or plugin marketplace.
 - Automation that runs scripts or untrusted code. Cue only copies text, pastes once, and moves menu-bar items you chose.
-- Automatic updates. The update check is opt-in, sends one request, and only links to the release page.
 
-## Status
+## Releases and automatic updates
 
-The GitHub Actions workflow (`.github/workflows/verify.yml`, `macos-26` runner) has not been run yet.
+- **CI** (`.github/workflows/verify.yml`, `macos-26` runner): every push and pull request runs the unit tests, a build, and the UI test, and checks that `Cue.xcodeproj` matches `project.yml`.
+- **Release:** every push to `main` that passes the tests runs `scripts/release.sh`. It builds Cue `0.2.<commit count>`, signs it with Developer ID (hardened runtime, timestamp), notarizes and staples the DMG, signs the update with Sparkle's EdDSA key, and publishes a GitHub release `v0.2.<n>` with `Cue.dmg` and `appcast.xml`. It refuses to publish anything unsigned or unnotarized.
+- **Auto-update:** release builds use [Sparkle](https://sparkle-project.org) and check `https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml` every hour. Updates download in the background. Sparkle verifies the EdDSA signature and that the new app has the same Developer ID before installing. Because a menu-bar app rarely quits, Cue installs and relaunches as soon as it is idle: no keyboard or mouse input for a minute, no unsaved prompt edits, no open command window, no menu-bar arranging. The request carries no identifiers (system profiling is off).
+- **On by default.** Earlier versions only offered an opt-in check. Automatic updates are now on, as requested; turn them off in Settings → General → Updates. Debug builds never update.
+- **First install:** the Tauri version cannot update itself. Install the first Swift release manually from the release's `Cue.dmg`.
+- **Secrets:** `SPARKLE_ED_PRIVATE_KEY` is set. The private key also lives in your login Keychain (Sparkle account `cue`). Back it up: without it, installed copies can never verify another update. The Developer ID certificate and App Store Connect API key come from you: run `scripts/setup-release-secrets.sh` (see the comments at its top). Until they are set, the release job fails with a clear message and publishes nothing.
 
 See `docs/platform-support.md` for what was verified on which macOS version, and `docs/manual-test-checklist.md` for the checks that still need a person at the keyboard.

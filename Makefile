@@ -4,9 +4,9 @@ export
 
 DERIVED := build/DerivedData
 SIGNING := $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM) CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY="Apple Development",)
-XCODEBUILD := xcodebuild -project Cue.xcodeproj -scheme Cue -derivedDataPath $(DERIVED) CUE_UPDATE_URL="$(CUE_UPDATE_URL)" $(SIGNING)
+XCODEBUILD := xcodebuild -project Cue.xcodeproj -scheme Cue -derivedDataPath $(DERIVED) $(SIGNING)
 
-.PHONY: run build project test test-unit test-ui release dmg clean
+.PHONY: run build project test test-unit test-ui dmg clean
 
 run: build
 	open "$(DERIVED)/Build/Products/Debug/Cue.app"
@@ -26,20 +26,9 @@ test-unit:
 test-ui: project
 	$(XCODEBUILD) -configuration Debug -only-testing:CueUITests test
 
-# Release signing: set DEVELOPMENT_TEAM and APPLE_SIGNING_IDENTITY ("Developer ID Application: …") in .env.
-RELEASE_SIGNING := $(if $(APPLE_SIGNING_IDENTITY),CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(APPLE_SIGNING_IDENTITY)" OTHER_CODE_SIGN_FLAGS=--timestamp,)
-
-release: project
-	$(XCODEBUILD) -configuration Release $(RELEASE_SIGNING) build
-	codesign --verify --strict --verbose=1 "$(DERIVED)/Build/Products/Release/Cue.app"
-	@echo "Built $(DERIVED)/Build/Products/Release/Cue.app"
-
-# Drag-to-Applications disk image. Notarize it before sharing (see docs/release-process.md).
-dmg: release
-	rm -rf build/dmg build/Cue.dmg && mkdir -p build/dmg
-	cp -R "$(DERIVED)/Build/Products/Release/Cue.app" build/dmg/
-	ln -s /Applications build/dmg/Applications
-	hdiutil create -volname Cue -srcfolder build/dmg -ov -format UDZO build/Cue.dmg
+# Signed, notarized DMG plus Sparkle appcast in build/release. See docs/release-process.md.
+dmg: project
+	scripts/release.sh
 
 clean:
 	rm -rf build CueKit/.build

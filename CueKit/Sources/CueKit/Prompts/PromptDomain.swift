@@ -127,9 +127,6 @@ public struct PromptSettings: Codable, Sendable, Equatable {
     public var launchAtLogin = false
     public var keepRunning = true
     public var preview = false
-    /// Opt-in. Off unless the user turns it on.
-    public var updateCheck = false
-    public var lastUpdateCheck: String?
 
     public init() {}
 
@@ -143,8 +140,6 @@ public struct PromptSettings: Codable, Sendable, Equatable {
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         keepRunning = try c.decodeIfPresent(Bool.self, forKey: .keepRunning) ?? d.keepRunning
         preview = try c.decodeIfPresent(Bool.self, forKey: .preview) ?? d.preview
-        updateCheck = try c.decodeIfPresent(Bool.self, forKey: .updateCheck) ?? d.updateCheck
-        lastUpdateCheck = try c.decodeIfPresent(String.self, forKey: .lastUpdateCheck)
     }
 }
 

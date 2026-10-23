@@ -58,15 +58,4 @@ import Testing
         #expect(TextLimits.firstInvalidControl(in: "🇧🇷\u{1b}") == 3)
         #expect(TextLimits.firstInvalidControl(in: "\u{7f}") == 1)
     }
-
-    @Test func updateVersionsCompareNumerically() {
-        #expect(UpdateCheck.isNewer("v0.10.0", than: "0.9.9"))
-        #expect(UpdateCheck.isNewer("1.0", than: "0.9"))
-        #expect(!UpdateCheck.isNewer("1.0.0", than: "1.0"))
-        #expect(!UpdateCheck.isNewer("0.1.0", than: "0.2.0"))
-        #expect(!UpdateCheck.isNewer("garbage", than: "0.1.0"))
-        let json = Data(#"{"tag_name":"v2.0.0","html_url":"https://github.com/example/cue/releases/tag/v2.0.0"}"#.utf8)
-        #expect(UpdateCheck.release(from: json)?.version == "v2.0.0")
-        #expect(UpdateCheck.release(from: Data(#"{"tag_name":"v2","html_url":"http://x"}"#.utf8)) == nil)
-    }
 }

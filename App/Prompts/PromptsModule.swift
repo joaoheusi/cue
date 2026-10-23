@@ -55,7 +55,7 @@ import SwiftUI
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    var availableUpdate: UpdateCheck.Release? { model.availableUpdate }
+    var hasUnsavedChanges: Bool { nav.isDirty }
 
     func diagnostics() async -> [(String, String)] { model.diagnostics() }
 }

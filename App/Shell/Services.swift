@@ -87,39 +87,6 @@ import UniformTypeIdentifiers
     }
 }
 
-/// Opt-in update check. Sends one HTTPS GET with no identifiers. Never downloads or installs anything.
-@MainActor enum UpdateChecker {
-    /// From `CUE_UPDATE_URL` in `.env`, written into Info.plist at build time.
-    static var feedURL: URL? {
-        guard let text = Bundle.main.object(forInfoDictionaryKey: "CueUpdateURL") as? String,
-              let url = URL(string: text), url.scheme == "https" else { return nil }
-        return url
-    }
-
-    enum Outcome: Equatable {
-        case upToDate, available(UpdateCheck.Release), notConfigured
-        case failed(String)
-    }
-
-    static func check(currentVersion: String) async -> Outcome {
-        guard let url = feedURL else { return .notConfigured }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 10
-        configuration.httpCookieStorage = nil
-        var request = URLRequest(url: url)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        do {
-            let (data, response) = try await URLSession(configuration: configuration).data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 1_000_000,
-                  let release = UpdateCheck.release(from: data)
-            else { return .failed("The update server returned an unexpected response.") }
-            return UpdateCheck.isNewer(release.version, than: currentVersion) ? .available(release) : .upToDate
-        } catch {
-            return .failed("Could not reach the update server. Check your connection and try again.")
-        }
-    }
-}
-
 /// Save and open panels with safe names, size limits, and atomic writes.
 @MainActor enum FileTransfer {
     /// Returns false when the user cancels.

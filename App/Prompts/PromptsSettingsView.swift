@@ -6,9 +6,9 @@ struct GeneralSettingsView: View {
     let model: PromptsModel
     @State private var launchStatus = LaunchAtLogin.statusText
     @State private var launchError: String?
-    @State private var update: UpdateChecker.Outcome?
-    @State private var checking = false
     @State private var paused = false
+    @State private var autoCheck = false
+    @State private var autoInstall = false
     @State private var legacyAgent = LaunchAtLogin.hasLegacyAgent
 
     var body: some View {
@@ -45,15 +45,23 @@ struct GeneralSettingsView: View {
                         }
                     }
                 }
-                Section("Updates") {
-                    Toggle("Check for updates", isOn: Binding(get: { settings.updateCheck }, set: { on in Task { await model.saveSettings { $0.updateCheck = on } } }))
-                    Text("Off by default. When on, Cue asks the release page for the latest version once a week and when you press Check Now. It sends no identifiers and never installs anything.")
+            }
+            Section("Updates") {
+                let updater = model.context.updater
+                if updater.isAvailable {
+                    Toggle("Check for updates automatically", isOn: Binding(get: { autoCheck }, set: { updater.automaticallyChecks = $0; autoCheck = $0 }))
+                    Toggle("Download and install updates automatically", isOn: Binding(get: { autoInstall }, set: { updater.automaticallyInstalls = $0; autoInstall = $0 }))
+                        .disabled(!autoCheck)
+                    Text("Cue checks GitHub releases every hour. It sends no identifiers. Updates are signed and verified before install, and Cue relaunches only when you are idle and have no unsaved edits.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        Button("Check Now") { Task { await check() } }.disabled(checking || !settings.updateCheck)
-                        if checking { ProgressView().controlSize(.small) }
-                        updateStatus
+                        Button("Check Now") { updater.checkNow() }
+                        if let last = updater.lastCheck {
+                            Text("Last checked \(last.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
+                } else {
+                    Text("Updates are off in debug builds. Install a release from GitHub to get automatic updates.").foregroundStyle(.secondary)
                 }
             }
             Section("Shortcuts") {
@@ -67,29 +75,10 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
         .onAppear {
             paused = model.context.hotKeys.paused
+            autoCheck = model.context.updater.automaticallyChecks
+            autoInstall = model.context.updater.automaticallyInstalls
             launchStatus = LaunchAtLogin.statusText
         }
-    }
-
-    @ViewBuilder private var updateStatus: some View {
-        switch update {
-        case .upToDate: StatusLine(text: "Cue \(model.context.version) is up to date.", success: true)
-        case .available(let release):
-            HStack {
-                StatusLine(text: "Cue \(release.version) is available.", success: true)
-                Link("Open Release Page", destination: release.page)
-            }
-        case .notConfigured: StatusLine(text: "This build has no update address. Set CUE_UPDATE_URL in .env.", success: false)
-        case .failed(let message): StatusLine(text: message, success: false)
-        case nil: EmptyView()
-        }
-    }
-
-    private func check() async {
-        checking = true
-        update = await UpdateChecker.check(currentVersion: model.context.version)
-        checking = false
-        await model.saveSettings { $0.lastUpdateCheck = Timestamp.now() }
     }
 }
 

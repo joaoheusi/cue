@@ -46,7 +46,8 @@ Use a debug build (`make run`) so release data stays separate. Do not use sensit
 ### App
 
 - [ ] Launch at login: on, approval flow, off. Login launch shows no window.
-- [ ] Update check: off by default; Check Now with and without `CUE_UPDATE_URL`.
+- [ ] Auto-update: install release N from its DMG, push to main, and confirm release N+1 installs and relaunches only after a minute without input, with no unsaved edits. Check Now shows Sparkle's window. Turning updates off stops checks.
+- [ ] After an update, Accessibility access and the clipboard Keychain key still work without new prompts.
 - [ ] Diagnostics export contains no prompt text, clipboard text, or item names.
 - [ ] Light, dark, and system themes; VoiceOver labels on the command window; multiple displays and Spaces.
 - [ ] Uninstall steps in the README remove every trace.

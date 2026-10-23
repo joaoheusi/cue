@@ -49,6 +49,9 @@ import SwiftUI
             prompts.openLibrary($0)
         }
         installMainMenu()
+        context.updater.isIdle = { [unowned self] in
+            !command.isVisible && !prompts.hasUnsavedChanges && !menuBar.arranging && NSApp.modalWindow == nil
+        }
         // Create Cue's own item first so it sits right of the menu-bar module's separators.
         installStatusItem()
         Task {
@@ -119,16 +122,15 @@ import SwiftUI
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        if let release = prompts.availableUpdate {
-            add(menu, "Cue \(release.version) Available…", "arrow.down.circle") { NSWorkspace.shared.open(release.page) }
-            menu.addItem(.separator())
-        }
         for scope in CommandScope.allCases {
             add(menu, "Open \(scope.title)", scope.symbol) { [unowned self] in command.show(scope) }
         }
         menu.addItem(.separator())
         add(menu, "Manage Prompts…", "list.bullet.rectangle") { [unowned self] in context.openLibrary(nil) }
         add(menu, "Settings…", "gearshape", key: ",") { [unowned self] in context.openSettings(.general) }
+        if context.updater.isAvailable {
+            add(menu, "Check for Updates…", "arrow.down.circle") { [unowned self] in context.updater.checkNow() }
+        }
         let paused = context.hotKeys.paused
         add(menu, paused ? "Resume Shortcuts" : "Pause Shortcuts", paused ? "play.circle" : "pause.circle") { [unowned self] in
             context.hotKeys.setPaused(!paused)
@@ -167,6 +169,7 @@ import SwiftUI
             // Action shortcuts are listed by ID only, never by name.
             (owner, "\(status.requested?.description ?? "none") — \(status.active ? "active" : status.error ?? "inactive")")
         }))
+        sections.append(("Updates", context.updater.diagnostics))
         sections.append(("Prompts", await prompts.diagnostics()))
         sections.append(("Clipboard", await clipboard.diagnostics()))
         sections.append(("Menu Bar", await menuBar.diagnostics()))

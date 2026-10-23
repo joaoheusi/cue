@@ -22,8 +22,6 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>CueUpdateURL</key>
-	<string>$(CUE_UPDATE_URL)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
@@ -32,5 +30,19 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Your prompts, clipboard, and menu bar, on cue.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>SU5Q3SRAb8XyQO5dDikWbab9z2uf136QrGSHUqboLso=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

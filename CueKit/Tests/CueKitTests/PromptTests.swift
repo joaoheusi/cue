@@ -151,7 +151,7 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         let legacy = try await store.get("0b7c1c1e-6a4f-4a8e-9a43-1f9f7f6f2a10")
         #expect(legacy.useCount == 7 && legacy.category == nil && legacy.favorite)
         let settings = try await store.settings()
-        #expect(settings.theme == .dark && settings.paletteShortcut == "Super+Shift+K" && !settings.updateCheck)
+        #expect(settings.theme == .dark && settings.paletteShortcut == "Super+Shift+K")
         var edited = legacy
         edited.name = "Legacy edited"
         #expect(try await store.save(edited).revision == 4)

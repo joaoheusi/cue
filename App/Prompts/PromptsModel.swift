@@ -9,8 +9,6 @@ import UniformTypeIdentifiers
     var notice: (text: String, success: Bool)?
     /// A validated import waiting for the user's choice in the library window.
     var pendingImport: ImportPreview?
-    /// Set by the weekly opt-in update check.
-    var availableUpdate: UpdateCheck.Release?
     @ObservationIgnored private var store: PromptStore?
     @ObservationIgnored let context: AppContext
 
@@ -36,7 +34,6 @@ import UniformTypeIdentifiers
             }
             applyTheme()
             restoreShortcuts()
-            await weeklyUpdateCheck()
         } catch {
             context.log.record(error.cueError, "prompts.load")
             state = .failed(error.cueError)
@@ -83,14 +80,6 @@ import UniformTypeIdentifiers
         change(&settings)
         await perform { try await $0.saveSettings(settings, revision: snapshot.revision) }
         applyTheme()
-    }
-
-    /// Runs only when the user opted in, at most once a week.
-    private func weeklyUpdateCheck() async {
-        guard let settings = snapshot?.settings, settings.updateCheck, !context.isUITesting else { return }
-        if let last = settings.lastUpdateCheck.flatMap(Timestamp.parse), Date().timeIntervalSince(last) < 7 * 86_400 { return }
-        if case .available(let release) = await UpdateChecker.check(currentVersion: context.version) { availableUpdate = release }
-        await saveSettings { $0.lastUpdateCheck = Timestamp.now() }
     }
 
     // MARK: Shortcuts
@@ -324,7 +313,7 @@ import UniformTypeIdentifiers
             ("Categories", "\(snapshot.categories.count)"),
             ("Direct shortcuts", "\(snapshot.bindings.keys.filter { $0.hasPrefix("action:") }.count)"),
             ("Library revision", "\(snapshot.revision)"),
-            ("Settings", "theme=\(s.theme.rawValue) delivery=\(s.defaultDelivery.rawValue) onboarded=\(s.onboarded) preview=\(s.preview) updateCheck=\(s.updateCheck)"),
+            ("Settings", "theme=\(s.theme.rawValue) delivery=\(s.defaultDelivery.rawValue) onboarded=\(s.onboarded) preview=\(s.preview)"),
         ]
     }
 }
