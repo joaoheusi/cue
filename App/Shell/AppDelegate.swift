@@ -47,7 +47,11 @@ import SwiftUI
             await prompts.start()
             await clipboard.start()
             await menuBar.start()
-            if context.isUITesting { command.show(.prompts) }
+            if context.isUITesting {
+                // The test runner launches Cue in the background; take focus so typing reaches the panel.
+                NSApp.activate()
+                command.show(.prompts)
+            }
         }
     }
 

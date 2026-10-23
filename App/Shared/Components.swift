@@ -166,7 +166,9 @@ struct CommandList<Item: Identifiable, Row: View>: View {
             }
         }
         .onAppear {
+            // Focus requested before the panel is key is ignored, so ask again on the next turn.
             focused = true
+            DispatchQueue.main.async { focused = true }
             if current == nil { selection = items.first?.id }
         }
         .onChange(of: items.map(\.id)) { _, ids in
