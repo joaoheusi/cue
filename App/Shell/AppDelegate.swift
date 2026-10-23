@@ -103,15 +103,32 @@ import SwiftUI
     @objc private func showSettings() { context.openSettings(.general) }
 
     private func installStatusItem() {
+        NSStatusItem.seedPosition("cue.main", 0)
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.autosaveName = "cue.main"
-        item.button?.image = NSImage(systemSymbolName: "text.cursor", accessibilityDescription: "Cue")
+        item.button?.image = Self.statusImage
+        item.button?.setAccessibilityLabel("Cue")
         item.button?.setAccessibilityIdentifier("cue.statusItem")
         let menu = NSMenu()
         menu.delegate = self
         item.menu = menu
         statusItem = item
     }
+
+    private static let statusImage: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let center = NSPoint(x: 8.8, y: 9)
+            let ring = NSBezierPath()
+            ring.appendArc(withCenter: center, radius: 5.6, startAngle: 45, endAngle: 315)
+            ring.lineWidth = 1.7
+            ring.lineCapStyle = .round
+            ring.stroke()
+            NSBezierPath(ovalIn: NSRect(x: center.x + 5.6 - 1.3, y: center.y - 1.3, width: 2.6, height: 2.6)).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()

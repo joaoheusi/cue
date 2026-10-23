@@ -184,7 +184,7 @@ import UniformTypeIdentifiers
             let alert = NSAlert()
             alert.messageText = "Hide menu bar items"
             alert.informativeText = """
-            Cue adds a chevron (‹) to your menu bar. To hide an icon, hold ⌘ and drag it to the left of the chevron.
+            Cue adds a chevron (‹) to your menu bar. Icons to the left of the chevron are hidden. To keep an icon visible, hold ⌘ and drag it to the right of the chevron.
 
             Click the chevron or press \(settings.shortcut.flatMap(Shortcut.init)?.display ?? "the shortcut") to show hidden icons. ⌥-click the chevron to also show always-hidden icons.
 
