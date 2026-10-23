@@ -178,8 +178,9 @@ struct CommandList<Item: Identifiable, Row: View>: View {
 
     private func move(_ delta: Int) -> KeyPress.Result {
         guard !items.isEmpty else { return .handled }
-        let index = items.firstIndex { $0.id == selection } ?? -1
-        selection = items[max(0, min(items.count - 1, index + delta))].id
+        // Wraps around, like the original palette.
+        let index = items.firstIndex { $0.id == selection } ?? (delta > 0 ? -1 : 0)
+        selection = items[(index + delta + items.count) % items.count].id
         return .handled
     }
 }

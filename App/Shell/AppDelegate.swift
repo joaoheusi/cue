@@ -30,6 +30,7 @@ import SwiftUI
         }
         context.openCommand = { [unowned self] in command.show($0) }
         context.closeCommand = { [unowned self] in command.hide(cancel: false) }
+        context.showCommandPassively = { [unowned self] in command.showPassively() }
         context.openSettings = { [unowned self] in
             command.hide(cancel: true)
             settings.show($0)
@@ -38,6 +39,7 @@ import SwiftUI
             command.hide(cancel: true)
             prompts.openLibrary($0)
         }
+        installMainMenu()
         // Create Cue's own item first so it sits right of the menu-bar module's separators.
         installStatusItem()
         Task {
@@ -65,6 +67,30 @@ import SwiftUI
         context.hotKeys.unregisterAll()
     }
 
+    /// Menu-bar apps show no main menu, but text fields still need its key equivalents (⌘A, ⌘C, ⌘V, ⌘Z…).
+    private func installMainMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        appItem.submenu = NSMenu(title: "Cue")
+        appItem.submenu?.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        appItem.submenu?.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        appItem.submenu?.addItem(withTitle: "Quit Cue", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        main.items = [appItem, editItem]
+        NSApp.mainMenu = main
+    }
+
+    @objc private func showSettings() { context.openSettings(.general) }
+
     // MARK: Menu bar icon
 
     private func installStatusItem() {
@@ -80,6 +106,10 @@ import SwiftUI
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let release = prompts.availableUpdate {
+            add(menu, "Cue \(release.version) Available…", "arrow.down.circle") { NSWorkspace.shared.open(release.page) }
+            menu.addItem(.separator())
+        }
         for scope in CommandScope.allCases {
             add(menu, "Open \(scope.title)", scope.symbol) { [unowned self] in command.show(scope) }
         }

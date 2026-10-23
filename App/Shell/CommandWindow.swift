@@ -39,6 +39,7 @@ final class CommandPanel: NSPanel {
     let panel = CommandPanel()
     let state = CommandState()
     private let context: AppContext
+    private var hiding = false
 
     init(context: AppContext, content: @escaping (CommandScope) -> AnyView) {
         self.context = context
@@ -70,15 +71,23 @@ final class CommandPanel: NSPanel {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    /// Shows the window without taking keyboard focus, so a recovery message stays visible
+    /// while the user pastes manually in the target app.
+    func showPassively() {
+        panel.orderFrontRegardless()
+    }
+
     /// Hides the window. `cancel` stops any delivery that has not posted its paste yet.
     func hide(cancel: Bool) {
         if cancel { context.invocation?.cancelled = true }
+        hiding = true
         panel.orderOut(nil)
+        hiding = false
     }
 
     func windowDidResignKey(_ notification: Notification) {
         // Clicking elsewhere closes the window, as Spotlight does. Delivery keeps its own invocation.
-        if panel.isVisible && NSApp.modalWindow == nil { hide(cancel: true) }
+        if panel.isVisible && !hiding && NSApp.modalWindow == nil { hide(cancel: true) }
     }
 
     /// Centers on the screen under the pointer and clamps to 90% of its visible area.
@@ -117,8 +126,9 @@ private struct CommandRoot: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 6)
+            // A fresh view per opening resets each scope's query and selection.
             content(state.scope)
-                .id(state.scope)
+                .id("\(state.scope.rawValue)-\(state.openID)")
         }
         .frame(minWidth: 480, minHeight: 320)
         .background(.regularMaterial)

@@ -42,6 +42,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     // Window routing. `AppDelegate` installs these closures.
     var openCommand: (CommandScope) -> Void = { _ in }
     var closeCommand: () -> Void = {}
+    var showCommandPassively: () -> Void = {}
     var openLibrary: (_ actionID: String?) -> Void = { _ in }
     var openSettings: (SettingsTab) -> Void = { _ in }
 
