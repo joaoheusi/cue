@@ -54,8 +54,8 @@ public enum PasteRules {
         case .target:
             if o.secureField { return .protectedInput }
             if o.focusedWindow == .same && o.focusedField == .same { return nil }
-            let changed = o.focusedWindow == .different || o.focusedField == .different
-            return changed ? .targetChanged : .focusTimeout
+            if o.focusedWindow == .different || o.focusedField == .different { return .targetChanged }
+            return foreground ? .focusTimeout : nil
         }
     }
 
