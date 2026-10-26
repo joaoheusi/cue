@@ -29,7 +29,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     let dataDirectory: URL
     let isUITesting: Bool
     let hotKeys = HotKeyCenter()
-    let paste = PasteService()
+    let paste: PasteService
     let permissions = PermissionCoordinator()
     let log = DiagnosticsLog()
     let updater: AppUpdater
@@ -45,6 +45,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     init() {
         let environment = ProcessInfo.processInfo.environment
         isUITesting = CommandLine.arguments.contains("--ui-testing")
+        paste = PasteService(log: log)
         #if DEBUG
         updater = AppUpdater(enabled: false)
         #else

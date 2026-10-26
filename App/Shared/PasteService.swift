@@ -40,9 +40,12 @@ enum Delivery: Equatable {
 @MainActor final class PasteService {
     static let originType = NSPasteboard.PasteboardType("app.cue.launcher.origin")
 
+    private let log: DiagnosticsLog
     private var session = 0
+    private var lastObservation = ""
 
-    init() {
+    init(log: DiagnosticsLog) {
+        self.log = log
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -101,19 +104,22 @@ enum Delivery: Equatable {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if front == target.app.processIdentifier {
             o.front = .target
-            let window = element(target.application, kAXFocusedWindowAttribute)
-            let field = element(target.application, kAXFocusedUIElementAttribute)
+            let (window, windowRead) = read(target.application, kAXFocusedWindowAttribute)
+            let (field, fieldRead) = read(target.application, kAXFocusedUIElementAttribute)
             o.focusedWindow = window.map { CFEqual($0, target.window) ? .same : .different } ?? .missing
             o.focusedField = field.map { CFEqual($0, target.field) ? .same : .different } ?? .missing
             o.secureField = field.map(isSecure) ?? false
+            lastObservation = "front=target window=\(o.focusedWindow)/\(windowRead) field=\(o.focusedField)/\(fieldRead)"
         } else if front == ProcessInfo.processInfo.processIdentifier {
             o.front = .cue
             let windows = attribute(target.application, kAXWindowsAttribute) as? [AXUIElement] ?? []
             o.windowExists = windows.contains { CFEqual($0, target.window) }
             o.fieldExists = attribute(target.field, kAXRoleAttribute) is String
             o.secureField = isSecure(target.field)
+            lastObservation = "front=cue windowExists=\(o.windowExists) fieldExists=\(o.fieldExists)"
         } else {
             o.front = .other
+            lastObservation = "front=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none")"
         }
         return o
     }
@@ -158,11 +164,17 @@ enum Delivery: Equatable {
         if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
         if let failure = activate(target) { return .copiedNotPasted(failure.error) }
         try? await Task.sleep(for: .milliseconds(80))
-        let deadline = Date().addingTimeInterval(0.8)
+        let start = Date()
+        let deadline = start.addingTimeInterval(0.8)
+        var tries = 0
         while true {
             if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
+            tries += 1
+            lastObservation = ""
             guard let failure = send(target, generation: written) else { return .pasted }
             guard PasteRules.isRetryable(failure), Date() < deadline else {
+                let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+                log.record("\(failure.error.code) app=\(target.app.bundleIdentifier ?? "?") tries=\(tries) elapsed=\(elapsed)ms \(lastObservation)", "paste.detail")
                 return .copiedNotPasted(failure.error)
             }
             try? await Task.sleep(for: .milliseconds(20))
@@ -193,8 +205,15 @@ enum Delivery: Equatable {
     }
 
     private func element(_ element: AXUIElement, _ name: String) -> AXUIElement? {
-        guard let value = attribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        read(element, name).0
+    }
+
+    private func read(_ element: AXUIElement, _ name: String) -> (AXUIElement?, String) {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        guard result == .success else { return (nil, "ax\(result.rawValue)") }
+        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return (nil, "notElement") }
+        return ((value as! AXUIElement), "ok")
     }
 
     private func isSecure(_ field: AXUIElement) -> Bool {
