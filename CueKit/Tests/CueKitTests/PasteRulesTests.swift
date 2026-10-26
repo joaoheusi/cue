@@ -18,6 +18,8 @@ import Testing
         #expect(PasteRules.check(observe { $0.secureField = true }, foreground: false) == .protectedInput)
         #expect(PasteRules.check(observe { $0.focusedField = .different }, foreground: false) == .targetChanged)
         #expect(PasteRules.check(observe { $0.focusedField = .missing }, foreground: true) == .focusTimeout)
+        #expect(PasteRules.check(observe { $0.focusedWindow = .missing; $0.focusedField = .missing }, foreground: false) == nil)
+        #expect(PasteRules.check(observe { $0.focusedWindow = .missing; $0.focusedField = .different }, foreground: false) == .targetChanged)
         #expect(PasteRules.check(observe { $0.focusedWindow = .different; $0.focusedField = .missing }, foreground: true) == .targetChanged)
     }
 

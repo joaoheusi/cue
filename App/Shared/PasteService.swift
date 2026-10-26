@@ -87,7 +87,9 @@ enum Delivery: Equatable {
     }
 
     func check(_ target: PasteTarget) -> CueError? {
-        check(target, foreground: false)?.error
+        guard let failure = check(target, foreground: false) else { return nil }
+        log.record("\(failure.error.code) app=\(target.app.bundleIdentifier ?? "?") \(lastObservation)", "paste.precheck")
+        return failure.error
     }
 
     private func check(_ target: PasteTarget, foreground: Bool) -> PasteFailure? {
@@ -96,6 +98,7 @@ enum Delivery: Equatable {
 
     private func observe(_ target: PasteTarget) -> PasteRules.Observation {
         var o = PasteRules.Observation()
+        lastObservation = ""
         o.canRead = canReadTarget
         o.canPost = canPostPaste
         o.sameSession = target.session == session
@@ -125,7 +128,7 @@ enum Delivery: Equatable {
     }
 
     private func activate(_ target: PasteTarget) -> PasteFailure? {
-        if let failure = check(target, foreground: false), failure != .focusTimeout { return failure }
+        if let failure = check(target, foreground: false) { return failure }
         guard target.app.activate() else { return .targetChanged }
         AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
         return nil
@@ -170,7 +173,6 @@ enum Delivery: Equatable {
         while true {
             if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
             tries += 1
-            lastObservation = ""
             guard let failure = send(target, generation: written) else { return .pasted }
             guard PasteRules.isRetryable(failure), Date() < deadline else {
                 let elapsed = Int(Date().timeIntervalSince(start) * 1000)
