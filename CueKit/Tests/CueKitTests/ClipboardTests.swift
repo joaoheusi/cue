@@ -315,4 +315,35 @@ import Testing
         _ = try ClipboardStore(url: url)
         #expect(try SQLite(path: url).userVersion() == 2)
     }
+
+    @Test func recopyingATokenAppliesTheCurrentPolicy() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let secret = "sk-ant-usr-abcdefghijklmnopqrstuv3c27"
+        var settings = ClipboardSettings()
+        settings.sensitive = .keep
+        try await store.save(settings)
+        let now = Date()
+        let id = try await store.capture(secret, source: "com.example.app", now: now)
+        #expect(String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+
+        settings.sensitive = .maskAndExpire
+        try await store.save(settings)
+        #expect(try await store.capture(secret, source: nil, now: now) == id)
+        let item = try #require(await store.items().first { $0.id == id })
+        #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.expiresAt != nil && item.source == "com.example.app")
+        #expect(!String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+    }
+
+    @Test func deletingAPinboardRearmsTokenExpiry() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: Date())
+        let board = try await store.createPinboard("Keys")
+        try await store.setPinboard(id, board.id)
+        #expect(await store.items().first { $0.id == id }?.expiresAt == nil)
+        try await store.deletePinboard(board.id)
+        #expect(await store.items().first { $0.id == id }?.expiresAt != nil)
+        #expect(try await store.purge(now: Date().addingTimeInterval(SensitiveText.lifetime + 5)) == 1)
+    }
 }

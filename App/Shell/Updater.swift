@@ -55,8 +55,14 @@ import Sparkle
     func restartToUpdate() {
         guard let install = pendingInstall else { return }
         retry?.invalidate()
-        pendingInstall = nil
+        consumeInstall()
         install()
+    }
+
+    private func consumeInstall() {
+        pendingInstall = nil
+        readyVersion = nil
+        onChange()
     }
 
     private func installWhenIdle() {
@@ -64,7 +70,7 @@ import Sparkle
         guard let install = pendingInstall else { return }
         let quiet = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) > 60
         if quiet && isIdle() {
-            pendingInstall = nil
+            consumeInstall()
             install()
         } else {
             retry = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in

@@ -108,7 +108,7 @@ struct FileDetails: Equatable, Sendable {
 enum FileInfo {
     static func load(_ hit: FileHit) async -> FileDetails {
         let url = hit.url
-        return await Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) {
             var details = FileDetails(location: (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
             let keys: Set<URLResourceKey> = [.localizedTypeDescriptionKey, .isDirectoryKey, .totalFileAllocatedSizeKey]
             let values = try? url.resourceValues(forKeys: keys)
@@ -128,6 +128,7 @@ enum FileInfo {
             }
             details.size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
             return details
-        }.value
+        }
+        return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 }

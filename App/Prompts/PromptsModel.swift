@@ -399,6 +399,7 @@ import UniformTypeIdentifiers
 
     func closeRun() {
         run?.task?.cancel()
+        run?.invocation.consumed = false
         run = nil
     }
 
@@ -410,6 +411,7 @@ import UniformTypeIdentifiers
         }
         context.keepsRunning = { [weak self] in self?.run?.isRunning == true && self?.run?.surface == .palette }
         context.commandDidHide = { [weak self] in
+            self?.pendingAsk = nil
             guard let self, let run, run.surface == .palette, !run.isRunning, run.message == nil else { return }
             self.run = nil
         }

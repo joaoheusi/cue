@@ -148,7 +148,8 @@ extension NSMenu {
         alert.addButton(withTitle: "Uninstall")
         alert.addButton(withTitle: "Cancel")
         NSApp.takeFocus()
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runModal() == .alertFirstButtonReturn, context.canQuit() else { return }
+        context.quitApproved = true
         try? LaunchAtLogin.set(false)
         if LaunchAtLogin.hasLegacyAgent { try? LaunchAtLogin.removeLegacyAgent() }
         ClipboardKeychain.delete(service: context.keychainService)

@@ -72,14 +72,22 @@ enum ClaudeKey {
     }
 
     static func save(_ key: String, service: String) throws(CueError) {
-        delete(service: service)
+        let data = Data(key.utf8)
         for kind in [ClipboardKeychain.Kind.dataProtection, .legacy] {
-            var query = ClipboardKeychain.base(service, kind, account: account)
-            query[kSecValueData as String] = Data(key.utf8)
-            if kind == .dataProtection { query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }
-            query[kSecAttrLabel as String] = "Cue Anthropic API key"
-            let status = SecItemAdd(query as CFDictionary, nil)
-            if status == errSecSuccess { return }
+            let entry = ClipboardKeychain.base(service, kind, account: account)
+            var status = SecItemUpdate(entry as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var added = entry
+                added[kSecValueData as String] = data
+                if kind == .dataProtection { added[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }
+                added[kSecAttrLabel as String] = "Cue Anthropic API key"
+                status = SecItemAdd(added as CFDictionary, nil)
+            }
+            if status == errSecSuccess {
+                let other: ClipboardKeychain.Kind = kind == .dataProtection ? .legacy : .dataProtection
+                SecItemDelete(ClipboardKeychain.base(service, other, account: account) as CFDictionary)
+                return
+            }
             if status != errSecMissingEntitlement { break }
         }
         throw CueError("KEY_SAVE_FAILED", "Cue could not save the key in the Keychain. Make sure your login keychain is unlocked, then try again.")

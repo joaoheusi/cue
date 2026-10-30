@@ -38,7 +38,9 @@ import UniformTypeIdentifiers
             self.window = window
             tabsController = tabs
         }
-        if let index = SettingsTab.allCases.firstIndex(of: tab) { tabsController?.selectedTabViewItemIndex = index }
+        if let tabs = tabsController, let index = tabs.tabViewItems.firstIndex(where: { $0.identifier as? String == tab.rawValue }) {
+            tabs.selectedTabViewItemIndex = index
+        }
         NSApp.takeFocus(window)
     }
 }

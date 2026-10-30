@@ -104,6 +104,7 @@ struct EditorView: View {
     private var saveState: String {
         if nav.draft?.revision == 0, !nav.isDirty || validation != nil { return "Not saved" }
         if validation != nil { return "Not saved" }
+        if nav.saveFailed { return "Couldn’t save" }
         return nav.isDirty || nav.saving ? "Saving…" : "Saved"
     }
 
@@ -387,7 +388,7 @@ struct TemplateEditor: NSViewRepresentable {
     }
 
     static func style(_ textView: NSTextView) {
-        guard let storage = textView.textStorage else { return }
+        guard let storage = textView.textStorage, !textView.hasMarkedText() else { return }
         let whole = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
         storage.setAttributes([.font: font, .foregroundColor: NSColor.labelColor], range: whole)

@@ -70,6 +70,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var interceptCancel: () -> Bool = { false }
     var keepsRunning: () -> Bool = { false }
     var commandDidHide: () -> Void = {}
+    var canQuit: () -> Bool = { true }
+    var quitApproved = false
 
     init() {
         let environment = ProcessInfo.processInfo.environment

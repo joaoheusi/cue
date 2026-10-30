@@ -27,6 +27,7 @@ enum LibraryRow: Identifiable {
     private(set) var baseline: Action?
     private(set) var script: Script?
     var saving = false
+    var saveFailed = false
     var pendingSelection: String??
     @ObservationIgnored var save: (Action) async -> Action? = { _ in nil }
 
@@ -37,6 +38,7 @@ enum LibraryRow: Identifiable {
         original = action
         baseline = action
         script = nil
+        saveFailed = false
     }
 
     func show(_ script: Script) {
@@ -97,7 +99,9 @@ enum LibraryRow: Identifiable {
         guard isDirty, canSave, let sent = draft else { return }
         saving = true
         defer { saving = false }
-        if let saved = await save(sent) { adopt(saved, sent: sent) }
+        let saved = await save(sent)
+        saveFailed = saved == nil
+        if let saved { adopt(saved, sent: sent) }
     }
 
     func leave(then go: @escaping () -> Void, blocked: @escaping () -> Void) {

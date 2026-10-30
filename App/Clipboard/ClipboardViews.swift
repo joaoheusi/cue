@@ -149,8 +149,8 @@ struct ClipboardCommandView: View {
 
     @ViewBuilder private var emptyMessage: some View {
         if results.isEmpty {
-            if !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                EmptyStateView(symbol: "magnifyingglass", title: "No matches", message: "Try different words, or choose All.")
+            if !query.trimmingCharacters(in: .whitespaces).isEmpty || app != nil || (filter != .all && filter != .pinned) {
+                EmptyStateView(symbol: "magnifyingglass", title: "No matches", message: "Try different words, or choose All and Any app.")
             } else if filter == .pinned {
                 EmptyStateView(symbol: "pin", title: "Nothing pinned yet", message: "Select an item and press ⌘P to pin it.")
             } else {

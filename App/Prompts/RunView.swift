@@ -175,7 +175,7 @@ struct RunView: View {
                 .fixedSize()
                 .disabled(!run.isRunning)
             } else if run.surface == .library {
-                Text(run.input == nil ? "Test run" : "Test run. Your real \(run.inputName) was used.")
+                Text(run.input != nil && run.inputName == "clipboard" ? "Test run. Your real clipboard was used." : "Test run")
             }
         } trailing: {
             if run.isRunning {

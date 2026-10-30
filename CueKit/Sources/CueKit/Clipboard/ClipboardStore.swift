@@ -90,11 +90,12 @@ public actor ClipboardStore {
         let sensitive = settings.sensitive != .keep && SensitiveText.matches(text)
         let expiry = Self.expiry(sensitive: sensitive, settings: settings, now: date)
         if let id = try db.scalar("SELECT id FROM items WHERE digest=?1", [.blob(digest)])?.string {
-            let pinned = cache[id]?.isPinned ?? false
-            try db.execute("UPDATE items SET last_used_at=?1, expires_at=?2 WHERE id=?3",
-                           [.text(stamp), pinned ? .null : expiry.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
-            cache[id]?.lastUsedAt = date
-            cache[id]?.expiresAt = pinned ? nil : expiry
+            let old = cache[id]
+            let kept = old?.isPinned == true ? nil : expiry
+            try db.execute("UPDATE items SET last_used_at=?1, sensitive=?2, expires_at=?3 WHERE id=?4",
+                           [.text(stamp), SQLValue(sensitive), kept.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
+            cache[id] = ClipItem(id: id, text: text, source: old?.source, createdAt: old?.createdAt ?? date, lastUsedAt: date,
+                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept)
             return id
         }
         let id = Self.newID()
@@ -183,9 +184,20 @@ public actor ClipboardStore {
     }
 
     public func deletePinboard(_ id: String) throws {
-        try db.execute("DELETE FROM pinboards WHERE id=?1", [.text(id)])
+        let now = Date()
+        let affected = cache.filter { $0.value.pinboardID == id }
+        try db.transaction {
+            try db.execute("DELETE FROM pinboards WHERE id=?1", [.text(id)])
+            for (itemID, item) in affected {
+                guard let expiry = Self.expiry(sensitive: item.sensitive, settings: settings, now: now) else { continue }
+                try db.execute("UPDATE items SET expires_at=?1 WHERE id=?2", [.text(Timestamp.iso(expiry)), .text(itemID)])
+            }
+        }
         pinboards.removeAll { $0.id == id }
-        for (itemID, item) in cache where item.pinboardID == id { cache[itemID]?.pinboardID = nil }
+        for (itemID, item) in affected {
+            cache[itemID]?.pinboardID = nil
+            cache[itemID]?.expiresAt = Self.expiry(sensitive: item.sensitive, settings: settings, now: now)
+        }
     }
 
     public func save(_ settings: ClipboardSettings) throws {

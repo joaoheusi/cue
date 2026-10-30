@@ -272,7 +272,7 @@ struct PaletteSettingsView: View {
         return Button {
             Task {
                 await model.saveSettings { value in
-                    if on { value.searchIn.removeAll { $0 == source } } else { value.searchIn.append(source) }
+                    if value.searchIn.contains(source) { value.searchIn.removeAll { $0 == source } } else { value.searchIn.append(source) }
                 }
             }
         } label: {

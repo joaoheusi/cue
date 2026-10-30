@@ -44,6 +44,7 @@ import SwiftUI
         context.closeCommand = { [unowned self] in command.hide(cancel: false) }
         context.showCommandPassively = { [unowned self] in command.showPassively() }
         context.commandVisible = { [unowned self] in command.isVisible }
+        context.canQuit = { [unowned self] in prompts.canQuit() }
         context.hotKeys.onChange = { [weak self] in self?.refreshStatusIcon() }
         context.updater.onChange = { [weak self] in self?.refreshStatusIcon() }
         context.openSettings = { [unowned self] in
@@ -77,7 +78,7 @@ import SwiftUI
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        prompts.canQuit() ? .terminateNow : .terminateCancel
+        context.quitApproved || prompts.canQuit() ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {

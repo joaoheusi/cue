@@ -75,13 +75,16 @@ struct ShortcutRecorder: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Button(recording ? "Press keys…" : (value?.display ?? "Record")) {
+            Button {
                 recording ? stop() : start()
+            } label: {
+                Text(recording ? "Press keys…" : (value?.display ?? "Record"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .font(.system(size: 13, weight: value == nil ? .regular : .medium))
             .foregroundStyle(value == nil || recording || dimmed ? .secondary : .primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
             if value != nil && !recording {
                 Button { onChange(nil) } label: {
                     Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
