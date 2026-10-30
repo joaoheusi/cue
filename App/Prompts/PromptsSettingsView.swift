@@ -159,7 +159,9 @@ struct ShortcutsSettingsView: View {
                         CardDivider()
                     }
                 }
-                SettingsSection("Windows") {
+                SettingsSection("Windows", trailing: {
+                    Button("Use Rectangle Shortcuts") { Task { await commands.useRectangleShortcuts() } }.buttonStyle(.link).font(.system(size: 12.5))
+                }) {
                     ForEach(Array(WindowCommand.allCases.enumerated()), id: \.element) { index, command in
                         if index > 0 { CardDivider() }
                         row(command.title, value: commands.shortcut(for: command), failure: commands.shortcutError(for: command)) { value in

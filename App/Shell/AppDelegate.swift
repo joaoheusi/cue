@@ -174,6 +174,8 @@ import SwiftUI
         add(menu, "Clipboard", "clipboard", shortcut: shortcut(.clipboard), enabled: !paused) { [unowned self] in command.show(.clipboard) }
         add(menu, "Menu Bar Items", "menubar.rectangle", shortcut: shortcut(.menuBar), enabled: !paused) { [unowned self] in command.show(.menuBar) }
         menu.addItem(.separator())
+        addWindowMenu(to: menu, enabled: !paused)
+        menu.addItem(.separator())
         let hideShortcut = menuBar.settings.shortcut.flatMap(Shortcut.init)
         if menuBar.settings.enabled {
             let revealed = menuBar.isRevealed
@@ -193,6 +195,28 @@ import SwiftUI
         }
         if menu.items.last?.isSeparatorItem == false { menu.addItem(.separator()) }
         add(menu, "Quit Cue", nil, key: "q") { NSApp.terminate(nil) }
+    }
+
+    private func addWindowMenu(to menu: NSMenu, enabled: Bool) {
+        let windows = NSMenu()
+        for section in WindowCommand.menuSections {
+            let startsSubmenus = section.title != nil && windows.items.last?.hasSubmenu == false
+            if !windows.items.isEmpty, section.title == nil || startsSubmenus { windows.addItem(.separator()) }
+            let target = section.title == nil ? windows : NSMenu()
+            for window in section.commands {
+                add(target, window.title, window.symbol, shortcut: commands.shortcut(for: window)) { [unowned self] in commands.applyToFrontWindow(window) }
+            }
+            if let title = section.title {
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.submenu = target
+                windows.addItem(item)
+            }
+        }
+        let item = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
+        item.submenu = windows
+        item.isEnabled = enabled
+        menu.addItem(item)
     }
 
     private func shortcut(_ scope: CommandScope) -> Shortcut? {
