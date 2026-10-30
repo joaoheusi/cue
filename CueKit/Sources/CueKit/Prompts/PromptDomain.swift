@@ -117,6 +117,18 @@ public enum Theme: String, Codable, Sendable, CaseIterable {
     case system, light, dark
 }
 
+public enum SearchSource: String, Codable, Sendable, CaseIterable {
+    case actions, apps, folders, files
+}
+
+public enum KeyStorage: String, Codable, Sendable, CaseIterable {
+    case env, keychain
+}
+
+public enum ScriptOutput: String, Codable, Sendable, CaseIterable {
+    case copy, show
+}
+
 public struct PromptSettings: Codable, Sendable, Equatable {
     public var theme: Theme = .system
     public var defaultDelivery: DeliveryMode = .paste
@@ -124,7 +136,15 @@ public struct PromptSettings: Codable, Sendable, Equatable {
     public var paletteShortcut = "Alt+Space"
     public var launchAtLogin = false
     public var keepRunning = true
-    public var preview = false
+    public var previewPane = true
+    public var menuBarScopeShortcut = "Super+Alt+B"
+    public var searchIn = SearchSource.allCases
+    public var fileLocations = FileLocation.defaults
+    public var skipFolders = FileScope.defaultSkips
+    public var keyStorage = KeyStorage.env
+    public var scriptTimeout = Int(Scripts.timeout)
+    public var scriptOutput = ScriptOutput.copy
+    public var scriptUsage: [String: String] = [:]
 
     public init() {}
 
@@ -137,34 +157,98 @@ public struct PromptSettings: Codable, Sendable, Equatable {
         paletteShortcut = try c.decodeIfPresent(String.self, forKey: .paletteShortcut) ?? d.paletteShortcut
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         keepRunning = try c.decodeIfPresent(Bool.self, forKey: .keepRunning) ?? d.keepRunning
-        preview = try c.decodeIfPresent(Bool.self, forKey: .preview) ?? d.preview
+        previewPane = try c.decodeIfPresent(Bool.self, forKey: .previewPane) ?? d.previewPane
+        menuBarScopeShortcut = try c.decodeIfPresent(String.self, forKey: .menuBarScopeShortcut) ?? d.menuBarScopeShortcut
+        searchIn = try c.decodeIfPresent([SearchSource].self, forKey: .searchIn) ?? d.searchIn
+        fileLocations = try c.decodeIfPresent([FileLocation].self, forKey: .fileLocations) ?? d.fileLocations
+        skipFolders = try c.decodeIfPresent([String].self, forKey: .skipFolders) ?? d.skipFolders
+        keyStorage = try c.decodeIfPresent(KeyStorage.self, forKey: .keyStorage) ?? d.keyStorage
+        scriptTimeout = try c.decodeIfPresent(Int.self, forKey: .scriptTimeout) ?? d.scriptTimeout
+        scriptOutput = try c.decodeIfPresent(ScriptOutput.self, forKey: .scriptOutput) ?? d.scriptOutput
+        scriptUsage = try c.decodeIfPresent([String: String].self, forKey: .scriptUsage) ?? d.scriptUsage
     }
 }
 
 public enum Template {
     public static let outputLimit = 1_048_576
     public static let templateLimit = 65_536
-    private static let tokens = ["{{clipboard}}", "{{date}}", "{{time}}"]
+    private static let tokens = ["{{clipboard}}", "{{selection}}", "{{date}}", "{{time}}", "{{ask"]
+
+    public enum Segment: Equatable, Sendable {
+        case text(String)
+        case token(String)
+    }
+
+    public struct Inputs: Sendable {
+        public var clipboard = ""
+        public var selection = ""
+        public var answers: [String: String] = [:]
+
+        public init(clipboard: String = "", selection: String = "", answers: [String: String] = [:]) {
+            self.clipboard = clipboard
+            self.selection = selection
+            self.answers = answers
+        }
+    }
+
+    public struct Uses: Equatable, Sendable {
+        public var clipboard = false
+        public var selection = false
+        public var questions: [String] = []
+    }
 
     public static func render(_ template: String, clipboard: String, date: String, time: String) throws(CueError) -> String {
-        var used = false
-        return try render(template, clipboard: clipboard, date: date, time: time, clipboardUsed: &used)
+        var uses = Uses()
+        return try render(template, inputs: Inputs(clipboard: clipboard), date: date, time: time, uses: &uses)
     }
 
     public static func renderLocal(_ template: String, clipboard: String, now: Date = Date()) throws(CueError) -> String {
+        try renderLocal(template, inputs: Inputs(clipboard: clipboard), now: now)
+    }
+
+    public static func renderLocal(_ template: String, inputs: Inputs, now: Date = Date()) throws(CueError) -> String {
         let c = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: now)
-        return try render(template, clipboard: clipboard,
+        var uses = Uses()
+        return try render(template, inputs: inputs,
                           date: String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!),
-                          time: String(format: "%02d:%02d", c.hour!, c.minute!))
+                          time: String(format: "%02d:%02d", c.hour!, c.minute!), uses: &uses)
     }
 
     public static func needsClipboard(_ template: String) throws(CueError) -> Bool {
-        var used = false
-        _ = try render(template, clipboard: "sample", date: "2000-01-01", time: "00:00", clipboardUsed: &used)
-        return used
+        try uses(template).clipboard
     }
 
-    private static func render(_ template: String, clipboard: String, date: String, time: String, clipboardUsed: inout Bool) throws(CueError) -> String {
+    public static func uses(_ template: String) throws(CueError) -> Uses {
+        var uses = Uses()
+        _ = try render(template, inputs: Inputs(clipboard: "sample", selection: "sample"), date: "2000-01-01", time: "00:00", uses: &uses)
+        return uses
+    }
+
+    public static func question(_ name: String) -> String? {
+        guard name == "ask" || name.hasPrefix("ask:") else { return nil }
+        let label = name.dropFirst(3).drop { $0 == ":" }.trimmingCharacters(in: .whitespaces)
+        return label.isEmpty ? "Ask" : label
+    }
+
+    public static func segments(_ template: String) -> [Segment] {
+        var result: [Segment] = []
+        var rest = Substring(template)
+        while let open = rest.range(of: "{{"), let close = rest[open.upperBound...].range(of: "}}") {
+            let name = String(rest[open.upperBound..<close.lowerBound])
+            guard ["clipboard", "selection", "date", "time"].contains(name) || question(name) != nil else {
+                result.append(.text(String(rest[..<close.upperBound])))
+                rest = rest[close.upperBound...]
+                continue
+            }
+            if open.lowerBound > rest.startIndex { result.append(.text(String(rest[..<open.lowerBound]))) }
+            result.append(.token(question(name).map { $0 == "Ask" ? "ask…" : "ask: \($0)" } ?? name))
+            rest = rest[close.upperBound...]
+        }
+        if !rest.isEmpty { result.append(.text(String(rest))) }
+        return result
+    }
+
+    private static func render(_ template: String, inputs: Inputs, date: String, time: String, uses: inout Uses) throws(CueError) -> String {
         let chars = Array(template.unicodeScalars)
         var out = String.UnicodeScalarView()
         var bytes = 0
@@ -204,12 +288,20 @@ public enum Template {
                     break
                 }
                 let value: String
-                switch String(String.UnicodeScalarView(chars[(i + 2)..<end])) {
+                let name = String(String.UnicodeScalarView(chars[(i + 2)..<end]))
+                switch name {
                 case "clipboard":
-                    clipboardUsed = true
-                    value = clipboard
+                    uses.clipboard = true
+                    value = inputs.clipboard
+                case "selection":
+                    uses.selection = true
+                    value = inputs.selection
                 case "date": value = date
                 case "time": value = time
+                case _ where question(name) != nil:
+                    let label = question(name) ?? ""
+                    if !uses.questions.contains(label) { uses.questions.append(label) }
+                    value = inputs.answers[label] ?? ""
                 default:
                     append(chars[i..<(end + 2)])
                     i = end + 2

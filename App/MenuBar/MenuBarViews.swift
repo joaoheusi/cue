@@ -2,36 +2,16 @@ import AppKit
 import CueKit
 import SwiftUI
 
-private extension MenuBarSection {
-    var symbol: String {
-        switch self {
-        case .visible: "eye"
-        case .hidden: "eye.slash"
-        case .alwaysHidden: "eye.slash.circle"
-        }
-    }
+private struct MenuBarEntry: Identifiable {
+    var item: ScannedItem
+    var header: String?
+    var id: String { item.id }
 }
 
-private enum MenuBarRow: Identifiable {
-    case toggle(revealed: Bool), revealAll, apply, item(ScannedItem)
+private let sections: [MenuBarSection] = [.visible, .hidden, .alwaysHidden]
 
-    var id: String {
-        switch self {
-        case .toggle: "toggle"
-        case .revealAll: "revealAll"
-        case .apply: "apply"
-        case .item(let entry): "item:\(entry.id)"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .toggle(let revealed): revealed ? "Hide items" : "Reveal hidden items"
-        case .revealAll: "Reveal all"
-        case .apply: "Apply rules now"
-        case .item(let entry): entry.item.label
-        }
-    }
+private func sectionOptions(_ movable: Bool) -> [Segmented<MenuBarSection>.Option] {
+    sections.map { .init(value: $0, title: $0.title, enabled: movable) }
 }
 
 struct MenuBarCommandView: View {
@@ -54,20 +34,17 @@ struct MenuBarCommandView: View {
                                actionTitle: "Turn On") { Task { await module.setEnabled(true) } }
             case .loaded:
                 VStack(spacing: 0) {
-                    CommandList(query: $query, placeholder: "Search menu-bar items", items: rows, selection: $selection,
-                                row: row, onSubmit: { row, _ in submit(row) }, onKeyPress: keyPress)
+                    CommandList(query: $query, placeholder: "Search menu bar items", items: entries, selection: $selection,
+                                header: { $0.header },
+                                row: { entry, selected in row(entry.item, selected) },
+                                bar: { toolbar },
+                                detail: { EmptyView() },
+                                onSubmit: { entry, _ in Task { await module.open(entry.item) } },
+                                onKeyPress: keyPress)
                     notices
-                    CommandFooter {
-                        EmptyView()
-                    } trailing: {
-                        if case .item(let entry)? = rows.first(where: { $0.id == selection }) {
-                            KeyHint(label: "Open", keys: ["↩"])
-                            if entry.item.movable { KeyHint(label: "Move", keys: ["⌥", "←", "→"]) }
-                        } else {
-                            KeyHint(label: "Run", keys: ["↩"])
-                        }
-                    }
+                    footer
                 }
+                .background { shortcuts }
             }
         }
         .task { await module.refreshItems() }
@@ -78,53 +55,132 @@ struct MenuBarCommandView: View {
         }
     }
 
-    private var rows: [MenuBarRow] {
+    private var all: [ScannedItem] {
+        if case .loaded(let items) = module.items { items } else { [] }
+    }
+
+    private var filtered: [ScannedItem] {
         let text = query.trimmingCharacters(in: .whitespaces)
-        var rows: [MenuBarRow] = [.toggle(revealed: module.isRevealed), .revealAll, .apply]
-        if case .loaded(let entries) = module.items { rows += entries.map(MenuBarRow.item) }
-        guard !text.isEmpty else { return rows }
-        return rows.filter { row in
-            if case .item(let entry) = row {
-                return entry.item.appName.localizedCaseInsensitiveContains(text) || entry.item.label.localizedCaseInsensitiveContains(text)
-            }
-            return row.title.localizedCaseInsensitiveContains(text)
+        guard !text.isEmpty else { return all }
+        return all.filter { $0.item.appName.localizedCaseInsensitiveContains(text) || $0.item.label.localizedCaseInsensitiveContains(text) }
+    }
+
+    private var entries: [MenuBarEntry] {
+        sections.flatMap { section -> [MenuBarEntry] in
+            let items = filtered.filter { $0.section == section }
+            return items.enumerated().map { MenuBarEntry(item: $0.element, header: $0.offset == 0 ? "\(section.title)  \(items.count)" : nil) }
         }
     }
 
-    @ViewBuilder private func row(_ row: MenuBarRow, _ selected: Bool) -> some View {
-        switch row {
-        case .item(let entry):
-            CommandRow(title: entry.item.label, subtitle: "\(entry.section.title) · \(entry.item.appName)", symbol: entry.section.symbol, selected: selected) {
-                if selected && !entry.item.movable { Text("Fixed by macOS") }
+    private var current: ScannedItem? { filtered.first { $0.id == selection } }
+
+    private var toolbar: some View {
+        HStack(spacing: 8) {
+            barButton(module.isRevealed ? "Hide Items" : "Show Hidden", symbol: module.isRevealed ? "eye.slash" : "eye", keys: "⌘H", action: module.toggle)
+            barButton("Show All", keys: "⌘⇧H") { module.show(all: true, cause: .user) }
+            Spacer()
+            Button { Task { await module.applyRules() } } label: {
+                HStack(spacing: 6) {
+                    if module.arranging { ProgressView().controlSize(.mini) }
+                    Text("Apply Rules")
+                    Text("\(module.rules.count)").foregroundStyle(.tertiary)
+                }
+                .font(.system(size: 12.5))
             }
-        case .toggle(let revealed):
-            CommandRow(title: row.title, subtitle: module.settings.shortcut.flatMap(Shortcut.init)?.display, symbol: revealed ? "chevron.right" : "chevron.left", selected: selected) { EmptyView() }
-        case .revealAll:
-            CommandRow(title: row.title, subtitle: "Includes always-hidden items", symbol: "chevron.left.2", selected: selected) { EmptyView() }
-        case .apply:
-            CommandRow(title: row.title, subtitle: "\(module.rules.count) rule\(module.rules.count == 1 ? "" : "s")", symbol: "arrow.left.arrow.right", selected: selected) {
-                if module.arranging { ProgressView().controlSize(.small) }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(module.rules.isEmpty || module.arranging)
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+    }
+
+    private func barButton(_ title: String, symbol: String? = nil, keys: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 12)) }
+                Text(title).font(.system(size: 12.5, weight: .medium))
+                Key(text: keys)
             }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.primary.opacity(0.12)) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func row(_ entry: ScannedItem, _ selected: Bool) -> some View {
+        HStack(spacing: 10) {
+            Group {
+                if let icon = MenuBarModule.icon(entry) {
+                    Image(nsImage: icon).resizable().padding(3)
+                } else {
+                    Image(systemName: "app").font(.system(size: 11))
+                }
+            }
+            .frame(width: 22, height: 22)
+            .background(Cue.fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text(entry.item.label).font(.system(size: 13.5, weight: selected ? .semibold : .medium)).lineLimit(1)
+                .frame(width: 202, alignment: .leading)
+            Text(entry.item.appName).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 8)
+            if selected {
+                if entry.item.movable {
+                    Segmented(options: sectionOptions(true), selection: entry.section, height: 22) { target in
+                        Task { await module.move(entry, to: target) }
+                    }
+                    .disabled(module.arranging)
+                } else {
+                    Text("Fixed by macOS").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 33)
+        .background(selected ? Cue.selection : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var footer: some View {
+        CommandFooter {
+            let hidden = all.filter { $0.section != .visible }.count
+            Text("\(all.count) items · \(hidden) hidden")
+        } trailing: {
+            KeyHint(label: "Click item", keys: "↵", primary: true)
+            KeyHint(label: "Change state", keys: "← →")
+            if let current { ActionsHint { showMenu(current) } }
         }
     }
 
-    private func submit(_ row: MenuBarRow) {
-        switch row {
-        case .toggle:
-            module.toggle()
-        case .revealAll:
-            module.show(all: true, cause: .user)
-        case .apply:
-            Task { await module.applyRules() }
-        case .item(let entry):
-            Task { await module.open(entry) }
+    private var shortcuts: some View {
+        ZStack {
+            Button("Show Hidden", action: module.toggle).keyboardShortcut("h", modifiers: .command)
+            Button("Show All") { module.show(all: true, cause: .user) }.keyboardShortcut("h", modifiers: [.command, .shift])
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func showMenu(_ entry: ScannedItem) {
+        PanelMenu.show { menu in
+            menu.add("Click Item") { Task { await module.open(entry) } }
+            if entry.item.movable {
+                menu.addItem(.separator())
+                for section in sections where section != entry.section {
+                    menu.add("Move to \(section.title)") { Task { await module.move(entry, to: section) } }
+                }
+            }
+            menu.addItem(.separator())
+            menu.add("Apply Rules Now") { Task { await module.applyRules() } }
+            menu.add("Settings…") { module.openSettings() }
         }
     }
 
-    private func keyPress(_ row: MenuBarRow, _ press: KeyPress) -> KeyPress.Result {
-        guard case .item(let entry) = row, press.modifiers.contains(.option),
-              press.key == .leftArrow || press.key == .rightArrow else { return .ignored }
-        Task { await module.shift(entry, by: press.key == .rightArrow ? 1 : -1) }
+    private func keyPress(_ entry: MenuBarEntry?, _ press: KeyPress) -> KeyPress.Result {
+        guard let entry, press.key == .leftArrow || press.key == .rightArrow,
+              query.isEmpty || press.modifiers.contains(.option) else { return .ignored }
+        Task { await module.shift(entry.item, by: press.key == .rightArrow ? 1 : -1) }
         return .handled
     }
 
@@ -159,163 +215,224 @@ struct MenuBarCommandView: View {
 }
 
 struct MenuBarSettingsView: View {
+    private enum RuleRow: Hashable {
+        case item(String)
+        case app(String)
+    }
+
     let module: MenuBarModule
-    @State private var rehideText = ""
-    @State private var rehideError: String?
-    @State private var newApp = ""
-    @State private var appError: String?
+    @State private var selectedRule: RuleRow?
+    @State private var failure: String?
+
+    private static let rehideChoices = [5, 10, 30, 60, 0]
 
     var body: some View {
         switch module.storage {
         case .loading:
             LoadingView()
         case .failed(let error):
-            Form { ErrorBanner(error: error) { Task { await module.start() } } }.formStyle(.grouped)
+            SettingsPage { ErrorBanner(error: error) { Task { await module.start() } } }
         case .loaded:
-            form
+            page
         }
     }
 
-    private var form: some View {
-        Form {
-            Section {
-                Toggle("Hide menu bar items", isOn: Binding(get: { module.settings.enabled }, set: { value in Task { await module.setEnabled(value) } }))
-                    .accessibilityIdentifier("menuBar.enabled")
-                Text("Icons to the left of the ‹ chevron are hidden. Hold ⌘ and drag an icon to the right of the chevron to keep it visible. Click the chevron or press the shortcut to show them. ⌥-click the chevron to also show always-hidden icons. Right-click it to pick a hidden icon from a list.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            Section("Behavior") {
-                LabeledContent("Hide again after") {
-                    HStack {
-                        TextField("Seconds", text: $rehideText).labelsHidden().frame(width: 60).multilineTextAlignment(.trailing)
-                            .onSubmit(saveRehide)
-                        Text("seconds")
-                        if rehideText != String(module.settings.autoRehideSeconds) {
-                            Button("Save", action: saveRehide)
-                        }
-                    }
+    private var page: some View {
+        SettingsPage {
+            SettingsSection {
+                SettingsRow("Hide menu bar items", weight: .medium) {
+                    SwitchToggle(isOn: Binding(get: { module.settings.enabled }, set: { value in Task { await module.setEnabled(value) } }), label: "Hide menu bar items")
+                        .accessibilityIdentifier("menuBar.enabled")
                 }
-                Text("0 keeps items shown until you hide them.").font(.caption).foregroundStyle(.secondary)
-                if let rehideError { StatusLine(text: rehideError, success: false) }
-                LabeledContent("Reveal shortcut") {
-                    ShortcutRecorder(value: module.settings.shortcut.flatMap(Shortcut.init)) { value in
-                        Task { await module.setShortcut(value) }
+                CardDivider()
+                SettingsRow("Hide again after") {
+                    Picker("", selection: Binding(get: { module.settings.autoRehideSeconds }, set: { saveRehide($0) })) {
+                        ForEach(rehideOptions, id: \.self) { Text($0 == 0 ? "Never" : "\($0) seconds").tag($0) }
                     }
-                }
-                if let error = module.hotKeyError { StatusLine(text: error, success: false) }
-            }
-            Section("Keep hidden items shown while these apps are in front") {
-                if module.settings.revealApps.isEmpty {
-                    Text("No apps.").foregroundStyle(.secondary)
-                }
-                ForEach(module.settings.revealApps, id: \.self) { id in
-                    HStack {
-                        Text(Self.appName(id)).lineLimit(1)
-                        Text(id).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer()
-                        Button("Remove") { Task { await module.removeRevealApp(id) } }
-                    }
-                }
-                HStack {
-                    TextField("Bundle ID, for example com.apple.Safari", text: $newApp).onSubmit { add(newApp) }
-                    Button("Add") { add(newApp) }.disabled(newApp.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Menu("Running App") {
-                        ForEach(Self.runningApps, id: \.id) { app in
-                            Button(app.name) { add(app.id) }
-                        }
-                    }
+                    .labelsHidden()
                     .fixedSize()
                 }
-                if let appError { StatusLine(text: appError, success: false) }
             }
-            Section("Rules") {
-                if module.rules.isEmpty {
-                    Text("No rules yet. In the command window, select an item and press ⌥← or ⌥→ to choose its section.")
-                        .font(.callout).foregroundStyle(.secondary)
+            SettingsNote(text: "Click the chevron or press the shortcut to show hidden icons. ⌥-click it to also show always-hidden icons. Right-click it to pick a hidden icon from a list.")
+            SettingsSection("Layout") { layout }
+            SettingsSection("Rules", trailing: {
+                Button("Apply Now") { Task { await module.applyRules() } }
+                    .disabled(!module.settings.enabled || module.rules.isEmpty || module.arranging)
+            }) { rules }
+            SettingsSection("Rules file") {
+                SettingsRow("Rules and settings", note: "Importing never turns hiding on.") {
+                    Button("Import…") { Task { await module.importRules() } }
+                    Button("Export…") { module.exportRules() }
                 }
-                ForEach(module.rules) { rule in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(rule.label).lineLimit(1)
-                            Text(rule.bundleID).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        Picker("Section", selection: Binding(get: { rule.section }, set: { section in
-                            var changed = rule
-                            changed.section = section
-                            Task { await module.setRule(changed) }
-                        })) {
-                            ForEach(MenuBarSection.allCases.reversed(), id: \.self) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                        Button {
-                            Task { await module.deleteRule(rule.key) }
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Delete rule")
-                        .accessibilityLabel("Delete rule")
-                    }
-                }
-                HStack {
-                    Button("Apply Rules Now") { Task { await module.applyRules() } }
-                        .disabled(!module.settings.enabled || module.rules.isEmpty || module.arranging)
-                    if module.arranging { ProgressView().controlSize(.small) }
-                }
-                if !module.settings.enabled {
-                    Text("Turn on menu bar hiding to apply rules.").font(.caption).foregroundStyle(.secondary)
-                }
-                LabeledContent("Accessibility") {
-                    if module.accessGranted {
-                        Text("Allowed")
-                    } else {
-                        Button("Grant Access") { module.requestAccess() }
-                    }
-                }
-                Text("Cue needs Accessibility to list items and move them with a simulated ⌘-drag. It reads only item positions and names, and stores names only on this Mac.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Import and export") {
-                HStack {
-                    Button("Export Rules…") { module.exportRules() }
-                    Button("Import Rules…") { Task { await module.importRules() } }
-                }
-                Text("Exports rules and settings as JSON. Importing merges rules by item and never turns menu bar hiding on.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let status = module.status {
-                Section { StatusLine(text: status.text, success: status.success) }
-            }
+            if let failure { StatusLine(text: failure, success: false) }
+            if let status = module.status { StatusLine(text: status.text, success: status.success) }
         }
-        .formStyle(.grouped)
-        .onAppear {
-            module.refreshAccess()
-            rehideText = String(module.settings.autoRehideSeconds)
-        }
-        .onChange(of: module.settings.autoRehideSeconds) { _, value in rehideText = String(value) }
+        .onAppear(perform: module.refreshAccess)
+        .task { await module.refreshItems() }
     }
 
-    private func saveRehide() {
-        Task {
-            do {
-                try await module.setAutoRehide(rehideText)
-                rehideError = nil
-            } catch {
-                rehideError = error.cueError.message
+    private var rehideOptions: [Int] {
+        Self.rehideChoices.contains(module.settings.autoRehideSeconds) ? Self.rehideChoices : [module.settings.autoRehideSeconds] + Self.rehideChoices
+    }
+
+    private func entries(_ section: MenuBarSection) -> [ScannedItem] {
+        if case .loaded(let items) = module.items { items.filter { $0.section == section } } else { [] }
+    }
+
+    @ViewBuilder private var layout: some View {
+        if !module.settings.enabled {
+            SettingsRow("Turn on menu bar hiding to arrange items.")
+        } else if !module.accessGranted {
+            SettingsRow("Cue needs Accessibility to list and move items.") { Button("Grant Access") { module.requestAccess() } }
+        } else {
+            ForEach(Array(sections.enumerated()), id: \.element) { index, section in
+                if index > 0 { CardDivider() }
+                HStack(alignment: .top, spacing: 0) {
+                    Text(section.title).fontWeight(.medium).frame(width: 112, alignment: .leading).padding(.top, 5)
+                    FlowLayout {
+                        ForEach(entries(section)) { entry in
+                            chip(entry)
+                        }
+                        if entries(section).isEmpty { Text("Drop items here").foregroundStyle(.tertiary).frame(height: 28) }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+                .dropDestination(for: String.self) { keys, _ in
+                    guard let key = keys.first, case .loaded(let items) = module.items,
+                          let entry = items.first(where: { $0.id == key }) else { return false }
+                    Task { await module.move(entry, to: section) }
+                    return true
+                }
             }
         }
     }
 
-    private func add(_ text: String) {
+    private func chip(_ entry: ScannedItem) -> some View {
+        HStack(spacing: 6) {
+            if let icon = MenuBarModule.icon(entry) { Image(nsImage: icon).resizable().frame(width: 13, height: 13) }
+            Text(entry.item.label).font(.system(size: 12.5)).lineLimit(1)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .background(Cue.fill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Cue.hairline) }
+        .opacity(entry.item.movable ? 1 : 0.6)
+        .draggable(entry.id)
+        .help(entry.item.movable ? entry.item.appName : "Fixed by macOS")
+    }
+
+    @ViewBuilder private var rules: some View {
+        HStack(spacing: 0) {
+            ruleColumns(Text("When"), Text("Item"), Text("Set to"))
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        CardDivider()
+        if module.rules.isEmpty && module.settings.revealApps.isEmpty {
+            Text("No rules").foregroundStyle(.secondary).frame(maxWidth: .infinity).frame(height: 56)
+            CardDivider()
+        }
+        ForEach(module.rules) { rule in
+            ruleRow(.item(rule.key)) {
+                ruleColumns(Text("Always"), Text(rule.label).lineLimit(1), sectionPicker(rule))
+            }
+        }
+        ForEach(module.settings.revealApps, id: \.self) { id in
+            ruleRow(.app(id)) {
+                ruleColumns(Text("\(Self.appName(id)) in front").lineLimit(1), Text("Hidden items"), Text("Shown"))
+            }
+        }
+        PlusMinusBar(removeEnabled: selectedRule != nil, remove: removeRule) {
+            Menu {
+                Menu("Item") {
+                    if case .loaded(let items) = module.items {
+                        ForEach(items.filter(\.item.movable)) { entry in
+                            Button(entry.item.label) { addRule(entry) }
+                        }
+                    }
+                }
+                Menu("Show Hidden Items While App Is in Front") {
+                    ForEach(Self.runningApps, id: \.id) { app in
+                        Button(app.name) { addApp(app.id) }
+                    }
+                }
+            } label: { Image(systemName: "plus") }
+        }
+    }
+
+    private func ruleColumns<A: View, B: View, C: View>(_ when: A, _ item: B, _ target: C) -> some View {
+        HStack(spacing: 0) {
+            when.frame(width: 200, alignment: .leading)
+            item.frame(width: 200, alignment: .leading)
+            target.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func ruleRow<Content: View>(_ id: RuleRow, @ViewBuilder content: () -> Content) -> some View {
+        let content = content()
+        return Button { selectedRule = id } label: {
+            content
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(selectedRule == id ? Cue.selection : .clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) { CardDivider() }
+    }
+
+    private func sectionPicker(_ rule: MenuBarRule) -> some View {
+        Picker("Set to", selection: Binding(get: { rule.section }, set: { section in
+            var changed = rule
+            changed.section = section
+            Task { await module.setRule(changed) }
+        })) {
+            ForEach(sections, id: \.self) { Text($0.title).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+        .controlSize(.small)
+    }
+
+    private func removeRule() {
+        switch selectedRule {
+        case .item(let key): Task { await module.deleteRule(key) }
+        case .app(let id): Task { await module.removeRevealApp(id) }
+        case nil: break
+        }
+        selectedRule = nil
+    }
+
+    private func addRule(_ entry: ScannedItem) {
+        let item = entry.item
+        let label = item.label == item.appName ? item.appName : "\(item.appName) — \(item.label)"
+        Task { await module.setRule(MenuBarRule(key: item.key, bundleID: item.bundleID, label: label, section: entry.section)) }
+    }
+
+    private func addApp(_ id: String) {
         Task {
             do {
-                try await module.addRevealApp(text)
-                newApp = ""
-                appError = nil
+                try await module.addRevealApp(id)
+                failure = nil
             } catch {
-                appError = error.cueError.message
+                failure = error.cueError.message
+            }
+        }
+    }
+
+    private func saveRehide(_ seconds: Int) {
+        Task {
+            do {
+                try await module.setAutoRehide(String(seconds))
+                failure = nil
+            } catch {
+                failure = error.cueError.message
             }
         }
     }

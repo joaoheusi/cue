@@ -51,6 +51,10 @@ import UniformTypeIdentifiers
             context.log.record(error, "menuBar")
             return
         }
+        let legacy = "Super+Alt+B"
+        if settings.shortcut == legacy, context.hotKeys.statuses[PromptsModel.menuBarScopeOwner]?.requested == Shortcut(legacy) {
+            await update { $0.shortcut = MenuBarSettings.defaultShortcut }
+        }
         refreshAccess()
         if frontmostObserver == nil {
             frontmostObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -257,7 +261,14 @@ import UniformTypeIdentifiers
             status = ("macOS does not allow moving this item.", false)
             return
         }
-        let target = entry.section.shifted(delta)
+        await move(entry, to: entry.section.shifted(delta))
+    }
+
+    func move(_ entry: ScannedItem, to target: MenuBarSection) async {
+        guard entry.item.movable else {
+            status = ("macOS does not allow moving this item.", false)
+            return
+        }
         guard target != entry.section else { return }
         let item = entry.item
         let label = item.label == item.appName ? item.appName : "\(item.appName) — \(item.label)"
@@ -343,7 +354,7 @@ import UniformTypeIdentifiers
         separators?.popUp(menu)
     }
 
-    private static func icon(_ entry: ScannedItem) -> NSImage? {
+    static func icon(_ entry: ScannedItem) -> NSImage? {
         var pid: pid_t = 0
         guard AXUIElementGetPid(entry.element, &pid) == .success, let source = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
         let icon = source.copy() as? NSImage
@@ -434,6 +445,8 @@ import UniformTypeIdentifiers
         context.log.record(error, "menuBar")
         status = (error.message, false)
     }
+
+    func openSettings() { context.openSettings(.menuBar) }
 
     func commandView() -> AnyView { AnyView(MenuBarCommandView(module: self)) }
 

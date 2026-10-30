@@ -6,12 +6,17 @@ import UniformTypeIdentifiers
     private(set) var state: LoadState<LibrarySnapshot> = .loading
     var notice: (text: String, success: Bool)?
     var pendingImport: ImportPreview?
+    var pendingAsk: Action?
+    private(set) var run: ActionRun?
     @ObservationIgnored private var store: PromptStore?
     @ObservationIgnored let context: AppContext
 
     static let pasteReason = "To paste a prompt into the app you were using, Cue reads which text field has focus and sends one ⌘V to it."
 
-    init(context: AppContext) { self.context = context }
+    init(context: AppContext) {
+        self.context = context
+        installRunHandling()
+    }
 
     var snapshot: LibrarySnapshot? {
         if case .loaded(let snapshot) = state { snapshot } else { nil }
@@ -68,12 +73,14 @@ import UniformTypeIdentifiers
         }
     }
 
-    func saveSettings(_ change: (inout PromptSettings) -> Void) async {
-        guard let snapshot else { return }
+    @discardableResult
+    func saveSettings(_ change: (inout PromptSettings) -> Void) async -> Bool {
+        guard let snapshot else { return false }
         var settings = snapshot.settings
         change(&settings)
-        await perform { try await $0.saveSettings(settings, revision: snapshot.revision) }
+        let saved = await perform { try await $0.saveSettings(settings, revision: snapshot.revision) } != nil
         applyTheme()
+        return saved
     }
 
     static func owner(_ action: Action) -> String { "action:\(action.id)" }
@@ -88,10 +95,33 @@ import UniformTypeIdentifiers
                 context.hotKeys.markUnavailable("palette", shortcut, reason: error.message)
             }
         }
+        if let shortcut = Shortcut(snapshot.settings.menuBarScopeShortcut) {
+            do {
+                try context.hotKeys.register(Self.menuBarScopeOwner, shortcut) { [weak self] in self?.context.openCommand(.menuBar) }
+            } catch {
+                context.hotKeys.markUnavailable(Self.menuBarScopeOwner, shortcut, reason: error.message)
+            }
+        }
         for action in snapshot.actions {
             guard let chord = snapshot.bindings[Self.owner(action)] else { continue }
             activate(action, chord: chord)
         }
+    }
+
+    static let menuBarScopeOwner = "menuBarScope"
+
+    func setMenuBarScopeShortcut(_ shortcut: Shortcut?) async {
+        if let shortcut {
+            do {
+                try context.hotKeys.register(Self.menuBarScopeOwner, shortcut) { [weak self] in self?.context.openCommand(.menuBar) }
+            } catch {
+                notice = (error.message, false)
+                return
+            }
+        } else {
+            context.hotKeys.unregister(Self.menuBarScopeOwner)
+        }
+        await saveSettings { $0.menuBarScopeShortcut = shortcut?.description ?? "" }
     }
 
     private func activate(_ action: Action, chord: String) {
@@ -113,15 +143,20 @@ import UniformTypeIdentifiers
         }
     }
 
-    func setPaletteShortcut(_ shortcut: Shortcut) async {
-        do {
-            try context.hotKeys.register("palette", shortcut) { [weak self] in self?.context.openCommand(.prompts) }
-        } catch {
-            notice = (error.message, false)
-            return
+    func setPaletteShortcut(_ shortcut: Shortcut?) async {
+        if let shortcut {
+            do {
+                try context.hotKeys.register("palette", shortcut) { [weak self] in self?.context.openCommand(.prompts) }
+            } catch {
+                notice = (error.message, false)
+                return
+            }
+        } else {
+            context.hotKeys.unregister("palette")
         }
-        await perform("Shortcut saved.") { try await $0.saveBinding(owner: "palette", chord: shortcut.description) }
-        await saveSettings { $0.paletteShortcut = shortcut.description }
+        let chord = shortcut?.description ?? ""
+        await perform { try await $0.saveBinding(owner: "palette", chord: chord) }
+        await saveSettings { $0.paletteShortcut = chord }
     }
 
     func setShortcut(_ shortcut: Shortcut?, for action: Action) async {
@@ -140,8 +175,8 @@ import UniformTypeIdentifiers
     }
 
     @discardableResult
-    func save(_ action: Action) async -> Action? {
-        let saved = await perform("Saved.") { try await $0.save(action) }
+    func save(_ action: Action, quiet: Bool = false) async -> Action? {
+        let saved = await perform(quiet ? nil : "Saved.") { try await $0.save(action) }
         if let saved, let chord = snapshot?.bindings[Self.owner(saved)] { activate(saved, chord: chord) }
         return saved
     }
@@ -194,15 +229,211 @@ import UniformTypeIdentifiers
         restoreShortcuts()
     }
 
-    func deliver(_ action: Action, copyOnly: Bool) async -> Result<Delivery, CueError> {
+    func deliver(_ action: Action, copyOnly: Bool, answers: [String: String] = [:]) async -> Result<Delivery, CueError> {
         guard let invocation = context.invocation, !invocation.expired else {
             return .failure(CueError("INVOCATION_EXPIRED", "Reopen the palette to use this action."))
         }
-        return await deliver(action, copyOnly: copyOnly, invocation: invocation)
+        return await deliver(action, copyOnly: copyOnly, invocation: invocation, answers: answers)
+    }
+
+    func credentials() throws(CueError) -> Assistant.Credentials {
+        let stored = snapshot?.settings.keyStorage == .keychain ? ClaudeKey.load(service: context.claudeKeyService) : nil
+        return try Assistant.credentials(in: context.dataDirectory, storedKey: stored)
+    }
+
+    func setFavorite(_ action: Action, _ favorite: Bool) async {
+        var changed = action
+        changed.favorite = favorite
+        await perform { try await $0.save(changed) }
+    }
+
+    func setEnabled(_ action: Action, _ enabled: Bool) async {
+        var changed = action
+        changed.enabled = enabled
+        _ = await save(changed)
+    }
+
+    func startRun(_ requested: Action, copyOnly: Bool, answers: [String: String] = [:]) async -> CueError? {
+        guard let invocation = context.invocation, !invocation.expired else {
+            return CueError("INVOCATION_EXPIRED", "Reopen the palette to use this action.")
+        }
+        guard let store else { return CueError.storage() }
+        let action: Action
+        do {
+            action = try await store.get(requested.id)
+        } catch {
+            return error.cueError
+        }
+        guard action.revision == requested.revision else { return CueError("REVISION_CONFLICT", "Action changed. Reload before continuing.") }
+        guard action.enabled else { return CueError("ACTION_DISABLED", "Enable this action before using it.") }
+        let paste = willPaste(action, copyOnly: copyOnly)
+        switch prepare(action.template, paste: paste, assistant: true, invocation: invocation, answers: answers) {
+        case .failure(let error):
+            return error
+        case .success(let prepared):
+            if invocation.cancelled { return nil }
+            invocation.consumed = true
+            let next = ActionRun(title: action.name, kind: .claude, surface: .palette, prompt: prepared.output, input: prepared.input, inputName: prepared.inputName,
+                                 action: action, invocation: invocation, target: prepared.target, targetName: invocation.front?.localizedName,
+                                 generation: prepared.generation, finish: paste ? .paste : .copy)
+            replaceRun(with: next)
+            begin(next)
+            return nil
+        }
+    }
+
+    private func replaceRun(with next: ActionRun) {
+        run?.task?.cancel()
+        run = next
+    }
+
+    func test(_ draft: Action) {
+        guard run?.isRunning != true else {
+            notice = ("Stop the running action before you test this one.", false)
+            return
+        }
+        let invocation = Invocation(target: .failure(PasteFailure.targetUnavailable.error))
+        let claude = draft.ai == true
+        switch prepare(draft.template, paste: false, assistant: claude, invocation: invocation, answers: [:], sampleSelection: "Selected text") {
+        case .failure(let error):
+            notice = (error.message, false)
+        case .success(let prepared):
+            let next = ActionRun(title: draft.name, kind: draft.runsAs, surface: .library, prompt: prepared.output, input: prepared.input,
+                                 inputName: prepared.inputName, invocation: invocation, finish: .keep)
+            replaceRun(with: next)
+            if claude {
+                begin(next)
+            } else {
+                next.output = prepared.output
+                next.phase = .finished
+                next.ended = next.started
+            }
+        }
+    }
+
+    func showOutput(_ title: String, text: String, surface: ActionRun.Surface) {
+        if surface == .library, run?.isRunning == true {
+            notice = ("\(title) finished, but its output is hidden while another action runs.", false)
+            return
+        }
+        let next = ActionRun(title: title, kind: .script, surface: surface, invocation: context.invocation ?? Invocation(target: .failure(PasteFailure.targetUnavailable.error)), finish: .keep)
+        next.output = text
+        next.phase = .finished
+        next.ended = next.started
+        replaceRun(with: next)
+    }
+
+    private func begin(_ run: ActionRun) {
+        let credentials: Assistant.Credentials
+        do {
+            credentials = try self.credentials()
+        } catch {
+            run.phase = .failed(error)
+            return
+        }
+        run.task?.cancel()
+        run.output = ""
+        run.message = nil
+        run.phase = .running
+        run.started = Date()
+        run.ended = nil
+        run.task = Task { [weak self, weak run] in
+            do {
+                for try await chunk in Assistant.stream(run?.prompt ?? "", credentials: credentials) {
+                    run?.output += chunk
+                }
+                guard let run, !Task.isCancelled else { return }
+                run.phase = .finished
+                run.ended = Date()
+                await self?.finished(run)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let run, !Task.isCancelled else { return }
+                run.phase = .failed(error.cueError)
+                run.ended = Date()
+                self?.context.log.record(error.cueError, "ai")
+                if self?.context.commandVisible() == false { self?.report(run.title, error.cueError) }
+            }
+        }
+    }
+
+    private func finished(_ run: ActionRun) async {
+        if let action = run.action, let store {
+            try? await store.recordUse(action.id)
+            try? await reload()
+        }
+        switch run.finish {
+        case .paste: await deliver(run, paste: true)
+        case .copy: await deliver(run, paste: false)
+        case .keep:
+            if !context.commandVisible() { context.notifier.post(run.title, "Result ready. Open Cue to see it.") }
+        }
+    }
+
+    func deliver(_ run: ActionRun, paste: Bool) async {
+        let visible = context.commandVisible()
+        let delivery = await context.paste.deliver(run.output, paste: paste && run.target != nil, target: run.target, generation: run.generation,
+                                                   isCancelled: { run.invocation.cancelled }, hide: context.closeCommand)
+        var failure: CueError?
+        switch delivery {
+        case .pasted, .copied:
+            if !visible { context.notifier.post(run.title, delivery == .pasted ? "Result pasted." : "Result copied to the clipboard.") }
+            if self.run === run { self.run = nil }
+        case .cancelled:
+            break
+        case .failedBeforeCopy(let error) where error == PasteFailure.clipboardChanged.error:
+            failure = CueError(error.code, "The clipboard changed while Claude was working, so Cue kept your new copy. Press ⌘↩ to copy this result.")
+        case .copiedNotPasted(let error), .failedBeforeCopy(let error):
+            failure = error
+        }
+        guard let failure else { return }
+        context.log.record(failure, "ai")
+        run.generation = nil
+        if visible {
+            run.message = failure.message
+            self.run = run
+            context.showCommandPassively()
+        } else {
+            report(run.title, failure)
+        }
+    }
+
+    func stopRun() {
+        guard let run, run.isRunning else { return }
+        run.task?.cancel()
+        run.phase = .stopped
+        run.ended = Date()
+    }
+
+    func retryRun() {
+        guard let run, run.kind == .claude else { return }
+        run.generation = context.paste.changeCount
+        begin(run)
+    }
+
+    func closeRun() {
+        run?.task?.cancel()
+        run?.invocation.consumed = false
+        run = nil
+    }
+
+    func installRunHandling() {
+        context.interceptCancel = { [weak self] in
+            guard let self, let run, run.surface == .palette, run.isRunning else { return false }
+            stopRun()
+            return true
+        }
+        context.keepsRunning = { [weak self] in self?.run?.isRunning == true && self?.run?.surface == .palette }
+        context.commandDidHide = { [weak self] in
+            self?.pendingAsk = nil
+            guard let self, let run, run.surface == .palette, !run.isRunning, run.message == nil else { return }
+            self.run = nil
+        }
     }
 
     func copy(_ action: Action) async {
-        let result = await deliver(action, copyOnly: true, invocation: Invocation(target: .failure(PasteFailure.targetUnavailable.error)))
+        let result = await deliver(action, copyOnly: true, invocation: Invocation(target: .failure(PasteFailure.targetUnavailable.error)), answers: [:])
         switch result {
         case .success(let delivery): notice = (delivery.message, delivery.succeeded)
         case .failure(let error): notice = (error.message, false)
@@ -211,9 +442,14 @@ import UniformTypeIdentifiers
 
     private func runDirect(actionID: String) async {
         guard let action = snapshot?.actions.first(where: { $0.id == actionID }) else { return }
+        if let uses = try? Template.uses(action.template), !uses.questions.isEmpty {
+            pendingAsk = action
+            context.showCommand(.prompts)
+            return
+        }
         let paste = willPaste(action, copyOnly: false)
-        let invocation = Invocation(target: paste ? context.paste.capture() : .failure(PasteFailure.targetUnavailable.error))
-        let result = await deliver(action, copyOnly: false, invocation: invocation)
+        let invocation = Invocation(target: paste ? context.paste.capture() : .failure(PasteFailure.targetUnavailable.error), front: NSWorkspace.shared.frontmostApplication)
+        let result = await deliver(action, copyOnly: false, invocation: invocation, answers: [:])
         switch result {
         case .success(let delivery) where delivery.succeeded || delivery == .cancelled: break
         case .success(let delivery): show(delivery.message)
@@ -239,7 +475,7 @@ import UniformTypeIdentifiers
         return await render(snippet.template, paste: !copyOnly && willPasteByDefault, assistant: nil, invocation: invocation)
     }
 
-    private func deliver(_ requested: Action, copyOnly: Bool, invocation: Invocation) async -> Result<Delivery, CueError> {
+    private func deliver(_ requested: Action, copyOnly: Bool, invocation: Invocation, answers: [String: String]) async -> Result<Delivery, CueError> {
         guard let store else { return .failure(CueError.storage()) }
         let action: Action
         do {
@@ -252,7 +488,7 @@ import UniformTypeIdentifiers
         }
         guard action.enabled else { return .failure(CueError("ACTION_DISABLED", "Enable this action before using it.")) }
         let result = await render(action.template, paste: willPaste(action, copyOnly: copyOnly),
-                                  assistant: action.ai == true ? action.name : nil, invocation: invocation)
+                                  assistant: action.ai == true ? action.name : nil, invocation: invocation, answers: answers)
         guard case .success(let delivery) = result else { return result }
         switch delivery {
         case .pasted, .copied, .copiedNotPasted:
@@ -264,7 +500,16 @@ import UniformTypeIdentifiers
         return result
     }
 
-    private func render(_ template: String, paste: Bool, assistant: String?, invocation: Invocation) async -> Result<Delivery, CueError> {
+    private struct Prepared {
+        var output: String
+        var input: String?
+        var inputName = "clipboard"
+        var target: PasteTarget?
+        var generation: Int?
+    }
+
+    private func prepare(_ template: String, paste: Bool, assistant: Bool, invocation: Invocation, answers: [String: String],
+                         sampleSelection: String? = nil) -> Result<Prepared, CueError> {
         var target: PasteTarget?
         if paste {
             switch invocation.target {
@@ -275,29 +520,46 @@ import UniformTypeIdentifiers
                 return .failure(error)
             }
         }
-        let generation = paste || assistant != nil ? context.paste.changeCount : nil
-        var output: String
-        var credentials: Assistant.Credentials?
+        let generation = paste || assistant ? context.paste.changeCount : nil
         do {
-            var clipboard = ""
-            if try Template.needsClipboard(template) {
-                clipboard = try context.paste.readText()
-                if clipboard.isEmpty { throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.") }
-                try Template.validateText(clipboard, maxBytes: Template.outputLimit)
+            let uses = try Template.uses(template)
+            var inputs = Template.Inputs(answers: answers)
+            if uses.clipboard {
+                inputs.clipboard = try context.paste.readText()
+                if inputs.clipboard.isEmpty { throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.") }
+                try Template.validateText(inputs.clipboard, maxBytes: Template.outputLimit)
             }
-            output = try Template.renderLocal(template, clipboard: clipboard)
-            if assistant != nil { credentials = try Assistant.credentials(in: context.dataDirectory) }
+            if uses.selection {
+                inputs.selection = sampleSelection ?? context.paste.selectedText(in: invocation.front) ?? ""
+                if inputs.selection.isEmpty { throw CueError("SELECTION_EMPTY", "Select text before using this action.") }
+                try Template.validateText(inputs.selection, maxBytes: Template.outputLimit)
+            }
+            let output = try Template.renderLocal(template, inputs: inputs)
+            if assistant { _ = try credentials() }
+            return .success(Prepared(output: output, input: uses.clipboard ? inputs.clipboard : uses.selection ? inputs.selection : nil,
+                                     inputName: uses.clipboard ? "clipboard" : "selection", target: target, generation: generation))
         } catch {
             return .failure(error.cueError)
         }
+    }
+
+    private func render(_ template: String, paste: Bool, assistant: String?, invocation: Invocation, answers: [String: String] = [:]) async -> Result<Delivery, CueError> {
+        let prepared: Prepared
+        switch prepare(template, paste: paste, assistant: assistant != nil, invocation: invocation, answers: answers) {
+        case .success(let value): prepared = value
+        case .failure(let error): return .failure(error)
+        }
+        var output = prepared.output
+        let target = prepared.target
+        let generation = prepared.generation
         if invocation.cancelled { return .success(.cancelled) }
         invocation.consumed = true
-        if let assistant, let credentials {
+        if let assistant {
             context.closeCommand()
             do {
-                output = try await Assistant.complete(output, credentials: credentials)
+                output = try await Assistant.complete(output, credentials: try credentials())
             } catch {
-                report(assistant, error)
+                report(assistant, error.cueError)
                 return .success(.cancelled)
             }
         }
@@ -319,7 +581,7 @@ import UniformTypeIdentifiers
         return .success(delivery)
     }
 
-    private func report(_ title: String, _ error: CueError) {
+    func report(_ title: String, _ error: CueError) {
         context.log.record(error, "ai")
         context.notifier.post(title, error.message) { [weak self] in self?.show(error.message) }
     }
@@ -335,7 +597,7 @@ import UniformTypeIdentifiers
             ("Categories", "\(snapshot.categories.count)"),
             ("Direct shortcuts", "\(snapshot.bindings.keys.filter { $0.hasPrefix("action:") }.count)"),
             ("Library revision", "\(snapshot.revision)"),
-            ("Settings", "theme=\(s.theme.rawValue) delivery=\(s.defaultDelivery.rawValue) onboarded=\(s.onboarded) preview=\(s.preview)"),
+            ("Settings", "theme=\(s.theme.rawValue) delivery=\(s.defaultDelivery.rawValue) onboarded=\(s.onboarded) previewPane=\(s.previewPane)"),
         ]
     }
 }

@@ -6,6 +6,9 @@ import Sparkle
     private var pendingInstall: (() -> Void)?
     private var retry: Timer?
     var isIdle: () -> Bool = { true }
+    var onChange: () -> Void = {}
+    private(set) var readyVersion: String?
+    private(set) var upToDate = false
 
     init(enabled: Bool) {
         super.init()
@@ -35,8 +38,31 @@ import Sparkle
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock: @escaping () -> Void) -> Bool {
         pendingInstall = immediateInstallationBlock
+        readyVersion = item.displayVersionString
+        onChange()
         installWhenIdle()
         return true
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        upToDate = true
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        upToDate = false
+    }
+
+    func restartToUpdate() {
+        guard let install = pendingInstall else { return }
+        retry?.invalidate()
+        consumeInstall()
+        install()
+    }
+
+    private func consumeInstall() {
+        pendingInstall = nil
+        readyVersion = nil
+        onChange()
     }
 
     private func installWhenIdle() {
@@ -44,7 +70,7 @@ import Sparkle
         guard let install = pendingInstall else { return }
         let quiet = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) > 60
         if quiet && isIdle() {
-            pendingInstall = nil
+            consumeInstall()
             install()
         } else {
             retry = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in

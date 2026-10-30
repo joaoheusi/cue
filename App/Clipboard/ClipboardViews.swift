@@ -2,17 +2,65 @@ import AppKit
 import CueKit
 import SwiftUI
 
+private enum ClipFilter: String, CaseIterable {
+    case all, pinned, text, links, code
+
+    var title: String { rawValue.capitalized }
+
+    func matches(_ item: ClipItem) -> Bool {
+        switch self {
+        case .all: true
+        case .pinned: item.isPinned
+        case .text: item.kind == .text
+        case .links: item.kind == .link
+        case .code: item.kind == .code
+        }
+    }
+}
+
+private struct ClipEntry: Identifiable {
+    var item: ClipItem
+    var header: String?
+    var id: String { item.id }
+}
+
 struct ClipboardCommandView: View {
     let module: ClipboardModule
     @State private var query = ""
     @State private var selection: String?
+    @State private var filter = ClipFilter.all
+    @State private var app: String?
     @State private var pinboard: String?
 
     private var results: [ClipItem] {
-        ClipboardSearch.filter(module.items, query: query, pinboard: module.pinboards.contains { $0.id == pinboard } ? pinboard : nil)
+        ClipboardSearch.filter(module.items, query: query, pinboard: filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil)
+            .filter { filter.matches($0) && (app == nil || $0.source == app) }
+    }
+
+    private var entries: [ClipEntry] {
+        let items = results
+        guard query.trimmingCharacters(in: .whitespaces).isEmpty else { return items.map { ClipEntry(item: $0) } }
+        let pinned = items.filter(\.isPinned)
+        let calendar = Calendar.current
+        func title(_ item: ClipItem) -> String {
+            if calendar.isDateInToday(item.lastUsedAt) { return "Today" }
+            return calendar.isDateInYesterday(item.lastUsedAt) ? "Yesterday" : "Earlier"
+        }
+        var output: [ClipEntry] = pinned.enumerated().map { ClipEntry(item: $0.element, header: $0.offset == 0 ? "Pinned" : nil) }
+        var last: String?
+        for item in items where !item.isPinned {
+            let heading = title(item)
+            output.append(ClipEntry(item: item, header: heading == last ? nil : heading))
+            last = heading
+        }
+        return output
     }
 
     private var current: ClipItem? { results.first { $0.id == selection } }
+
+    private var sources: [String] {
+        Array(Set(module.items.compactMap(\.source))).sorted { module.appName($0).localizedStandardCompare(module.appName($1)) == .orderedAscending }
+    }
 
     var body: some View {
         content.onAppear {
@@ -37,7 +85,7 @@ struct ClipboardCommandView: View {
             EmptyStateView(symbol: "exclamationmark.triangle", title: "Clipboard history is unavailable", message: error.message,
                            actionTitle: "Try Again", action: module.retry)
         case .ready where !module.captureEnabled && module.items.isEmpty:
-            EmptyStateView(symbol: "doc.on.clipboard", title: "Clipboard history is off",
+            EmptyStateView(symbol: "clipboard", title: "Clipboard history is off",
                            message: "Turn it on to save text you copy and paste it again later. History is encrypted and stays on this Mac.",
                            actionTitle: "Turn On Clipboard History") { module.setCaptureEnabled(true) }
                 .accessibilityIdentifier("clipboard.turnOn")
@@ -48,9 +96,13 @@ struct ClipboardCommandView: View {
 
     private var list: some View {
         VStack(spacing: 0) {
-            CommandList(query: $query, placeholder: "Search clipboard history", items: results, selection: $selection,
-                        row: row, onSubmit: { item, alternate in Task { await module.use(item, paste: !alternate) } })
-                .overlay { emptyMessage.padding(.top, 48) }
+            CommandList(query: $query, placeholder: "Search clipboard", items: entries, selection: $selection,
+                        header: { $0.header }, showsDetail: current != nil,
+                        row: { entry, selected in row(entry.item, selected) },
+                        bar: { bar },
+                        detail: { if let current { detail(current) } },
+                        onSubmit: { entry, alternate in Task { await module.use(entry.item, paste: !alternate) } })
+                .overlay { emptyMessage.padding(.top, 96) }
             if module.accessDenied && module.captureEnabled {
                 ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Settings", retry: module.openPasteSettings)
                     .padding(.horizontal, 12).padding(.vertical, 6)
@@ -62,28 +114,82 @@ struct ClipboardCommandView: View {
             }
             footer
         }
+        .background { shortcuts }
+    }
+
+    private var bar: some View {
+        HStack(spacing: 6) {
+            ForEach(ClipFilter.allCases, id: \.self) { option in
+                FilterChip(title: option.title, selected: filter == option) { filter = option }
+            }
+            if filter == .pinned, module.pinboards.count > 1 {
+                Picker("Pinboard", selection: $pinboard) {
+                    Text("All pinboards").tag(String?.none)
+                    ForEach(module.pinboards) { Text($0.name).tag(Optional($0.id)) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .controlSize(.small)
+                .accessibilityIdentifier("clipboard.pinboard")
+            }
+            Spacer()
+            Menu(app.map(module.appName) ?? "Any app") {
+                Button("Any app") { app = nil }
+                ForEach(sources, id: \.self) { id in
+                    Button(module.appName(id)) { app = id }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .font(.system(size: 12))
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder private var emptyMessage: some View {
         if results.isEmpty {
-            if !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                EmptyStateView(symbol: "magnifyingglass", title: "No matches", message: "Try different words, or choose All pinboards.")
-            } else if pinboard != nil {
-                EmptyStateView(symbol: "pin", title: "This pinboard is empty", message: "Select an item and press ⌘P to pin it.")
+            if !query.trimmingCharacters(in: .whitespaces).isEmpty || app != nil || (filter != .all && filter != .pinned) {
+                EmptyStateView(symbol: "magnifyingglass", title: "No matches", message: "Try different words, or choose All and Any app.")
+            } else if filter == .pinned {
+                EmptyStateView(symbol: "pin", title: "Nothing pinned yet", message: "Select an item and press ⌘P to pin it.")
             } else {
-                EmptyStateView(symbol: "doc.on.clipboard", title: "Nothing copied yet",
+                EmptyStateView(symbol: "clipboard", title: "Nothing copied yet",
                                message: module.captureEnabled ? "Copy text in any app. It appears here." : "Clipboard history is off. Turn it on in Settings → Clipboard.")
             }
         }
     }
 
-    private func row(_ item: ClipItem, _ selected: Bool) -> some View {
-        let board = module.pinboards.first { $0.id == item.pinboardID }
-        let when = item.lastUsedAt.formatted(.relative(presentation: .named))
-        return CommandRow(title: item.preview, subtitle: item.source.map { "\(when) · \(module.appName($0))" } ?? when,
-                          symbol: board == nil ? "doc.on.clipboard" : "pin.fill", selected: selected) {
-            if let board { Text(board.name).font(.caption).lineLimit(1) }
+    private func symbol(_ item: ClipItem) -> (String, Color) {
+        if item.sensitive { return ("lock", Cue.warning) }
+        if item.isPinned { return ("pin", Cue.claude) }
+        switch item.kind {
+        case .link: return ("link", .accentColor)
+        case .code: return ("chevron.left.forwardslash.chevron.right", .secondary)
+        case .text: return ("text.alignleft", .secondary)
         }
+    }
+
+    @ViewBuilder private func meta(_ item: ClipItem) -> some View {
+        if let expires = item.expiresAt {
+            TimelineView(.periodic(from: .now, by: 15)) { _ in
+                Text("Deletes in \(ShortAge.until(expires))").foregroundStyle(Cue.warning)
+            }
+        } else if item.isPinned {
+            Text(item.source.map(module.appName) ?? "")
+        } else {
+            Text(([item.source.map(module.appName), ShortAge.text(item.lastUsedAt)] as [String?]).compactMap { $0 }.joined(separator: " · "))
+        }
+    }
+
+    private func row(_ item: ClipItem, _ selected: Bool) -> some View {
+        let (name, color) = symbol(item)
+        return CommandRow(title: item.preview, selected: selected, monospaced: item.sensitive) {
+            Image(systemName: name).font(.system(size: 13)).foregroundStyle(color).frame(width: 16)
+        } accessory: {
+            meta(item)
+        }
+        .background(item.sensitive && !selected ? Cue.warningFill : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contextMenu {
             Button("Paste") { Task { await module.use(item, paste: true) } }
             Button("Copy") { Task { await module.use(item, paste: false) } }
@@ -98,147 +204,208 @@ struct ClipboardCommandView: View {
         }
     }
 
+    private func detail(_ item: ClipItem) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ScrollView {
+                Text(item.display)
+                    .font(item.sensitive ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5))
+                    .lineSpacing(4)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+            }
+            .background(Cue.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
+            DetailRows(rows: [
+                ("Source", item.source.map(module.appName) ?? "Unknown"),
+                ("Copied", item.createdAt.formatted(.relative(presentation: .named))),
+                ("Content", item.sensitive ? "Hidden API key or token" : contentSummary(item.text)),
+            ])
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+    }
+
+    private func contentSummary(_ text: String) -> String {
+        let words = text.split(whereSeparator: \.isWhitespace).count
+        return "\(text.count) character\(text.count == 1 ? "" : "s") · \(words) word\(words == 1 ? "" : "s")"
+    }
+
+    private var pasteLabel: String {
+        module.frontName.map { "Paste into \($0)" } ?? "Paste"
+    }
+
     private var footer: some View {
         CommandFooter {
-            Picker("Pinboard", selection: $pinboard) {
-                Text("All").tag(String?.none)
-                ForEach(module.pinboards) { Text($0.name).tag(Optional($0.id)) }
-            }
-            .labelsHidden()
-            .fixedSize()
-            .help("Show one pinboard (⌘[ and ⌘])")
-            .accessibilityIdentifier("clipboard.pinboard")
-            Button("Previous Pinboard", systemImage: "chevron.left") { cyclePinboard(-1) }
-                .keyboardShortcut("[", modifiers: .command)
-            Button("Next Pinboard", systemImage: "chevron.right") { cyclePinboard(1) }
-                .keyboardShortcut("]", modifiers: .command)
+            Text("\(module.items.count) items")
         } trailing: {
-            KeyHint(label: "Paste", keys: ["↩"])
-            KeyHint(label: "Copy", keys: ["⇧", "↩"])
-            Button(current?.isPinned == true ? "Unpin" : "Pin", systemImage: current?.isPinned == true ? "pin.slash" : "pin") {
-                if let current { Task { await module.togglePin(current) } }
-            }
-            .keyboardShortcut("p", modifiers: .command)
-            .help("Pin or unpin (⌘P)")
-            .disabled(current == nil)
-            Button("Delete", systemImage: "trash") {
-                if let current { Task { await module.delete(current) } }
-            }
-            .keyboardShortcut(.delete, modifiers: .command)
-            .help("Delete (⌘⌫)")
-            .disabled(current == nil)
+            KeyHint(label: pasteLabel, keys: "↵", primary: true)
+            KeyHint(label: "Copy", keys: "⌘↵")
+            KeyHint(label: current?.isPinned == true ? "Unpin" : "Pin", keys: "⌘P")
+            KeyHint(label: "Delete", keys: "⌘⌫")
+            if let current { ActionsHint { showMenu(current) } }
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
+    }
+
+    private var shortcuts: some View {
+        ZStack {
+            Button("Pin") { if let current { Task { await module.togglePin(current) } } }
+                .keyboardShortcut("p", modifiers: .command)
+            Button("Delete") { if let current { Task { await module.delete(current) } } }
+                .keyboardShortcut(.delete, modifiers: .command)
+            Button("Previous Pinboard") { cyclePinboard(-1) }.keyboardShortcut("[", modifiers: .command)
+            Button("Next Pinboard") { cyclePinboard(1) }.keyboardShortcut("]", modifiers: .command)
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func showMenu(_ item: ClipItem) {
+        PanelMenu.show { menu in
+            menu.add(pasteLabel) { Task { await module.use(item, paste: true) } }
+            menu.add("Copy") { Task { await module.use(item, paste: false) } }
+            menu.addItem(.separator())
+            for board in module.pinboards where board.id != item.pinboardID {
+                menu.add("Pin to \(board.name)") { Task { await module.pin(item, to: board.id) } }
+            }
+            if item.isPinned { menu.add("Unpin") { Task { await module.pin(item, to: nil) } } }
+            menu.addItem(.separator())
+            menu.add("Delete") { Task { await module.delete(item) } }
+            menu.add("Settings…") { module.openSettings() }
+        }
     }
 
     private func cyclePinboard(_ delta: Int) {
         let options: [String?] = [nil] + module.pinboards.map(\.id)
         let index = options.firstIndex(of: pinboard) ?? 0
+        filter = .pinned
         pinboard = options[(index + delta + options.count) % options.count]
     }
 }
 
 struct ClipboardSettingsView: View {
     let module: ClipboardModule
-    @State private var newBundleID = ""
+    @State private var selectedApp: String?
     @State private var newPinboard = ""
 
     var body: some View {
-        Form {
-            Section("Clipboard History") {
-                Toggle("Save clipboard history", isOn: Binding(get: { module.captureEnabled }, set: { module.setCaptureEnabled($0) }))
-                    .accessibilityIdentifier("clipboard.capture")
-                Text("Cue saves plain text you copy, encrypted with a key in your Keychain. It skips passwords, concealed and temporary items, secure text fields, and the apps below. Nothing leaves this Mac.")
-                    .font(.callout).foregroundStyle(.secondary)
-                switch module.phase {
-                case .failed(let error) where error == ClipboardStore.keyUnavailable:
-                    ErrorBanner(error: error, retryTitle: "Try Again", retry: module.retry)
-                    Button("Reset History…", role: .destructive, action: module.resetHistory)
-                case .failed(let error):
-                    ErrorBanner(error: error, retryTitle: "Try Again", retry: module.retry)
-                default:
-                    EmptyView()
+        SettingsPage {
+            SettingsSection("History") {
+                SettingsRow("Save clipboard history", weight: .medium) {
+                    SwitchToggle(isOn: Binding(get: { module.captureEnabled }, set: { module.setCaptureEnabled($0) }), label: "Save clipboard history")
+                        .accessibilityIdentifier("clipboard.capture")
                 }
-                if module.accessDenied && module.captureEnabled {
-                    ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Try Again", retry: module.recheckAccess)
-                    Button("Open Paste Settings…", action: module.openPasteSettings)
+                CardDivider()
+                SettingsRow("Keep unpinned items for") {
+                    picker(\.retention, Retention.allCases) { $0.title }
                 }
-            }
-
-            Section("Expiration") {
-                Picker("Delete unpinned items after", selection: setting(\.retention)) {
-                    ForEach(Retention.allCases, id: \.self) { Text($0.title).tag($0) }
+                CardDivider()
+                SettingsRow("Keep at most") {
+                    picker(\.maxItems, ClipboardSettings.maxItemChoices) { "\($0) items" }
                 }
-                Picker("Keep at most", selection: setting(\.maxItems)) {
-                    ForEach(ClipboardSettings.maxItemChoices, id: \.self) { Text("\($0) unpinned items").tag($0) }
-                }
-                Text("Pinned items never expire. Expired items are deleted from disk.").font(.callout).foregroundStyle(.secondary)
-            }
-
-            Section("Shortcut") {
-                LabeledContent("Open clipboard history") {
-                    ShortcutRecorder(value: module.settings.shortcut.flatMap(Shortcut.init), onChange: module.setShortcut)
-                }
-                if let error = module.hotKeyError {
-                    Label(error, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(.orange)
+                CardDivider()
+                SettingsRow("Stored", note: stored) {
+                    Button("Clear History…", role: .destructive, action: module.clearHistory).foregroundStyle(.red)
                 }
             }
-
-            Section("Excluded Apps") {
-                Text("Cue never saves what you copy while one of these apps is in front.").font(.callout).foregroundStyle(.secondary)
-                ForEach(module.settings.excludedApps, id: \.self) { bundleID in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(module.appName(bundleID))
-                            Text(bundleID).font(.caption.monospaced()).foregroundStyle(.secondary)
+            problems
+            SettingsSection("Sensitive content") {
+                SettingsRow("API keys and tokens") {
+                    picker(\.sensitive, SensitiveHandling.allCases) { $0.title }
+                }
+                CardDivider()
+                SettingsRow("Passwords, concealed and transient items") { Text("Never saved").foregroundStyle(.secondary) }
+                CardDivider()
+                SettingsRow("Secure text fields") { Text("Never saved").foregroundStyle(.secondary) }
+            }
+            SettingsSection("Ignore while in front") {
+                ForEach(module.settings.excludedApps, id: \.self) { id in
+                    Button { selectedApp = id } label: {
+                        HStack(spacing: 10) {
+                            appIcon(id)
+                            Text(module.appName(id))
+                            Spacer()
                         }
-                        Spacer()
-                        Button("Remove", systemImage: "minus.circle") { module.removeExcludedApp(bundleID) }
-                            .labelStyle(.iconOnly).buttonStyle(.borderless)
-                            .help("Remove \(module.appName(bundleID))")
+                        .padding(.horizontal, 14)
+                        .frame(height: 38)
+                        .background(selectedApp == id ? Cue.selection : .clear)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    CardDivider()
                 }
-                HStack {
-                    TextField("Bundle ID", text: $newBundleID, prompt: Text("com.example.App"))
-                        .onSubmit(addBundleID)
-                    Button("Add", action: addBundleID).disabled(newBundleID.trimmingCharacters(in: .whitespaces).isEmpty)
-                    Menu("Add Running App") {
-                        ForEach(runningApps, id: \.0) { bundleID, name in
-                            Button(name) { _ = module.addExcludedApp(bundleID) }
+                PlusMinusBar(removeEnabled: selectedApp != nil, remove: {
+                    if let selectedApp { module.removeExcludedApp(selectedApp) }
+                    selectedApp = nil
+                }) {
+                    Menu {
+                        ForEach(runningApps, id: \.0) { id, name in
+                            Button(name) { _ = module.addExcludedApp(id) }
                         }
-                    }
-                    .fixedSize()
+                        Divider()
+                        Button("Choose App…", action: chooseApp)
+                    } label: { Image(systemName: "plus") }
                 }
             }
-
-            Section("Pinboards") {
-                ForEach(module.pinboards) { PinboardRow(board: $0, module: module) }
-                HStack {
-                    TextField("New pinboard", text: $newPinboard, prompt: Text("Name"))
-                        .onSubmit(addPinboard)
-                    Button("Add Pinboard", action: addPinboard).disabled(newPinboard.trimmingCharacters(in: .whitespaces).isEmpty)
+            SettingsSection("Pinboards") {
+                ForEach(module.pinboards) { board in
+                    PinboardRow(board: board, module: module)
+                    CardDivider()
                 }
-            }
-
-            Section("Data") {
-                Text("Export saves your history, pinboards, and these settings as unencrypted JSON. Import replaces them.")
-                    .font(.callout).foregroundStyle(.secondary)
                 HStack {
-                    Button("Export…", action: module.exportHistory)
+                    TextField("New pinboard", text: $newPinboard).textFieldStyle(.plain).onSubmit(addPinboard)
+                    Button("Add", action: addPinboard).disabled(newPinboard.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+            }
+            SettingsSection("Data") {
+                SettingsRow("History file", note: "Unencrypted JSON. Import replaces history.") {
                     Button("Import…", action: module.importHistory)
-                    Spacer()
-                    Button("Clear History…", role: .destructive, action: module.clearHistory)
+                    Button("Export…", action: module.exportHistory)
                 }
-                if let status = module.settingsStatus { StatusLine(text: status.text, success: status.success) }
             }
+            if let status = module.settingsStatus { StatusLine(text: status.text, success: status.success) }
         }
-        .formStyle(.grouped)
         .disabled(module.phase == .loading)
     }
 
-    private func setting<Value>(_ path: WritableKeyPath<ClipboardSettings, Value>) -> Binding<Value> {
-        Binding(get: { module.settings[keyPath: path] }, set: { value in module.update { $0[keyPath: path] = value } })
+    private var stored: String {
+        let pinned = module.items.filter(\.isPinned).count
+        return "\(module.items.count) items · \(pinned) pinned · encrypted"
+    }
+
+    @ViewBuilder private var problems: some View {
+        switch module.phase {
+        case .failed(let error) where error == ClipboardStore.keyUnavailable:
+            ErrorBanner(error: error, retryTitle: "Try Again", retry: module.retry)
+            Button("Reset History…", role: .destructive, action: module.resetHistory)
+        case .failed(let error):
+            ErrorBanner(error: error, retryTitle: "Try Again", retry: module.retry)
+        default:
+            EmptyView()
+        }
+        if module.accessDenied && module.captureEnabled {
+            ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Paste Settings", retry: module.openPasteSettings)
+        }
+    }
+
+    private func picker<Value: Hashable>(_ path: WritableKeyPath<ClipboardSettings, Value>, _ options: [Value], title: @escaping (Value) -> String) -> some View {
+        Picker("", selection: Binding(get: { module.settings[keyPath: path] }, set: { value in module.update { $0[keyPath: path] = value } })) {
+            ForEach(options, id: \.self) { Text(title($0)).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    @ViewBuilder private func appIcon(_ id: String) -> some View {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+            FileIcon(path: url.path, size: 20)
+        } else {
+            Tile(symbol: "app", color: Cue.text, size: 20)
+        }
     }
 
     private var runningApps: [(String, String)] {
@@ -249,8 +416,13 @@ struct ClipboardSettingsView: View {
             .sorted { $0.1.localizedStandardCompare($1.1) == .orderedAscending }
     }
 
-    private func addBundleID() {
-        if module.addExcludedApp(newBundleID) { newBundleID = "" }
+    private func chooseApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        NSApp.takeFocus()
+        guard panel.runModal() == .OK, let url = panel.url, let id = Bundle(url: url)?.bundleIdentifier else { return }
+        _ = module.addExcludedApp(id)
     }
 
     private func addPinboard() {
@@ -267,6 +439,7 @@ private struct PinboardRow: View {
     var body: some View {
         HStack {
             TextField("Pinboard name", text: $name)
+                .textFieldStyle(.plain)
                 .labelsHidden()
                 .onSubmit {
                     Task { if !(await module.renamePinboard(board, to: name)) { name = board.name } }
@@ -275,6 +448,8 @@ private struct PinboardRow: View {
                 .labelStyle(.iconOnly).buttonStyle(.borderless)
                 .help("Delete pinboard")
         }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
         .onAppear { name = board.name }
         .onChange(of: board.name) { _, new in name = new }
     }

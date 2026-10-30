@@ -7,6 +7,7 @@ import CueKit
     private static let maxHistory = 30
 
     private var history: [(window: AXUIElement, frame: CGRect)] = []
+    private var last: (window: AXUIElement, command: WindowCommand, frame: CGRect)?
 
     func apply(_ command: WindowCommand, to app: NSRunningApplication?) -> CueError? {
         guard AXIsProcessTrusted() else { return CueError("PERMISSION_REQUIRED", "Cue needs Accessibility to move windows.") }
@@ -17,6 +18,7 @@ import CueKit
         let areas = Self.areas
         guard let index = WindowLayout.area(of: current, in: areas) else { return Self.unavailable }
         let next: CGRect?
+        var landed = command
         var restored: Int?
         switch command {
         case .restore:
@@ -25,19 +27,27 @@ import CueKit
             }
             restored = entry
             next = history[entry].frame
-        case .nextDisplay:
+        case .nextDisplay, .previousDisplay:
             guard areas.count > 1 else { return CueError("WINDOW_ONE_DISPLAY", "There is only one display.") }
-            next = WindowLayout.moved(current, from: areas[index], to: areas[(index + 1) % areas.count])
+            let step = command == .nextDisplay ? 1 : areas.count - 1
+            next = WindowLayout.moved(current, from: areas[index], to: areas[(index + step) % areas.count])
         default:
-            next = WindowLayout.frame(command, window: current, area: areas[index])
+            var area = areas[index]
+            if let across = command.repeatsAcrossDisplays, areas.count > 1, let last, last.command == command,
+               last.frame == current, CFEqual(last.window, window) {
+                landed = across.command
+                area = areas[(index + across.step + areas.count) % areas.count]
+            }
+            next = WindowLayout.frame(landed, window: current, area: area)
         }
-        guard let next, Self.set(next, on: window, application: application) else { return Self.unavailable }
+        guard let next, next == current || Self.set(next, on: window, application: application) else { return Self.unavailable }
         if let restored {
             history.remove(at: restored)
-        } else {
+        } else if next != current {
             history.append((window, current))
             if history.count > Self.maxHistory { history.removeFirst() }
         }
+        last = (window, landed, Self.frame(of: window) ?? next)
         return nil
     }
 
@@ -48,7 +58,7 @@ import CueKit
         return NSScreen.screens.map { screen in
             let area = screen.visibleFrame
             return CGRect(x: area.minX, y: primary.frame.maxY - area.maxY, width: area.width, height: area.height)
-        }
+        }.sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
     }
 
     private static func focusedWindow(_ application: AXUIElement) -> AXUIElement? {

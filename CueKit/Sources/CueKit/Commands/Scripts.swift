@@ -11,6 +11,7 @@ public struct Script: Equatable, Sendable, Identifiable {
 public enum Scripts {
     public static let folderName = "commands"
     public static let timeout: TimeInterval = 30
+    public static let timeoutChoices = [10, 30, 60, 120, 300]
 
     public static func list(in folder: URL) -> [Script] {
         let manager = FileManager.default

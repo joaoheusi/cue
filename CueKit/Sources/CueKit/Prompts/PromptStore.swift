@@ -188,6 +188,16 @@ public actor PromptStore {
         }
     }
 
+    public func recordScriptUse(_ name: String) throws {
+        var current = try settings()
+        current.scriptUsage[name] = Timestamp.now()
+        let json = String(decoding: try JSONEncoder().encode(current), as: UTF8.self)
+        try db.transaction {
+            try db.execute("UPDATE settings SET data=?1 WHERE id=1", [.text(json)])
+            try bump()
+        }
+    }
+
     public func onboard(_ actions: [Action], settings input: PromptSettings, revision: Int) throws {
         if try settings().onboarded { return }
         try checkRevision(revision, "The library changed. Try setup again.")
@@ -278,7 +288,11 @@ public actor PromptStore {
 
     public func clearUsage() throws {
         let actions = try snapshot().actions
+        var current = try settings()
+        current.scriptUsage = [:]
+        let json = String(decoding: try JSONEncoder().encode(current), as: UTF8.self)
         try db.transaction {
+            try db.execute("UPDATE settings SET data=?1 WHERE id=1", [.text(json)])
             for var a in actions {
                 a.useCount = 0
                 a.lastUsedAt = nil

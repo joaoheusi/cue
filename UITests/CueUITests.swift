@@ -133,4 +133,27 @@ final class CueUITests: XCTestCase {
         search.typeKey(.return, modifierFlags: .shift)
         XCTAssertTrue(waitForClipboard { $0 == "Thanks, Ana" })
     }
+
+    func testActionsMenuOpensAndKeepsThePaletteOpen() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        search.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.menuItems["Edit in Library"].waitForExistence(timeout: 5), "⌘K should open the actions menu.")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(search.waitForExistence(timeout: 5), "Closing the actions menu should leave the palette open.")
+        XCTAssertTrue(app.staticTexts["Review current changes"].exists)
+    }
+
+    func testScopeSwitcherShowsClipboardAndMenuBar() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeKey("2", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Clipboard history is off"].waitForExistence(timeout: 5))
+        app.typeKey("3", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Menu bar hiding is off"].waitForExistence(timeout: 5))
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+    }
 }

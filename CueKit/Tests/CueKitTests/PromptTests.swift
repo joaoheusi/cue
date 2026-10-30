@@ -261,4 +261,33 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         try await fresh.commitImport(token: preview.token, update: false)
         #expect(try await fresh.snapshot().actions.count == 9)
     }
+
+    @Test func selectionAndQuestionsFillIn() throws {
+        let inputs = Template.Inputs(clipboard: "c", selection: "s", answers: ["Tone": "warm"])
+        #expect(try Template.renderLocal("{{selection}} {{ask:Tone}} {{clipboard}}", inputs: inputs) == "s warm c")
+        let uses = try Template.uses("{{selection}} {{ask}} {{ask:Tone}} {{ask:Tone}}")
+        #expect(uses.selection && !uses.clipboard && uses.questions == ["Ask", "Tone"])
+        #expect(try Template.uses(#"\{{ask}}"#).questions.isEmpty)
+    }
+
+    @Test func segmentsMarkTokens() {
+        #expect(Template.segments("Hi {{clipboard}}, {{nope}} {{ask:Tone}}") == [
+            .text("Hi "), .token("clipboard"), .text(", {{nope}}"), .text(" "), .token("ask: Tone"),
+        ])
+    }
+
+    @Test func oldSettingsGainDefaults() throws {
+        let decoded = try JSONDecoder().decode(PromptSettings.self, from: Data(#"{"theme":"dark","preview":false}"#.utf8))
+        #expect(decoded.previewPane && decoded.searchIn == SearchSource.allCases && decoded.fileLocations == FileLocation.defaults)
+    }
+
+    @Test func scriptUseIsRememberedAndCleared() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try PromptStore(directory: dir)
+        try await store.recordScriptUse("a.sh")
+        #expect(try await store.settings().scriptUsage["a.sh"] != nil)
+        try await store.clearUsage()
+        #expect(try await store.settings().scriptUsage.isEmpty)
+    }
 }

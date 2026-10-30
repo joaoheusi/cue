@@ -32,6 +32,8 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var purgeTask: Task<Void, Never>?
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var lastChangeCount = 0
+    @ObservationIgnored private var capturedChangeCount: Int?
+    @ObservationIgnored private var expiryTask: Task<Void, Never>?
     @ObservationIgnored private var skipCounts: [SkipReason: Int] = [:]
     @ObservationIgnored private var capturedCount = 0
     @ObservationIgnored private var keychainKind: ClipboardKeychain.Kind?
@@ -59,6 +61,15 @@ struct ClipboardStatus: Equatable {
     func stop() {
         pollTask?.cancel()
         purgeTask?.cancel()
+        expiryTask?.cancel()
+    }
+
+    var frontName: String? { context.invocation?.front?.localizedName }
+
+    func openSettings() { context.openSettings(.clipboard) }
+
+    var latest: ClipItem? {
+        capturedChangeCount == NSPasteboard.general.changeCount ? items.max { $0.lastUsedAt < $1.lastUsedAt } : nil
     }
 
     func commandView() -> AnyView { AnyView(ClipboardCommandView(module: self)) }
@@ -137,6 +148,16 @@ struct ClipboardStatus: Equatable {
         items = await store.items()
         pinboards = await store.pinboards
         settings = await store.settings
+        scheduleExpiry()
+    }
+
+    private func scheduleExpiry() {
+        expiryTask?.cancel()
+        guard let next = items.compactMap(\.expiresAt).min() else { return }
+        expiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(max(1, next.timeIntervalSinceNow + 0.5)))
+            if !Task.isCancelled { await self?.purge() }
+        }
     }
 
     private func purge() async {
@@ -217,12 +238,13 @@ struct ClipboardStatus: Equatable {
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let decision = CaptureFilter.decide(
             types: board.types?.map(\.rawValue) ?? [], ownType: PasteService.originType.rawValue,
-            secureInput: IsSecureEventInputEnabled(), frontmostApp: frontmost, excludedApps: settings.excludedApps
+            secureInput: IsSecureEventInputEnabled(), frontmostApp: frontmost, excludedApps: settings.excludedApps, sensitive: settings.sensitive
         ) { board.string(forType: .string) }
         switch decision {
         case .skip(let reason):
             skipCounts[reason, default: 0] += 1
         case .capture(let text):
+            capturedChangeCount = count
             Task { await save(text, source: frontmost) }
         }
     }

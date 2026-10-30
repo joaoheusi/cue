@@ -252,4 +252,98 @@ import Testing
         try await store.clear(keepPinned: false)
         #expect(try await store.itemCount() == 0)
     }
+
+    @Test func tokensAreRecognizedAndMasked() {
+        #expect(SensitiveText.matches("sk-ant-usr-abcdefghijklmnopqrstuv3c27\n"))
+        #expect(SensitiveText.matches("ghp_" + String(repeating: "a", count: 36)))
+        #expect(!SensitiveText.matches("the sk-ant-usr-abcdefghijklmnopqrstuv3c27 key"))
+        #expect(!SensitiveText.matches("hollowbound"))
+        #expect(SensitiveText.mask("sk-ant-usr-abcdefghijklmnopqrstuv3c27") == "sk-ant-usr-••••••••3c27")
+        #expect(SensitiveText.mask("AKIAABCDEFGHIJKLMNOP") == "AKIA••••••••MNOP")
+    }
+
+    @Test func kindsSeparateLinksCodeAndText() {
+        #expect(ClipKind.of("https://example.com/a") == .link)
+        #expect(ClipKind.of("figma.com/design/abc") == .link)
+        #expect(ClipKind.of("func a() {\n  return 1;\n}") == .code)
+        #expect(ClipKind.of("let total = 1") == .code)
+        #expect(ClipKind.of("Oi João! Fechei as partes 1, 2 e 4.") == .text)
+        #expect(ClipKind.of("example.com") == .text)
+    }
+
+    @Test func sensitiveItemsExpireAndStayOutOfExports() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let now = Date()
+        let secret = "sk-ant-usr-abcdefghijklmnopqrstuv3c27"
+        let id = try await store.capture(secret, source: nil, now: now)
+        var item = try #require(await store.items().first { $0.id == id })
+        #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.text == secret && !item.folded.contains("abcdefg"))
+        #expect(item.expiresAt != nil)
+        let exported = String(decoding: try await store.exportData(now: now), as: UTF8.self)
+        #expect(!exported.contains(secret))
+        #expect(try await store.purge(now: now.addingTimeInterval(299)) == 0)
+        #expect(try await store.purge(now: now.addingTimeInterval(301)) == 1)
+
+        let again = try await store.capture(secret, source: nil, now: now)
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(again, board.id)
+        item = try #require(await store.items().first { $0.id == again })
+        #expect(item.expiresAt == nil)
+        #expect(try await store.purge(now: now.addingTimeInterval(1000)) == 0)
+    }
+
+    @Test func sensitiveSettingsChangeCapture() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        var settings = ClipboardSettings()
+        settings.sensitive = .keep
+        try await store.save(settings)
+        let id = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: Date())
+        #expect(await store.items().first { $0.id == id }?.sensitive == false)
+        let decision = CaptureFilter.decide(types: [CaptureFilter.plainTextType], ownType: "own", secureInput: false, frontmostApp: nil,
+                                            excludedApps: [], sensitive: .skip) { "sk-ant-usr-abcdefghijklmnopqrstuv3c27" }
+        #expect(decision == .skip(.sensitive))
+    }
+
+    @Test func versionOneHistoryMigrates() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sqlite3")
+        defer { try? FileManager.default.removeItem(at: url) }
+        _ = try ClipboardStore(url: url)
+        let raw = try SQLite(path: url)
+        try raw.executeScript("ALTER TABLE items DROP COLUMN sensitive; ALTER TABLE items DROP COLUMN expires_at; PRAGMA user_version=1;")
+        _ = try ClipboardStore(url: url)
+        #expect(try SQLite(path: url).userVersion() == 2)
+    }
+
+    @Test func recopyingATokenAppliesTheCurrentPolicy() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let secret = "sk-ant-usr-abcdefghijklmnopqrstuv3c27"
+        var settings = ClipboardSettings()
+        settings.sensitive = .keep
+        try await store.save(settings)
+        let now = Date()
+        let id = try await store.capture(secret, source: "com.example.app", now: now)
+        #expect(String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+
+        settings.sensitive = .maskAndExpire
+        try await store.save(settings)
+        #expect(try await store.capture(secret, source: nil, now: now) == id)
+        let item = try #require(await store.items().first { $0.id == id })
+        #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.expiresAt != nil && item.source == "com.example.app")
+        #expect(!String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+    }
+
+    @Test func deletingAPinboardRearmsTokenExpiry() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: Date())
+        let board = try await store.createPinboard("Keys")
+        try await store.setPinboard(id, board.id)
+        #expect(await store.items().first { $0.id == id }?.expiresAt == nil)
+        try await store.deletePinboard(board.id)
+        #expect(await store.items().first { $0.id == id }?.expiresAt != nil)
+        #expect(try await store.purge(now: Date().addingTimeInterval(SensitiveText.lifetime + 5)) == 1)
+    }
 }

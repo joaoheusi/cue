@@ -11,6 +11,7 @@ import SwiftUI
     private var command: CommandWindowController!
     private var settings: SettingsWindowController!
     private var statusItem: NSStatusItem?
+    private var statusBadge: NSView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
@@ -20,26 +21,33 @@ import SwiftUI
             NSApp.terminate(nil)
             return
         }
+        prompts.commands = commands
         command = CommandWindowController(context: context) { [unowned self] scope in
             switch scope {
-            case .prompts: AnyView(PaletteView(model: prompts.model, commands: commands))
+            case .prompts: AnyView(PaletteView(model: prompts.model, commands: commands, clipboard: clipboard))
             case .clipboard: clipboard.commandView()
             case .menuBar: menuBar.commandView()
             }
         }
         settings = SettingsWindowController { [unowned self] in
             [
-                (.general, "General", "gearshape", prompts.generalSettingsView()),
-                (.prompts, "Prompts", "text.cursor", prompts.settingsView()),
-                (.commands, "Commands", "command", commands.settingsView()),
-                (.clipboard, "Clipboard", CommandScope.clipboard.symbol, clipboard.settingsView()),
-                (.menuBar, "Menu Bar", CommandScope.menuBar.symbol, menuBar.settingsView()),
-                (.data, "Data & Privacy", "lock.shield", AnyView(DataSettingsView(context: context, diagnostics: diagnosticsReport))),
+                (.general, prompts.generalSettingsView()),
+                (.shortcuts, AnyView(ShortcutsSettingsView(model: prompts.model, commands: commands, clipboard: clipboard, menuBar: menuBar))),
+                (.palette, prompts.settingsView()),
+                (.clipboard, clipboard.settingsView()),
+                (.menuBar, menuBar.settingsView()),
+                (.actions, commands.settingsView()),
+                (.privacy, AnyView(PrivacySettingsView(context: context, diagnostics: diagnosticsReport))),
             ]
         }
         context.openCommand = { [unowned self] in command.toggle($0) }
+        context.showCommand = { [unowned self] in command.show($0) }
         context.closeCommand = { [unowned self] in command.hide(cancel: false) }
         context.showCommandPassively = { [unowned self] in command.showPassively() }
+        context.commandVisible = { [unowned self] in command.isVisible }
+        context.canQuit = { [unowned self] in prompts.canQuit() }
+        context.hotKeys.onChange = { [weak self] in self?.refreshStatusIcon() }
+        context.updater.onChange = { [weak self] in self?.refreshStatusIcon() }
         context.openSettings = { [unowned self] in
             command.hide(cancel: true)
             settings.show($0)
@@ -71,7 +79,7 @@ import SwiftUI
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        prompts.canQuit() ? .terminateNow : .terminateCancel
+        context.quitApproved || prompts.canQuit() ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -116,6 +124,7 @@ import SwiftUI
         menu.delegate = self
         item.menu = menu
         statusItem = item
+        refreshStatusIcon()
     }
 
     private static let statusImage: NSImage = {
@@ -133,33 +142,119 @@ import SwiftUI
         return image
     }()
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        for scope in CommandScope.allCases {
-            add(menu, "Open \(scope.title)", scope.symbol) { [unowned self] in command.show(scope) }
+    private func refreshStatusIcon() {
+        guard let button = statusItem?.button else { return }
+        button.appearsDisabled = context.hotKeys.paused
+        if statusBadge == nil {
+            let badge = NSView()
+            badge.wantsLayer = true
+            badge.layer?.backgroundColor = NSColor.systemBlue.cgColor
+            badge.layer?.cornerRadius = 3
+            button.addSubview(badge)
+            statusBadge = badge
         }
-        menu.addItem(.separator())
-        if menuBar.settings.enabled {
-            let revealed = menuBar.isRevealed
-            add(menu, revealed ? "Collapse Menu Bar" : "Expand Menu Bar", revealed ? "chevron.right" : "chevron.left") { [unowned self] in menuBar.toggle() }
-        } else {
-            add(menu, "Turn On Menu Bar Hiding…", "chevron.left") { [unowned self] in Task { await menuBar.setEnabled(true) } }
-        }
-        add(menu, "Manage Prompts…", "list.bullet.rectangle") { [unowned self] in context.openLibrary(nil) }
-        add(menu, "Settings…", "gearshape", key: ",") { [unowned self] in context.openSettings(.general) }
-        if context.updater.isAvailable {
-            add(menu, "Check for Updates…", "arrow.down.circle") { [unowned self] in context.updater.checkNow() }
-        }
-        let paused = context.hotKeys.paused
-        add(menu, paused ? "Resume Shortcuts" : "Pause Shortcuts", paused ? "play.circle" : "pause.circle") { [unowned self] in
-            context.hotKeys.setPaused(!paused)
-        }
-        menu.addItem(.separator())
-        add(menu, "Quit Cue", "power", key: "q") { NSApp.terminate(nil) }
+        statusBadge?.frame = NSRect(x: button.bounds.maxX - 8, y: button.isFlipped ? 2 : button.bounds.maxY - 8, width: 6, height: 6)
+        statusBadge?.isHidden = context.updater.readyVersion == nil
     }
 
-    private func add(_ menu: NSMenu, _ title: String, _ symbol: String, key: String = "", action: @escaping @MainActor () -> Void) {
-        menu.add(title, image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil), key: key, action: action)
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        menu.autoenablesItems = false
+        let paused = context.hotKeys.paused
+        let update = context.updater.readyVersion
+        if paused {
+            let age = context.hotKeys.pausedAt.map { "Paused \(ShortAge.text($0))" } ?? "Paused"
+            addStatus(menu, "Resume Shortcuts", detail: age, color: .systemOrange) { [unowned self] in context.hotKeys.setPaused(false) }
+        }
+        if let update {
+            addStatus(menu, "Restart to Update", detail: update, color: .systemBlue) { [unowned self] in context.updater.restartToUpdate() }
+        }
+        if paused || update != nil { menu.addItem(.separator()) }
+        add(menu, "Search", "magnifyingglass", shortcut: shortcut(.prompts), enabled: !paused) { [unowned self] in command.show(.prompts) }
+        add(menu, "Clipboard", "clipboard", shortcut: shortcut(.clipboard), enabled: !paused) { [unowned self] in command.show(.clipboard) }
+        add(menu, "Menu Bar Items", "menubar.rectangle", shortcut: shortcut(.menuBar), enabled: !paused) { [unowned self] in command.show(.menuBar) }
+        menu.addItem(.separator())
+        addWindowMenu(to: menu, enabled: !paused)
+        menu.addItem(.separator())
+        let hideShortcut = menuBar.settings.shortcut.flatMap(Shortcut.init)
+        if menuBar.settings.enabled {
+            let revealed = menuBar.isRevealed
+            add(menu, revealed ? "Hide Items" : "Show Hidden Items", revealed ? "eye.slash" : "eye", shortcut: hideShortcut) { [unowned self] in menuBar.toggle() }
+        } else {
+            add(menu, "Turn On Menu Bar Hiding…", "eye") { [unowned self] in Task { await menuBar.setEnabled(true) } }
+        }
+        menu.addItem(.separator())
+        add(menu, "Library…", "doc.text", key: "l") { [unowned self] in context.openLibrary(nil) }
+        add(menu, "Settings…", "gearshape", key: ",") { [unowned self] in context.openSettings(.general) }
+        menu.addItem(.separator())
+        if !paused {
+            add(menu, "Pause Shortcuts", "pause") { [unowned self] in context.hotKeys.setPaused(true) }
+        }
+        if context.updater.isAvailable, update == nil {
+            add(menu, "Check for Updates…", "arrow.clockwise") { [unowned self] in context.updater.checkNow() }
+        }
+        if menu.items.last?.isSeparatorItem == false { menu.addItem(.separator()) }
+        add(menu, "Quit Cue", nil, key: "q") { NSApp.terminate(nil) }
+    }
+
+    private func addWindowMenu(to menu: NSMenu, enabled: Bool) {
+        let windows = NSMenu()
+        for section in WindowCommand.menuSections {
+            let startsSubmenus = section.title != nil && windows.items.last?.hasSubmenu == false
+            if !windows.items.isEmpty, section.title == nil || startsSubmenus { windows.addItem(.separator()) }
+            let target = section.title == nil ? windows : NSMenu()
+            for window in section.commands {
+                add(target, window.title, window.symbol, shortcut: commands.shortcut(for: window)) { [unowned self] in commands.applyToFrontWindow(window) }
+            }
+            if let title = section.title {
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.submenu = target
+                windows.addItem(item)
+            }
+        }
+        let item = NSMenuItem(title: "Windows", action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
+        item.submenu = windows
+        item.isEnabled = enabled
+        menu.addItem(item)
+    }
+
+    private func shortcut(_ scope: CommandScope) -> Shortcut? {
+        let snapshot = prompts.model.snapshot
+        return switch scope {
+        case .prompts: Shortcut(snapshot?.bindings["palette"] ?? snapshot?.settings.paletteShortcut ?? "")
+        case .clipboard: clipboard.settings.shortcut.flatMap(Shortcut.init)
+        case .menuBar: Shortcut(snapshot?.settings.menuBarScopeShortcut ?? "")
+        }
+    }
+
+    private func add(_ menu: NSMenu, _ title: String, _ symbol: String?, key: String = "", shortcut: Shortcut? = nil, enabled: Bool = true,
+                     action: @escaping @MainActor () -> Void) {
+        menu.add(title, image: symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }, key: shortcut?.menuKey ?? key, action: action)
+        guard let item = menu.items.last else { return }
+        item.isEnabled = enabled
+        if let shortcut {
+            var mask: NSEvent.ModifierFlags = []
+            if shortcut.command { mask.insert(.command) }
+            if shortcut.control { mask.insert(.control) }
+            if shortcut.option { mask.insert(.option) }
+            if shortcut.shift { mask.insert(.shift) }
+            item.keyEquivalentModifierMask = mask
+        }
+    }
+
+    private func addStatus(_ menu: NSMenu, _ title: String, detail: String, color: NSColor, action: @escaping @MainActor () -> Void) {
+        let dot = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
+            color.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 8, height: 8)).fill()
+            return true
+        }
+        menu.add(title, image: dot, action: action)
+        let style = NSMutableParagraphStyle()
+        style.tabStops = [NSTextTab(textAlignment: .right, location: 230)]
+        let text = NSMutableAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold), .paragraphStyle: style])
+        text.append(NSAttributedString(string: "\t\(detail)", attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style]))
+        menu.items.last?.attributedTitle = text
     }
 
     private func diagnosticsReport() async -> String {

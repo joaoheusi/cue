@@ -17,7 +17,7 @@ final class CommandPanel: NSPanel {
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        minSize = NSSize(width: 480, height: 320)
+        minSize = NSSize(width: 700, height: 420)
         setAccessibilityIdentifier("command.window")
     }
 
@@ -29,6 +29,12 @@ final class CommandPanel: NSPanel {
 @MainActor @Observable final class CommandState {
     var scope: CommandScope = .prompts
     var openID = UUID()
+    var hidesSwitcher = false
+}
+
+struct HidesSwitcherKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
 
 @MainActor final class CommandWindowController: NSObject, NSWindowDelegate {
@@ -41,11 +47,14 @@ final class CommandPanel: NSPanel {
         self.context = context
         super.init()
         panel.delegate = self
-        panel.onCancel = { [weak self] in self?.hide(cancel: true) }
+        panel.onCancel = { [weak self] in
+            guard let self, !context.interceptCancel() else { return }
+            hide(cancel: true)
+        }
         let host = NSHostingController(rootView: CommandRoot(state: state, context: context, content: content))
         host.sizingOptions = [.minSize]
         panel.contentViewController = host
-        panel.setContentSize(NSSize(width: 750, height: 475))
+        panel.setContentSize(CommandMetrics.panelSize)
         host.view.layoutSubtreeIfNeeded()
     }
 
@@ -84,10 +93,11 @@ final class CommandPanel: NSPanel {
     }
 
     func hide(cancel: Bool) {
-        if cancel { context.invocation?.cancelled = true }
+        if cancel, !context.keepsRunning() { context.invocation?.cancelled = true }
         hiding = true
         panel.orderOut(nil)
         hiding = false
+        context.commandDidHide()
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -110,7 +120,7 @@ private struct CommandRoot: View {
 
     private var settingsTab: SettingsTab {
         switch state.scope {
-        case .prompts: .prompts
+        case .prompts: .palette
         case .clipboard: .clipboard
         case .menuBar: .menuBar
         }
@@ -120,8 +130,9 @@ private struct CommandRoot: View {
         content(state.scope)
             .id("\(state.scope.rawValue)-\(state.openID)")
             .overlay(alignment: .topTrailing) { switcher }
+            .onPreferenceChange(HidesSwitcherKey.self) { value in MainActor.assumeIsolated { state.hidesSwitcher = value } }
             .background { shortcuts }
-            .frame(minWidth: 480, minHeight: 320)
+            .frame(minWidth: 700, minHeight: 420)
             .background(PanelBackground())
             .clipShape(RoundedRectangle(cornerRadius: PanelBackground.radius, style: .continuous))
             .overlay {
@@ -140,35 +151,24 @@ private struct CommandRoot: View {
     }
 
     private var switcher: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(CommandScope.allCases.enumerated()), id: \.element) { index, scope in
-                let selected = state.scope == scope
-                Button {
-                    state.scope = scope
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: scope.symbol)
-                        if selected { Text(scope.title) }
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(selected ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.primary.opacity(selected ? 0.1 : 0))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(selected ? .primary : .secondary)
-                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
-                .help("\(scope.title) (⌘\(index + 1))")
-                .accessibilityLabel(scope.title)
-                .accessibilityIdentifier("scope.\(scope.rawValue)")
-            }
+        let options = CommandScope.allCases.enumerated().map { index, scope in
+            Segmented<CommandScope>.Option(value: scope, title: scope.title, symbol: scope.symbol, key: "⌘\(index + 1)", identifier: "scope.\(scope.rawValue)")
         }
-        .frame(height: CommandMetrics.searchHeight)
-        .padding(.trailing, 12)
+        return Segmented(options: options, selection: state.scope, height: 28) { state.scope = $0 }
+            .background {
+                ForEach(Array(CommandScope.allCases.enumerated()), id: \.element) { index, scope in
+                    Button(scope.title) { state.scope = scope }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                        .opacity(0)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(height: CommandMetrics.searchHeight)
+            .padding(.trailing, 14)
+            .opacity(state.hidesSwitcher ? 0 : 1)
+            .allowsHitTesting(!state.hidesSwitcher)
+            .accessibilityHidden(state.hidesSwitcher)
     }
 }
 

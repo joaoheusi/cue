@@ -20,6 +20,22 @@ public enum Timestamp {
     }
 }
 
+public enum ShortAge {
+    public static func text(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 60 { return "\(seconds)s" }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        if calendar.isDate(date, inSameDayAs: now) { return "\(seconds / 3600)h" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) { return "Yesterday" }
+        return "\(max(2, calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 2))d"
+    }
+
+    public static func until(_ date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, Int(date.timeIntervalSince(now).rounded(.up)))
+        return seconds < 60 ? "\(seconds)s" : "\(Int((Double(seconds) / 60).rounded(.up)))m"
+    }
+}
+
 public enum SafeFilename {
     public static func make(_ base: String, ext: String, date: Date? = nil) -> String {
         let forbidden = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters).union(.newlines)
