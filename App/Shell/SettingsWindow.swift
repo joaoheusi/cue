@@ -62,7 +62,7 @@ struct DataSettingsView: View {
                 LabeledContent("Folder") {
                     Text(context.dataDirectory.path).textSelection(.enabled).font(.caption.monospaced())
                 }
-                Text("Everything Cue stores stays in this folder and the macOS Keychain. Cue has no accounts, sync, telemetry, or analytics. Text leaves this Mac only when you run an action that uses Claude.")
+                Text("Everything Cue stores stays in this folder and the macOS Keychain. Cue has no accounts, sync, telemetry, or analytics. Cue sends text off this Mac only when you run an action that uses Claude. Scripts you run can use the network like any other program.")
                     .font(.callout).foregroundStyle(.secondary)
                 Button("Show in Finder") {
                     try? FileManager.default.createDirectory(at: context.dataDirectory, withIntermediateDirectories: true)
@@ -87,18 +87,20 @@ struct DataSettingsView: View {
                 if let status { StatusLine(text: status.0, success: status.1) }
             }
             Section("Uninstall") {
-                Text(Self.uninstallNote).font(.callout).textSelection(.enabled)
+                Text(uninstallNote).font(.callout).textSelection(.enabled)
             }
         }
         .formStyle(.grouped)
     }
 
-    static let uninstallNote = """
+    private var uninstallNote: String {
+        """
     1. Choose Quit Cue from the menu bar.
     2. Turn off Launch at Login in General (or remove Cue in System Settings → General → Login Items).
     3. Remove Cue from System Settings → Privacy & Security → Accessibility and Paste.
     4. Delete Cue.app from Applications, and ~/Library/LaunchAgents/Cue.plist if it exists.
-    5. Delete ~/Library/Application Support/app.cue.launcher (prompts, snippets, scripts, .env, settings, clipboard history, backups).
-    6. Delete the clipboard key: security delete-generic-password -s app.cue.launcher.clipboard
+    5. Delete \((context.dataDirectory.path as NSString).abbreviatingWithTildeInPath) (prompts, snippets, scripts, .env, settings, clipboard history, backups).
+    6. Delete the clipboard key: security delete-generic-password -s \(context.keychainService)
     """
+    }
 }
