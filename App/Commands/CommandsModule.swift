@@ -160,7 +160,15 @@ import SwiftUI
                 Task {
                     do {
                         let text = try await self.run(script)
-                        if case .failedBeforeCopy(let failure) = await self.copy(text) { self.prompts.report(script.name, failure) } else {
+                        if self.prompts.snapshot?.settings.scriptOutput == .show {
+                            guard self.prompts.run?.isRunning != true else {
+                                return self.context.notifier.post(script.name, "Finished. Output not shown because another action is running.")
+                            }
+                            self.prompts.showOutput(script.name, text: text, surface: .palette)
+                            self.context.showCommand(.prompts)
+                        } else if case .failedBeforeCopy(let failure) = await self.copy(text) {
+                            self.prompts.report(script.name, failure)
+                        } else {
                             self.context.notifier.post(script.name, "Output copied to the clipboard.")
                         }
                     } catch {
