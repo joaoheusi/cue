@@ -263,6 +263,12 @@ struct CommandTests {
         #expect(DotEnv.setting("ANTHROPIC_API_KEY", to: "k", in: "A=1\n") == "A=1\nANTHROPIC_API_KEY=k\n")
     }
 
+    @Test func dotEnvSettingKeepsOtherLinesInCRLFFiles() {
+        let text = "ANTHROPIC_API_KEY=old\r\nANTHROPIC_MODEL=custom\r\n"
+        #expect(DotEnv.parse(DotEnv.setting("ANTHROPIC_API_KEY", to: "new", in: text)) == ["ANTHROPIC_API_KEY": "new", "ANTHROPIC_MODEL": "custom"])
+        #expect(DotEnv.parse(DotEnv.setting("ANTHROPIC_API_KEY", to: nil, in: text)) == ["ANTHROPIC_MODEL": "custom"])
+    }
+
     @Test func storedKeyWinsOverTheEnvFile() throws {
         let dir = try folder()
         try Data("ANTHROPIC_API_KEY=file\nANTHROPIC_MODEL=m\n".utf8).write(to: dir.appendingPathComponent(".env"))

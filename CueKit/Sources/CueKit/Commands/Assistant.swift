@@ -20,7 +20,7 @@ public enum DotEnv {
 
     public static func setting(_ key: String, to value: String?, in text: String) -> String {
         var found = false
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).compactMap { line -> String? in
+        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init).compactMap { line -> String? in
             let body = line.trimmingCharacters(in: .whitespaces)
             let plain = body.hasPrefix("export ") ? String(body.dropFirst(7)) : body
             guard !plain.hasPrefix("#"), let split = plain.firstIndex(of: "="),
