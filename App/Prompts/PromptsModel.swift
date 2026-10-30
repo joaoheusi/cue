@@ -73,12 +73,14 @@ import UniformTypeIdentifiers
         }
     }
 
-    func saveSettings(_ change: (inout PromptSettings) -> Void) async {
-        guard let snapshot else { return }
+    @discardableResult
+    func saveSettings(_ change: (inout PromptSettings) -> Void) async -> Bool {
+        guard let snapshot else { return false }
         var settings = snapshot.settings
         change(&settings)
-        await perform { try await $0.saveSettings(settings, revision: snapshot.revision) }
+        let saved = await perform { try await $0.saveSettings(settings, revision: snapshot.revision) } != nil
         applyTheme()
+        return saved
     }
 
     static func owner(_ action: Action) -> String { "action:\(action.id)" }

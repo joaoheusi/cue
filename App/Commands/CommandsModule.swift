@@ -270,16 +270,25 @@ import SwiftUI
     func setKeyStorage(_ target: KeyStorage) async {
         let source = storage
         guard target != source else { return }
+        let key = (try? prompts.credentials())?.key
         do {
-            if let key = (try? prompts.credentials())?.key {
-                try writeKey(key, to: target)
-                try writeKey(nil, to: source)
-            }
+            if let key { try writeKey(key, to: target) }
         } catch {
             status = (error.message, false)
             return
         }
-        await prompts.saveSettings { $0.keyStorage = target }
+        guard await prompts.saveSettings({ $0.keyStorage = target }) else {
+            if key != nil { try? writeKey(nil, to: target) }
+            status = ("Cue could not save this setting, so your key stayed where it was. Try again.", false)
+            return
+        }
+        if key != nil {
+            do {
+                try writeKey(nil, to: source)
+            } catch {
+                status = ("Your key moved, but the old copy could not be removed. \(error.message)", false)
+            }
+        }
         await reload()
     }
 
