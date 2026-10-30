@@ -59,6 +59,15 @@ import SwiftUI
         windows.apply(command, to: app)
     }
 
+    func applyToFrontWindow(_ command: WindowCommand) {
+        guard let error = apply(command, to: NSWorkspace.shared.frontmostApplication) else { return }
+        if error.code == "PERMISSION_REQUIRED" {
+            if context.permissions.explain(.accessibility(reason: WindowManager.accessReason)) { context.paste.requestAccess() }
+        } else {
+            context.notifier.post(command.title, error.message) { self.context.log.record(error, "windows") }
+        }
+    }
+
     func open(_ hit: FileHit, reveal: Bool) {
         context.closeCommand()
         if reveal {
@@ -97,6 +106,24 @@ import SwiftUI
         if let shortcut, !register(command, shortcut) { return }
         if shortcut == nil { context.hotKeys.unregister(command.owner) }
         await prompts.perform { try await $0.saveBinding(owner: command.owner, chord: shortcut?.description ?? "") }
+    }
+
+    /// Fills only the commands that have no shortcut, so a shortcut you chose stays.
+    func useRectangleShortcuts() async {
+        var added = 0, skipped = 0
+        for command in WindowCommand.allCases where shortcut(for: command) == nil {
+            guard let shortcut = command.rectangleShortcut else { continue }
+            if register(command, shortcut) {
+                await prompts.perform { try await $0.saveBinding(owner: command.owner, chord: shortcut.description) }
+                added += 1
+            } else {
+                skipped += 1
+            }
+        }
+        let result = "Added \(added) shortcut\(added == 1 ? "" : "s")."
+        status = skipped == 0
+            ? ("\(result) Quit Rectangle so both apps do not react to the same keys.", true)
+            : ("\(result) \(skipped) could not be set because the keys are already in use.", false)
     }
 
     private func restoreShortcuts() {
@@ -152,12 +179,7 @@ import SwiftUI
     private func register(_ command: WindowCommand, _ shortcut: Shortcut) -> Bool {
         do {
             try context.hotKeys.register(command.owner, shortcut) { [weak self] in
-                guard let self, let error = apply(command, to: NSWorkspace.shared.frontmostApplication) else { return }
-                if error.code == "PERMISSION_REQUIRED" {
-                    if context.permissions.explain(.accessibility(reason: WindowManager.accessReason)) { context.paste.requestAccess() }
-                } else {
-                    context.notifier.post(command.title, error.message) { self.context.log.record(error, "windows") }
-                }
+                self?.applyToFrontWindow(command)
             }
             status = nil
             return true

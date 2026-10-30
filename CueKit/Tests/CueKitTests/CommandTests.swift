@@ -140,6 +140,51 @@ struct CommandTests {
         #expect(WindowLayout.frame(.restore, window: window, area: area) == nil)
     }
 
+    @Test func newWindowFramesMatchRectangle() {
+        let area = CGRect(x: 100, y: 30, width: 1200, height: 900)
+        let window = CGRect(x: 300, y: 200, width: 400, height: 300)
+        #expect(WindowLayout.frame(.centerHalf, window: window, area: area) == CGRect(x: 400, y: 30, width: 600, height: 900))
+        #expect(WindowLayout.frame(.centerTwoThirds, window: window, area: area) == CGRect(x: 300, y: 30, width: 800, height: 900))
+        #expect(WindowLayout.frame(.lastFourth, window: window, area: area) == CGRect(x: 1000, y: 30, width: 300, height: 900))
+        #expect(WindowLayout.frame(.centerThreeFourths, window: window, area: area) == CGRect(x: 250, y: 30, width: 900, height: 900))
+        #expect(WindowLayout.frame(.bottomCenterSixth, window: window, area: area) == CGRect(x: 500, y: 480, width: 400, height: 450))
+        #expect(WindowLayout.frame(.almostMaximize, window: window, area: area) == CGRect(x: 160, y: 75, width: 1080, height: 810))
+        #expect(WindowLayout.frame(.maximizeHeight, window: window, area: area) == CGRect(x: 300, y: 30, width: 400, height: 900))
+        #expect(WindowLayout.frame(.moveLeft, window: window, area: area) == CGRect(x: 100, y: 330, width: 400, height: 300))
+        #expect(WindowLayout.frame(.moveRight, window: window, area: area) == CGRect(x: 900, y: 330, width: 400, height: 300))
+        #expect(WindowLayout.frame(.moveUp, window: window, area: area) == CGRect(x: 500, y: 30, width: 400, height: 300))
+        #expect(WindowLayout.frame(.moveDown, window: window, area: area) == CGRect(x: 500, y: 630, width: 400, height: 300))
+    }
+
+    @Test func largerAndSmallerKeepSnappedEdges() {
+        let area = CGRect(x: 100, y: 30, width: 1200, height: 900)
+        let floating = CGRect(x: 300, y: 200, width: 400, height: 300)
+        #expect(WindowLayout.frame(.larger, window: floating, area: area) == CGRect(x: 285, y: 185, width: 430, height: 330))
+        #expect(WindowLayout.frame(.smaller, window: floating, area: area) == CGRect(x: 315, y: 215, width: 370, height: 270))
+        let left = CGRect(x: 100, y: 30, width: 600, height: 900)
+        #expect(WindowLayout.frame(.larger, window: left, area: area) == CGRect(x: 100, y: 30, width: 630, height: 900))
+        #expect(WindowLayout.frame(.smaller, window: left, area: area) == CGRect(x: 100, y: 30, width: 570, height: 900))
+        let right = CGRect(x: 700, y: 30, width: 600, height: 900)
+        #expect(WindowLayout.frame(.smaller, window: right, area: area) == CGRect(x: 730, y: 30, width: 570, height: 900))
+        #expect(WindowLayout.frame(.larger, window: area, area: area) == area)
+        #expect(WindowLayout.frame(.smaller, window: area, area: area) == CGRect(x: 115, y: 45, width: 1170, height: 870))
+        let smallest = CGRect(x: 300, y: 200, width: 310, height: 300)
+        #expect(WindowLayout.frame(.smaller, window: smallest, area: area) == smallest, "A window at the minimum size stays as it is.")
+    }
+
+    @Test func windowMenuListsEveryCommandOnce() {
+        #expect(WindowCommand.menuSections.flatMap(\.commands) == WindowCommand.allCases)
+    }
+
+    @Test func rectangleShortcutsAreValidAndUnique() {
+        let shortcuts = WindowCommand.allCases.compactMap(\.rectangleShortcut)
+        #expect(shortcuts.count == 21)
+        #expect(shortcuts.allSatisfy { $0.isValid })
+        #expect(Set(shortcuts).count == shortcuts.count)
+        #expect(WindowCommand.rightThird.rectangleShortcut?.display == "⌃⌥R")
+        #expect(WindowCommand.nextDisplay.rectangleShortcut?.display == "⌃⌥⌘→")
+    }
+
     @Test func movingBetweenDisplaysKeepsTheWindowInside() {
         let big = CGRect(x: 0, y: 25, width: 2560, height: 1410)
         let small = CGRect(x: -1728, y: -205, width: 1728, height: 1085)
