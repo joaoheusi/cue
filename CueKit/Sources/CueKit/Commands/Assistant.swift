@@ -65,9 +65,16 @@ public enum Assistant {
         do {
             (data, response) = try await URLSession.shared.data(for: try request(prompt, credentials: credentials))
         } catch {
-            throw CueError("AI_UNREACHABLE", "Could not reach Claude. Check your connection and try again.")
+            throw failure(error)
         }
         return try parse(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    static func failure(_ error: Error) -> CueError {
+        if (error as? URLError)?.code == .timedOut {
+            return CueError("AI_TIMEOUT", "Claude took too long to respond. Try again.")
+        }
+        return CueError("AI_UNREACHABLE", "Could not reach Claude. Check your connection and try again.")
     }
 
     private struct Reply: Decodable {

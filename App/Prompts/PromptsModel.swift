@@ -305,8 +305,8 @@ import UniformTypeIdentifiers
                                                    isCancelled: { invocation.cancelled }, hide: assistant == nil ? context.closeCommand : {})
         if let assistant {
             switch delivery {
-            case .copied: notify(assistant, "Result copied to the clipboard.")
-            case .pasted: notify(assistant, "Result pasted.")
+            case .copied: context.notifier.post(assistant, "Result copied to the clipboard.")
+            case .pasted: context.notifier.post(assistant, "Result pasted.")
             case .cancelled: break
             case .failedBeforeCopy(let error) where error == PasteFailure.clipboardChanged.error:
                 report(assistant, CueError(error.code, "The clipboard changed while Claude was working, so Cue kept your new copy. Run it again."))
@@ -321,11 +321,7 @@ import UniformTypeIdentifiers
 
     private func report(_ title: String, _ error: CueError) {
         context.log.record(error, "ai")
-        notify(title, error.message)
-    }
-
-    private func notify(_ title: String, _ body: String) {
-        context.notifier.post(title, body) { [weak self] in self?.show(body) }
+        context.notifier.post(title, error.message) { [weak self] in self?.show(error.message) }
     }
 
     func diagnostics() -> [(String, String)] {

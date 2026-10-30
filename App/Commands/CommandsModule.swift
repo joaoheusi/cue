@@ -102,7 +102,9 @@ import SwiftUI
             return true
         } catch {
             status = (error.message, false)
-            context.hotKeys.markUnavailable(command.owner, shortcut, reason: error.message)
+            if context.hotKeys.statuses[command.owner]?.requested == nil {
+                context.hotKeys.markUnavailable(command.owner, shortcut, reason: error.message)
+            }
             return false
         }
     }
@@ -159,7 +161,7 @@ struct CommandsSettingsView: View {
         Form {
             Section("Claude") {
                 LabeledContent("API key", value: module.hasKey ? "Found in .env" : "Not set")
-                Text("Fix Grammar, Summarize, and Translate are actions in your library. Turn on Run through Claude for any other action. Cue sends text to Anthropic only when you run one of these actions, and nothing else leaves this Mac.")
+                Text("Fix Grammar, Summarize, and Translate are actions in your library. Turn on Run through Claude for any other action. Cue sends text to Anthropic only when you run one of these actions, and Cue itself sends nothing else off this Mac. Scripts you run can use the network like any other program.")
                     .font(.callout).foregroundStyle(.secondary)
                 Button("Open .env") { module.openEnv() }
             }

@@ -44,13 +44,15 @@ enum InstalledApps {
     private static let skipped: Set = ["node_modules", "DerivedData", ".git", ".build", "build"]
     private static let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library").path + "/"
 
-    func search(_ text: String) {
+    func clear() {
         stop()
+        results = []
+    }
+
+    func search(_ text: String) {
+        clear()
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard needle.count >= Self.minimumLength else {
-            results = []
-            return
-        }
+        guard needle.count >= Self.minimumLength else { return }
         let query = NSMetadataQuery()
         query.predicate = NSPredicate(format: "%K CONTAINS[cd] %@", NSMetadataItemFSNameKey, needle)
         query.searchScopes = [NSMetadataQueryUserHomeScope]

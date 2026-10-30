@@ -102,7 +102,10 @@ struct PaletteView: View {
             }
             footer(current, count: items.count)
         }
-        .onChange(of: query) { error = nil }
+        .onChange(of: query) {
+            error = nil
+            commands.files.clear()
+        }
         .task { await commands.reload() }
         .task(id: query) {
             guard !model.context.isUITesting else { return }

@@ -17,24 +17,28 @@ import CueKit
         let areas = Self.areas
         guard let index = WindowLayout.area(of: current, in: areas) else { return Self.unavailable }
         let next: CGRect?
+        var restored: Int?
         switch command {
         case .restore:
             guard let entry = history.lastIndex(where: { CFEqual($0.window, window) }) else {
                 return CueError("WINDOW_NO_HISTORY", "Cue has not moved this window yet.")
             }
-            next = history.remove(at: entry).frame
+            restored = entry
+            next = history[entry].frame
         case .nextDisplay:
             guard areas.count > 1 else { return CueError("WINDOW_ONE_DISPLAY", "There is only one display.") }
             next = WindowLayout.moved(current, from: areas[index], to: areas[(index + 1) % areas.count])
         default:
             next = WindowLayout.frame(command, window: current, area: areas[index])
         }
-        guard let next else { return Self.unavailable }
-        if command != .restore {
+        guard let next, Self.set(next, on: window, application: application) else { return Self.unavailable }
+        if let restored {
+            history.remove(at: restored)
+        } else {
             history.append((window, current))
             if history.count > Self.maxHistory { history.removeFirst() }
         }
-        return Self.set(next, on: window, application: application) ? nil : Self.unavailable
+        return nil
     }
 
     private static let unavailable = CueError("WINDOW_UNAVAILABLE", "Cue could not move the front window. Full-screen windows and some system windows cannot be moved.")

@@ -72,6 +72,11 @@ public enum Scripts {
         } catch {
             return .failure(CueError("SCRIPT_FAILED", "Could not start \(url.lastPathComponent). \(error.localizedDescription)"))
         }
+        let group = -process.processIdentifier
+        let stop: @Sendable () -> Void = {
+            kill(group, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { kill(group, SIGKILL) }
+        }
         let capture = Capture()
         let readers = DispatchGroup()
         for (pipe, isError) in [(out, false), (err, true)] {
@@ -81,7 +86,7 @@ public enum Scripts {
                 defer { readers.leave() }
                 while let chunk = try? handle.read(upToCount: 65536), !chunk.isEmpty {
                     if !capture.add(chunk, error: isError, limit: limit) {
-                        if process.isRunning { process.terminate() }
+                        stop()
                         return
                     }
                 }
@@ -90,10 +95,7 @@ public enum Scripts {
         let deadline = DispatchWorkItem {
             guard process.isRunning else { return }
             capture.expire()
-            process.terminate()
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            }
+            stop()
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
         process.waitUntilExit()

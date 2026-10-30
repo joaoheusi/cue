@@ -30,7 +30,7 @@ extension NSMenu {
 }
 
 @MainActor final class Notifier: NSObject, UNUserNotificationCenterDelegate {
-    func post(_ title: String, _ body: String, unavailable: @escaping @MainActor () -> Void) {
+    func post(_ title: String, _ body: String, unavailable: @escaping @MainActor () -> Void = {}) {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         let content = UNMutableNotificationContent()
@@ -39,7 +39,7 @@ extension NSMenu {
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         Task {
             let granted = (try? await center.requestAuthorization(options: [.alert])) ?? false
-            if !granted { return unavailable() }
+            guard granted, await center.notificationSettings().alertStyle != .none else { return unavailable() }
             do {
                 try await center.add(request)
             } catch {
