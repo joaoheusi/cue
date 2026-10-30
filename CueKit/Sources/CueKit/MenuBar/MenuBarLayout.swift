@@ -145,6 +145,21 @@ public enum MenuBarLayout {
         return nil
     }
 
+    public static func isExposed(_ section: MenuBarSection, separators: MenuBarSeparatorFrames) -> Bool {
+        func collapsed(_ span: MenuBarSpan) -> Bool { span.maxX - span.minX < expandedSeparatorWidth }
+        return switch section {
+        case .visible: true
+        case .hidden: collapsed(separators.hidden)
+        case .alwaysHidden: collapsed(separators.hidden) && collapsed(separators.alwaysHidden)
+        }
+    }
+
+    public static func isAnchored(_ window: CGRect, to item: CGPoint, barHeight: CGFloat) -> Bool {
+        window.height > barHeight && window.minY <= item.y + barHeight && (window.minX...window.maxX).contains(item.x)
+    }
+
+    private static let expandedSeparatorWidth = 100.0
+
     public static func keys(for raw: [(bundleID: String, identifier: String?, title: String?, description: String?)]) -> [String] {
         var indexInApp: [String: Int] = [:]
         var seen: [String: Int] = [:]

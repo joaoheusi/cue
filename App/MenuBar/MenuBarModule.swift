@@ -19,7 +19,7 @@ import UniformTypeIdentifiers
     @ObservationIgnored private var rehideTask: Task<Void, Never>?
     @ObservationIgnored private var frontmostObserver: NSObjectProtocol?
     @ObservationIgnored private var lastArrangeCode = "none"
-    @ObservationIgnored private var openedItem: pid_t?
+    @ObservationIgnored private var openedItem: (pid: pid_t, point: CGPoint)?
 
     private(set) var storage: LoadState<MenuBarStore> = .loading
     private(set) var settings = MenuBarSettings()
@@ -109,7 +109,7 @@ import UniformTypeIdentifiers
                 guard let self, let reveal = self.reveal else { return }
                 if !self.arranging, MenuBarReveal.shouldRehide(now: Date(), revealedAt: reveal.at, seconds: self.settings.autoRehideSeconds,
                                                                 cause: reveal.cause, pointerInMenuBar: Self.pointerInMenuBar,
-                                                                itemOpen: self.openedItem.map(MenuBarAccess.isOpen) ?? false) {
+                                                                itemOpen: self.openedItem.map { MenuBarAccess.isOpen(pid: $0.pid, at: $0.point) } ?? false) {
                     self.hide()
                     return
                 }
@@ -311,13 +311,12 @@ import UniformTypeIdentifiers
         } else {
             reveal?.at = Date()
         }
+        let unavailable = CueError("ITEM_UNAVAILABLE", "Could not open that item. It may have closed. Open the list again.")
+        guard let target = await MenuBarAccess.target(entry, separators: { separators?.frames }) else { return report(unavailable) }
         var pid: pid_t = 0
-        openedItem = AXUIElementGetPid(entry.element, &pid) == .success ? pid : nil
-        let point = await MenuBarAccess.clickPoint(entry)
-        if let point, context.paste.canPostPaste, await MenuBarAccess.click(point) { return }
-        if !MenuBarAccess.press(entry) {
-            report(CueError("ITEM_UNAVAILABLE", "Could not open that item. It may have closed. Open the list again."))
-        }
+        openedItem = AXUIElementGetPid(entry.element, &pid) == .success ? (pid, target.point) : nil
+        if target.clickable, context.paste.canPostPaste, await MenuBarAccess.click(target.point) { return }
+        if !MenuBarAccess.press(entry) { report(unavailable) }
     }
 
     private func showList() async {

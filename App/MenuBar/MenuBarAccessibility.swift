@@ -66,12 +66,14 @@ struct ScannedItem: @unchecked Sendable, Identifiable {
         }
     }
 
-    static func clickPoint(_ item: ScannedItem) async -> CGPoint? {
+    static func target(_ item: ScannedItem, separators: () -> MenuBarSeparatorFrames?) async -> (point: CGPoint, clickable: Bool)? {
         var previous: CGRect?
         for _ in 0..<30 {
             let current = await Task.detached(priority: .userInitiated) { frame(item.element) }.value
-            if let current, current == previous,
-               let point = MenuBarLayout.clickPoint(for: current, displays: displays, barHeight: barHeight) { return point }
+            if let current, current == previous, separators().map({ MenuBarLayout.isExposed(item.section, separators: $0) }) ?? true {
+                let point = MenuBarLayout.clickPoint(for: current, displays: displays, barHeight: barHeight)
+                return (point ?? CGPoint(x: current.midX, y: current.midY), point != nil)
+            }
             previous = current
             try? await Task.sleep(for: .milliseconds(30))
         }
@@ -105,13 +107,13 @@ struct ScannedItem: @unchecked Sendable, Identifiable {
         return posted
     }
 
-    static func isOpen(pid: pid_t) -> Bool {
+    static func isOpen(pid: pid_t, at point: CGPoint) -> Bool {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         return windows.contains { window in
             guard window[kCGWindowOwnerPID as String] as? pid_t == pid, (window[kCGWindowLayer as String] as? Int ?? 0) > 0,
                   let bounds = window[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
-            return rect.height > NSStatusBar.system.thickness + 8
+            return MenuBarLayout.isAnchored(rect, to: point, barHeight: barHeight)
         }
     }
 
