@@ -215,7 +215,7 @@ import UniformTypeIdentifiers
         let invocation = Invocation(target: paste ? context.paste.capture() : .failure(PasteFailure.targetUnavailable.error))
         let result = await deliver(action, copyOnly: false, invocation: invocation)
         switch result {
-        case .success(let delivery) where delivery.succeeded: break
+        case .success(let delivery) where delivery.succeeded || delivery == .cancelled: break
         case .success(let delivery): show(delivery.message)
         case .failure(let error): show(error.message)
         }
@@ -230,6 +230,15 @@ import UniformTypeIdentifiers
         !copyOnly && (action.deliveryMode == .paste || (action.deliveryMode == .inherit && snapshot?.settings.defaultDelivery == .paste))
     }
 
+    var willPasteByDefault: Bool { snapshot?.settings.defaultDelivery == .paste }
+
+    func deliver(_ snippet: Snippet, copyOnly: Bool) async -> Result<Delivery, CueError> {
+        guard let invocation = context.invocation, !invocation.expired else {
+            return .failure(CueError("INVOCATION_EXPIRED", "Reopen the palette to use this snippet."))
+        }
+        return await render(snippet.template, paste: !copyOnly && willPasteByDefault, assistant: nil, invocation: invocation)
+    }
+
     private func deliver(_ requested: Action, copyOnly: Bool, invocation: Invocation) async -> Result<Delivery, CueError> {
         guard let store else { return .failure(CueError.storage()) }
         let action: Action
@@ -242,7 +251,20 @@ import UniformTypeIdentifiers
             return .failure(CueError("REVISION_CONFLICT", "Action changed. Reload before continuing."))
         }
         guard action.enabled else { return .failure(CueError("ACTION_DISABLED", "Enable this action before using it.")) }
-        let paste = willPaste(action, copyOnly: copyOnly)
+        let result = await render(action.template, paste: willPaste(action, copyOnly: copyOnly),
+                                  assistant: action.ai == true ? action.name : nil, invocation: invocation)
+        guard case .success(let delivery) = result else { return result }
+        switch delivery {
+        case .pasted, .copied, .copiedNotPasted:
+            if (try? await store.recordUse(action.id)) == nil { notice = ("Copied. Usage could not be saved.", true) }
+        default: break
+        }
+        if case .copiedNotPasted(let error) = delivery { context.log.record(error, "prompts.paste") }
+        try? await reload()
+        return result
+    }
+
+    private func render(_ template: String, paste: Bool, assistant: String?, invocation: Invocation) async -> Result<Delivery, CueError> {
         var target: PasteTarget?
         if paste {
             switch invocation.target {
@@ -253,31 +275,57 @@ import UniformTypeIdentifiers
                 return .failure(error)
             }
         }
-        let generation = paste ? context.paste.changeCount : nil
-        let output: String
+        let generation = paste || assistant != nil ? context.paste.changeCount : nil
+        var output: String
+        var credentials: Assistant.Credentials?
         do {
             var clipboard = ""
-            if try Template.needsClipboard(action.template) {
+            if try Template.needsClipboard(template) {
                 clipboard = try context.paste.readText()
                 if clipboard.isEmpty { throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.") }
                 try Template.validateText(clipboard, maxBytes: Template.outputLimit)
             }
-            output = try Template.renderLocal(action.template, clipboard: clipboard)
+            output = try Template.renderLocal(template, clipboard: clipboard)
+            if assistant != nil { credentials = try Assistant.credentials(in: context.dataDirectory) }
         } catch {
             return .failure(error.cueError)
         }
         if invocation.cancelled { return .success(.cancelled) }
         invocation.consumed = true
-        let delivery = await context.paste.deliver(output, paste: paste, target: target, generation: generation,
-                                                   isCancelled: { invocation.cancelled }, hide: context.closeCommand)
-        switch delivery {
-        case .pasted, .copied, .copiedNotPasted:
-            if (try? await store.recordUse(action.id)) == nil { notice = ("Copied. Usage could not be saved.", true) }
-        default: break
+        if let assistant, let credentials {
+            context.closeCommand()
+            do {
+                output = try await Assistant.complete(output, credentials: credentials)
+            } catch {
+                report(assistant, error)
+                return .success(.cancelled)
+            }
         }
-        if case .copiedNotPasted(let error) = delivery { context.log.record(error, "prompts.paste") }
-        try? await reload()
+        let delivery = await context.paste.deliver(output, paste: paste, target: target, generation: generation,
+                                                   isCancelled: { invocation.cancelled }, hide: assistant == nil ? context.closeCommand : {})
+        if let assistant {
+            switch delivery {
+            case .copied: notify(assistant, "Result copied to the clipboard.")
+            case .pasted: notify(assistant, "Result pasted.")
+            case .cancelled: break
+            case .failedBeforeCopy(let error) where error == PasteFailure.clipboardChanged.error:
+                report(assistant, CueError(error.code, "The clipboard changed while Claude was working, so Cue kept your new copy. Run it again."))
+                return .success(.cancelled)
+            case .copiedNotPasted(let error), .failedBeforeCopy(let error):
+                report(assistant, error)
+                return .success(.cancelled)
+            }
+        }
         return .success(delivery)
+    }
+
+    private func report(_ title: String, _ error: CueError) {
+        context.log.record(error, "ai")
+        notify(title, error.message)
+    }
+
+    private func notify(_ title: String, _ body: String) {
+        context.notifier.post(title, body) { [weak self] in self?.show(body) }
     }
 
     func diagnostics() -> [(String, String)] {

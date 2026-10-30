@@ -29,7 +29,7 @@ import Sparkle
     var lastCheck: Date? { updater?.lastUpdateCheckDate }
 
     func checkNow() {
-        NSApp.activate()
+        NSApp.takeFocus()
         controller?.checkForUpdates(nil)
     }
 

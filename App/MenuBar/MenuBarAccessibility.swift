@@ -56,16 +56,69 @@ struct ScannedItem: @unchecked Sendable, Identifiable {
         AXUIElementPerformAction(item.element, kAXPressAction as CFString) == .success
     }
 
-    static func drag(from start: CGPoint, to end: CGPoint) async -> Bool {
-        let saved = CGEvent(source: nil)?.location
-        defer { if let saved { CGWarpMouseCursorPosition(saved) } }
+    private static func poster(flags: CGEventFlags) -> (CGEventType, CGPoint) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
-        func post(_ type: CGEventType, _ point: CGPoint) -> Bool {
+        return { type, point in
             guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { return false }
-            event.flags = .maskCommand
+            event.flags = flags
             event.post(tap: .cghidEventTap)
             return true
         }
+    }
+
+    static func clickPoint(_ item: ScannedItem) async -> CGPoint? {
+        var previous: CGRect?
+        for _ in 0..<30 {
+            let current = await Task.detached(priority: .userInitiated) { frame(item.element) }.value
+            if let current, current == previous,
+               let point = MenuBarLayout.clickPoint(for: current, displays: displays, barHeight: barHeight) { return point }
+            previous = current
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        return nil
+    }
+
+    private static let barHeight: CGFloat = 40
+
+    private static var displays: [MenuBarDisplay] {
+        guard let primary = NSScreen.screens.first else { return [] }
+        return NSScreen.screens.map { screen in
+            var notch: ClosedRange<CGFloat>?
+            if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea, left.maxX <= right.minX {
+                notch = left.maxX...right.minX
+            }
+            let frame = screen.frame
+            return MenuBarDisplay(frame: CGRect(x: frame.minX, y: primary.frame.maxY - frame.maxY, width: frame.width, height: frame.height), notch: notch)
+        }
+    }
+
+    static func click(_ point: CGPoint) async -> Bool {
+        let saved = CGEvent(source: nil)?.location
+        defer { if let saved { CGWarpMouseCursorPosition(saved) } }
+        let post = poster(flags: [])
+        guard post(.mouseMoved, point) else { return false }
+        try? await Task.sleep(for: .milliseconds(30))
+        guard post(.leftMouseDown, point) else { return false }
+        try? await Task.sleep(for: .milliseconds(30))
+        let posted = post(.leftMouseUp, point)
+        try? await Task.sleep(for: .milliseconds(30))
+        return posted
+    }
+
+    static func isOpen(pid: pid_t) -> Bool {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { window in
+            guard window[kCGWindowOwnerPID as String] as? pid_t == pid, (window[kCGWindowLayer as String] as? Int ?? 0) > 0,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
+            return rect.height > NSStatusBar.system.thickness + 8
+        }
+    }
+
+    static func drag(from start: CGPoint, to end: CGPoint) async -> Bool {
+        let saved = CGEvent(source: nil)?.location
+        defer { if let saved { CGWarpMouseCursorPosition(saved) } }
+        let post = poster(flags: .maskCommand)
         guard post(.mouseMoved, start) else { return false }
         try? await Task.sleep(for: .milliseconds(50))
         guard post(.leftMouseDown, start) else { return false }

@@ -6,14 +6,14 @@ enum CommandScope: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .prompts: "Prompts"
+        case .prompts: "Search"
         case .clipboard: "Clipboard"
         case .menuBar: "Menu Bar"
         }
     }
     var symbol: String {
         switch self {
-        case .prompts: "text.cursor"
+        case .prompts: "magnifyingglass"
         case .clipboard: "doc.on.clipboard"
         case .menuBar: "menubar.rectangle"
         }
@@ -21,7 +21,7 @@ enum CommandScope: String, CaseIterable, Identifiable {
 }
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, prompts, clipboard, menuBar, data
+    case general, prompts, commands, clipboard, menuBar, data
     var id: String { rawValue }
 }
 
@@ -33,6 +33,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     let permissions = PermissionCoordinator()
     let log = DiagnosticsLog()
     let updater: AppUpdater
+    let notifier = Notifier()
 
     var invocation: Invocation?
 
@@ -76,11 +77,15 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 @MainActor final class Invocation {
     let id = UUID()
     let created = Date()
-    let target: Result<PasteTarget, CueError>
+    let front: NSRunningApplication?
+    var target: Result<PasteTarget, CueError>
     var consumed = false
     var cancelled = false
 
-    init(target: Result<PasteTarget, CueError>) { self.target = target }
+    init(target: Result<PasteTarget, CueError>, front: NSRunningApplication? = nil) {
+        self.target = target
+        self.front = front
+    }
 
     var expired: Bool { consumed || cancelled || Date().timeIntervalSince(created) > 300 }
 }

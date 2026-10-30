@@ -386,7 +386,7 @@ struct ClipboardStatus: Equatable {
         alert.showsSuppressionButton = true
         alert.suppressionButton?.title = "Keep pinned items"
         alert.suppressionButton?.state = .on
-        NSApp.activate()
+        NSApp.takeFocus()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let keepPinned = alert.suppressionButton?.state == .on
         Task {
@@ -495,7 +495,7 @@ struct ClipboardStatus: Equatable {
         alert.alertStyle = .warning
         alert.addButton(withTitle: button)
         alert.addButton(withTitle: "Cancel")
-        NSApp.activate()
+        NSApp.takeFocus()
         return alert.runModal() == .alertFirstButtonReturn
     }
 }

@@ -28,8 +28,7 @@ import UniformTypeIdentifiers
             window.setFrameAutosaveName("CueSettings")
             self.window = window
         }
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
+        NSApp.takeFocus(window)
     }
 }
 
@@ -48,7 +47,7 @@ private struct SettingsRoot: View {
         }
         .padding(12)
         .frame(minWidth: 560, minHeight: 460)
-        .tint(.gray)
+        .tint(.primary)
     }
 }
 
@@ -63,7 +62,7 @@ struct DataSettingsView: View {
                 LabeledContent("Folder") {
                     Text(context.dataDirectory.path).textSelection(.enabled).font(.caption.monospaced())
                 }
-                Text("Everything Cue stores stays in this folder and the macOS Keychain. Cue has no accounts, sync, telemetry, or analytics.")
+                Text("Everything Cue stores stays in this folder and the macOS Keychain. Cue has no accounts, sync, telemetry, or analytics. Text leaves this Mac only when you run an action that uses Claude.")
                     .font(.callout).foregroundStyle(.secondary)
                 Button("Show in Finder") {
                     try? FileManager.default.createDirectory(at: context.dataDirectory, withIntermediateDirectories: true)
@@ -99,7 +98,7 @@ struct DataSettingsView: View {
     2. Turn off Launch at Login in General (or remove Cue in System Settings → General → Login Items).
     3. Remove Cue from System Settings → Privacy & Security → Accessibility and Paste.
     4. Delete Cue.app from Applications, and ~/Library/LaunchAgents/Cue.plist if it exists.
-    5. Delete ~/Library/Application Support/app.cue.launcher (prompts, settings, clipboard history, backups).
+    5. Delete ~/Library/Application Support/app.cue.launcher (prompts, snippets, scripts, .env, settings, clipboard history, backups).
     6. Delete the clipboard key: security delete-generic-password -s app.cue.launcher.clipboard
     """
 }

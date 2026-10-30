@@ -181,7 +181,7 @@ struct MenuBarSettingsView: View {
             Section {
                 Toggle("Hide menu bar items", isOn: Binding(get: { module.settings.enabled }, set: { value in Task { await module.setEnabled(value) } }))
                     .accessibilityIdentifier("menuBar.enabled")
-                Text("Icons to the left of the ‹ chevron are hidden. Hold ⌘ and drag an icon to the right of the chevron to keep it visible. Click the chevron or press the shortcut to show them. ⌥-click the chevron to also show always-hidden icons.")
+                Text("Icons to the left of the ‹ chevron are hidden. Hold ⌘ and drag an icon to the right of the chevron to keep it visible. Click the chevron or press the shortcut to show them. ⌥-click the chevron to also show always-hidden icons. Right-click it to pick a hidden icon from a list.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section("Behavior") {
@@ -190,7 +190,9 @@ struct MenuBarSettingsView: View {
                         TextField("Seconds", text: $rehideText).labelsHidden().frame(width: 60).multilineTextAlignment(.trailing)
                             .onSubmit(saveRehide)
                         Text("seconds")
-                        Button("Save", action: saveRehide).disabled(rehideText == String(module.settings.autoRehideSeconds))
+                        if rehideText != String(module.settings.autoRehideSeconds) {
+                            Button("Save", action: saveRehide)
+                        }
                     }
                 }
                 Text("0 keeps items shown until you hide them.").font(.caption).foregroundStyle(.secondary)

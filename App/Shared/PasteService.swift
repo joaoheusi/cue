@@ -158,7 +158,7 @@ enum Delivery: Equatable {
     func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
         let written: Int
         do {
-            written = try write(text, expected: paste ? generation : nil)
+            written = try write(text, expected: generation)
         } catch {
             return .failedBeforeCopy(error)
         }

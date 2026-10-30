@@ -42,10 +42,11 @@ final class CommandPanel: NSPanel {
         super.init()
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.hide(cancel: true) }
-        let host = NSHostingController(rootView: CommandRoot(state: state, content: content))
+        let host = NSHostingController(rootView: CommandRoot(state: state, context: context, content: content))
         host.sizingOptions = [.minSize]
         panel.contentViewController = host
         panel.setContentSize(NSSize(width: 750, height: 475))
+        host.view.layoutSubtreeIfNeeded()
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -59,12 +60,22 @@ final class CommandPanel: NSPanel {
     }
 
     func show(_ scope: CommandScope) {
-        if !panel.isVisible || !panel.isKeyWindow {
-            context.invocation = Invocation(target: context.isUITesting ? .failure(PasteFailure.targetUnavailable.error) : context.paste.capture())
+        let opening = !panel.isVisible || !panel.isKeyWindow
+        var invocation: Invocation?
+        if opening {
+            invocation = Invocation(target: .failure(PasteFailure.targetUnavailable.error), front: NSWorkspace.shared.frontmostApplication)
+            context.invocation = invocation
             state.openID = UUID()
             if !panel.isVisible { position() }
         }
         state.scope = scope
+        if let invocation, !context.isUITesting {
+            panel.orderFrontRegardless()
+            panel.contentView?.layoutSubtreeIfNeeded()
+            panel.displayIfNeeded()
+            CATransaction.flush()
+            invocation.target = context.paste.capture()
+        }
         panel.makeKeyAndOrderFront(nil)
     }
 
@@ -94,18 +105,38 @@ final class CommandPanel: NSPanel {
 
 private struct CommandRoot: View {
     @Bindable var state: CommandState
+    let context: AppContext
     let content: (CommandScope) -> AnyView
+
+    private var settingsTab: SettingsTab {
+        switch state.scope {
+        case .prompts: .prompts
+        case .clipboard: .clipboard
+        case .menuBar: .menuBar
+        }
+    }
 
     var body: some View {
         content(state.scope)
             .id("\(state.scope.rawValue)-\(state.openID)")
             .overlay(alignment: .topTrailing) { switcher }
+            .background { shortcuts }
             .frame(minWidth: 480, minHeight: 320)
             .background(PanelBackground())
             .clipShape(RoundedRectangle(cornerRadius: PanelBackground.radius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: PanelBackground.radius, style: .continuous).strokeBorder(.primary.opacity(0.1))
             }
+    }
+
+    private var shortcuts: some View {
+        ZStack {
+            Button("New Action") { context.openLibrary("new") }.keyboardShortcut("n", modifiers: .command)
+            Button("Settings") { context.openSettings(settingsTab) }.keyboardShortcut(",", modifiers: .command)
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private var switcher: some View {

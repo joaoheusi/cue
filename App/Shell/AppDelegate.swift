@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let context = AppContext()
     private(set) lazy var prompts = PromptsModule(context: context)
+    private(set) lazy var commands = CommandsModule(context: context, prompts: prompts.model)
     private(set) lazy var clipboard = ClipboardModule(context: context)
     private(set) lazy var menuBar = MenuBarModule(context: context)
     private var command: CommandWindowController!
@@ -21,7 +22,7 @@ import SwiftUI
         }
         command = CommandWindowController(context: context) { [unowned self] scope in
             switch scope {
-            case .prompts: prompts.commandView()
+            case .prompts: AnyView(PaletteView(model: prompts.model, commands: commands))
             case .clipboard: clipboard.commandView()
             case .menuBar: menuBar.commandView()
             }
@@ -29,7 +30,8 @@ import SwiftUI
         settings = SettingsWindowController { [unowned self] in
             [
                 (.general, "General", "gearshape", prompts.generalSettingsView()),
-                (.prompts, "Prompts", CommandScope.prompts.symbol, prompts.settingsView()),
+                (.prompts, "Prompts", "text.cursor", prompts.settingsView()),
+                (.commands, "Commands", "command", commands.settingsView()),
                 (.clipboard, "Clipboard", CommandScope.clipboard.symbol, clipboard.settingsView()),
                 (.menuBar, "Menu Bar", CommandScope.menuBar.symbol, menuBar.settingsView()),
                 (.data, "Data & Privacy", "lock.shield", AnyView(DataSettingsView(context: context, diagnostics: diagnosticsReport))),
@@ -53,10 +55,11 @@ import SwiftUI
         installStatusItem()
         Task {
             await prompts.start()
+            await commands.start()
             await clipboard.start()
             await menuBar.start()
             if context.isUITesting {
-                NSApp.activate()
+                NSApp.takeFocus()
                 command.show(.prompts)
             }
         }
@@ -136,6 +139,12 @@ import SwiftUI
             add(menu, "Open \(scope.title)", scope.symbol) { [unowned self] in command.show(scope) }
         }
         menu.addItem(.separator())
+        if menuBar.settings.enabled {
+            let revealed = menuBar.isRevealed
+            add(menu, revealed ? "Collapse Menu Bar" : "Expand Menu Bar", revealed ? "chevron.right" : "chevron.left") { [unowned self] in menuBar.toggle() }
+        } else {
+            add(menu, "Turn On Menu Bar Hiding…", "chevron.left") { [unowned self] in Task { await menuBar.setEnabled(true) } }
+        }
         add(menu, "Manage Prompts…", "list.bullet.rectangle") { [unowned self] in context.openLibrary(nil) }
         add(menu, "Settings…", "gearshape", key: ",") { [unowned self] in context.openSettings(.general) }
         if context.updater.isAvailable {
@@ -150,12 +159,7 @@ import SwiftUI
     }
 
     private func add(_ menu: NSMenu, _ title: String, _ symbol: String, key: String = "", action: @escaping @MainActor () -> Void) {
-        let item = NSMenuItem(title: title, action: #selector(MenuAction.run), keyEquivalent: key)
-        let target = MenuAction(action)
-        item.target = target
-        item.representedObject = target
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        menu.addItem(item)
+        menu.add(title, image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil), key: key, action: action)
     }
 
     private func diagnosticsReport() async -> String {
@@ -178,6 +182,7 @@ import SwiftUI
         }))
         sections.append(("Updates", context.updater.diagnostics))
         sections.append(("Prompts", await prompts.diagnostics()))
+        sections.append(("Commands", commands.diagnostics()))
         sections.append(("Clipboard", await clipboard.diagnostics()))
         sections.append(("Menu Bar", await menuBar.diagnostics()))
         sections.append(("Recent errors", context.log.entries.suffix(50).map { ("", $0) }))
@@ -196,10 +201,4 @@ import SwiftUI
         "x86_64"
         #endif
     }
-}
-
-@MainActor private final class MenuAction: NSObject {
-    let action: @MainActor () -> Void
-    init(_ action: @escaping @MainActor () -> Void) { self.action = action }
-    @objc func run() { action() }
 }

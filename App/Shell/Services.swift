@@ -2,6 +2,56 @@ import AppKit
 import CueKit
 import ServiceManagement
 import UniformTypeIdentifiers
+import UserNotifications
+
+extension NSApplication {
+    func takeFocus(_ window: NSWindow? = nil) {
+        activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+    }
+}
+
+@MainActor final class MenuAction: NSObject {
+    let action: @MainActor () -> Void
+    init(_ action: @escaping @MainActor () -> Void) { self.action = action }
+    @objc func run() { action() }
+}
+
+extension NSMenu {
+    @MainActor func add(_ title: String, image: NSImage? = nil, key: String = "", action: @escaping @MainActor () -> Void) {
+        let item = NSMenuItem(title: title, action: #selector(MenuAction.run), keyEquivalent: key)
+        let target = MenuAction(action)
+        item.target = target
+        item.representedObject = target
+        item.image = image
+        addItem(item)
+    }
+}
+
+@MainActor final class Notifier: NSObject, UNUserNotificationCenterDelegate {
+    func post(_ title: String, _ body: String, unavailable: @escaping @MainActor () -> Void) {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        Task {
+            let granted = (try? await center.requestAuthorization(options: [.alert])) ?? false
+            if !granted { return unavailable() }
+            do {
+                try await center.add(request)
+            } catch {
+                unavailable()
+            }
+        }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner]
+    }
+}
 
 @MainActor final class PermissionCoordinator {
     enum Kind {
@@ -38,7 +88,7 @@ import UniformTypeIdentifiers
         alert.informativeText = kind.explanation
         alert.addButton(withTitle: continueTitle)
         alert.addButton(withTitle: "Not Now")
-        NSApp.activate()
+        NSApp.takeFocus()
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -89,7 +139,7 @@ import UniformTypeIdentifiers
         panel.nameFieldStringValue = suggestedName
         panel.allowedContentTypes = [type]
         panel.canCreateDirectories = true
-        NSApp.activate()
+        NSApp.takeFocus()
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         do {
             try data.write(to: url, options: [.atomic])
@@ -103,7 +153,7 @@ import UniformTypeIdentifiers
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [type]
         panel.allowsMultipleSelection = false
-        NSApp.activate()
+        NSApp.takeFocus()
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
             return try BoundedFile.read(url, maxBytes: maxBytes)
