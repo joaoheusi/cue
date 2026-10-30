@@ -203,12 +203,8 @@ struct PaletteView: View {
             footer(current, count: trimmed.isEmpty ? snapshot.actions.filter(\.enabled).count + commands.scripts.count : found.count(filter), searching: !trimmed.isEmpty)
         }
         .background { shortcuts(current) }
-        .onAppear {
-            if let action = model.pendingAsk {
-                model.pendingAsk = nil
-                submit(.action(action), alternate: false)
-            }
-        }
+        .onAppear(perform: takePendingAsk)
+        .onChange(of: model.pendingAsk?.id) { takePendingAsk() }
         .onChange(of: query) {
             error = nil
             commands.files.clear()
@@ -221,6 +217,12 @@ struct PaletteView: View {
             if !Task.isCancelled { commands.files.search(query, scope: FileScope(locations: snapshot.settings.fileLocations, skip: snapshot.settings.skipFolders)) }
         }
         .onDisappear { commands.files.stop() }
+    }
+
+    private func takePendingAsk() {
+        guard let action = model.pendingAsk else { return }
+        model.pendingAsk = nil
+        submit(.action(action), alternate: false)
     }
 
     private func chips(_ found: PaletteResults) -> some View {

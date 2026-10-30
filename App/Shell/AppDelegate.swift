@@ -41,6 +41,7 @@ import SwiftUI
             ]
         }
         context.openCommand = { [unowned self] in command.toggle($0) }
+        context.showCommand = { [unowned self] in command.show($0) }
         context.closeCommand = { [unowned self] in command.hide(cancel: false) }
         context.showCommandPassively = { [unowned self] in command.showPassively() }
         context.commandVisible = { [unowned self] in command.isVisible }

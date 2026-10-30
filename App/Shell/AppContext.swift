@@ -62,6 +62,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var invocation: Invocation?
 
     var openCommand: (CommandScope) -> Void = { _ in }
+    var showCommand: (CommandScope) -> Void = { _ in }
     var closeCommand: () -> Void = {}
     var showCommandPassively: () -> Void = {}
     var openLibrary: (_ actionID: String?) -> Void = { _ in }

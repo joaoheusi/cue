@@ -276,13 +276,22 @@ import UniformTypeIdentifiers
             let next = ActionRun(title: action.name, kind: .claude, surface: .palette, prompt: prepared.output, input: prepared.input, inputName: prepared.inputName,
                                  action: action, invocation: invocation, target: prepared.target, targetName: invocation.front?.localizedName,
                                  generation: prepared.generation, finish: paste ? .paste : .copy)
-            run = next
+            replaceRun(with: next)
             begin(next)
             return nil
         }
     }
 
+    private func replaceRun(with next: ActionRun) {
+        run?.task?.cancel()
+        run = next
+    }
+
     func test(_ draft: Action) {
+        guard run?.isRunning != true else {
+            notice = ("Stop the running action before you test this one.", false)
+            return
+        }
         let invocation = Invocation(target: .failure(PasteFailure.targetUnavailable.error))
         let claude = draft.ai == true
         switch prepare(draft.template, paste: false, assistant: claude, invocation: invocation, answers: [:], sampleSelection: "Selected text") {
@@ -291,7 +300,7 @@ import UniformTypeIdentifiers
         case .success(let prepared):
             let next = ActionRun(title: draft.name, kind: draft.runsAs, surface: .library, prompt: prepared.output, input: prepared.input,
                                  inputName: prepared.inputName, invocation: invocation, finish: .keep)
-            run = next
+            replaceRun(with: next)
             if claude {
                 begin(next)
             } else {
@@ -303,11 +312,15 @@ import UniformTypeIdentifiers
     }
 
     func showOutput(_ title: String, text: String, surface: ActionRun.Surface) {
+        if surface == .library, run?.isRunning == true {
+            notice = ("\(title) finished, but its output is hidden while another action runs.", false)
+            return
+        }
         let next = ActionRun(title: title, kind: .script, surface: surface, invocation: context.invocation ?? Invocation(target: .failure(PasteFailure.targetUnavailable.error)), finish: .keep)
         next.output = text
         next.phase = .finished
         next.ended = next.started
-        run = next
+        replaceRun(with: next)
     }
 
     private func begin(_ run: ActionRun) {
@@ -431,7 +444,7 @@ import UniformTypeIdentifiers
         guard let action = snapshot?.actions.first(where: { $0.id == actionID }) else { return }
         if let uses = try? Template.uses(action.template), !uses.questions.isEmpty {
             pendingAsk = action
-            context.openCommand(.prompts)
+            context.showCommand(.prompts)
             return
         }
         let paste = willPaste(action, copyOnly: false)
