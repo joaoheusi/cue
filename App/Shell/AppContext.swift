@@ -14,15 +14,39 @@ enum CommandScope: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .prompts: "magnifyingglass"
-        case .clipboard: "doc.on.clipboard"
+        case .clipboard: "clipboard"
         case .menuBar: "menubar.rectangle"
         }
     }
 }
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, prompts, commands, clipboard, menuBar, data
+    case general, shortcuts, palette, clipboard, menuBar, actions, privacy
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .shortcuts: "Shortcuts"
+        case .palette: "Palette"
+        case .clipboard: "Clipboard"
+        case .menuBar: "Menu Bar"
+        case .actions: "Actions"
+        case .privacy: "Privacy"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .shortcuts: "keyboard"
+        case .palette: "magnifyingglass"
+        case .clipboard: "clipboard"
+        case .menuBar: "menubar.rectangle"
+        case .actions: "sparkle"
+        case .privacy: "lock"
+        }
+    }
 }
 
 @MainActor final class AppContext {
@@ -42,6 +66,10 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var showCommandPassively: () -> Void = {}
     var openLibrary: (_ actionID: String?) -> Void = { _ in }
     var openSettings: (SettingsTab) -> Void = { _ in }
+    var commandVisible: () -> Bool = { false }
+    var interceptCancel: () -> Bool = { false }
+    var keepsRunning: () -> Bool = { false }
+    var commandDidHide: () -> Void = {}
 
     init() {
         let environment = ProcessInfo.processInfo.environment
@@ -67,6 +95,10 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var keychainService: String {
         let name = dataDirectory.lastPathComponent
         return name.hasPrefix("app.cue.launcher") ? "\(name).clipboard" : "app.cue.launcher.custom.\(name).clipboard"
+    }
+
+    var claudeKeyService: String {
+        keychainService.replacingOccurrences(of: ".clipboard", with: ".claude")
     }
 
     var version: String {

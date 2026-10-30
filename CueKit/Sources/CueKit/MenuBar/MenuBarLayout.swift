@@ -85,7 +85,7 @@ public struct MenuBarRule: Codable, Equatable, Sendable, Identifiable {
 }
 
 public struct MenuBarSettings: Equatable, Sendable {
-    public static let defaultShortcut = "Super+Alt+B"
+    public static let defaultShortcut = "Super+Alt+H"
 
     public var enabled = false
     public var autoRehideSeconds = 10

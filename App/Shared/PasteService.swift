@@ -86,6 +86,14 @@ enum Delivery: Equatable {
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
     }
 
+    func selectedText(in app: NSRunningApplication?) -> String? {
+        guard canReadTarget, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let application = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(application, 0.2)
+        guard let field = element(application, kAXFocusedUIElementAttribute), !isSecure(field) else { return nil }
+        return attribute(field, kAXSelectedTextAttribute) as? String
+    }
+
     func check(_ target: PasteTarget) -> CueError? {
         guard let failure = check(target, foreground: false) else { return nil }
         log.record("\(failure.error.code) app=\(target.app.bundleIdentifier ?? "?") \(lastObservation)", "paste.precheck")

@@ -68,19 +68,36 @@ struct StatusLine: View {
 
 struct ShortcutRecorder: View {
     var value: Shortcut?
+    var dimmed = false
     var onChange: (Shortcut?) -> Void
     @State private var recording = false
     @State private var monitor: Any?
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(recording ? "Press a shortcut…" : (value?.display ?? "Record Shortcut")) {
+        HStack(spacing: 4) {
+            Button(recording ? "Press keys…" : (value?.display ?? "Record")) {
                 recording ? stop() : start()
             }
-            .frame(minWidth: 140)
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: value == nil ? .regular : .medium))
+            .foregroundStyle(value == nil || recording || dimmed ? .secondary : .primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
             if value != nil && !recording {
-                Button("Clear") { onChange(nil) }
+                Button { onChange(nil) } label: {
+                    Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18).background(Cue.fill, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear shortcut")
             }
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .frame(width: 118, height: 26)
+        .background(value == nil ? Color.clear : Cue.card, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(recording ? Color.accentColor : Color.primary.opacity(0.14), style: StrokeStyle(lineWidth: 1, dash: value == nil && !recording ? [3, 3] : []))
         }
         .onDisappear(perform: stop)
     }
@@ -108,57 +125,62 @@ struct ShortcutRecorder: View {
     }
 }
 
-struct CommandList<Item: Identifiable, Row: View>: View {
+struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View {
     @Binding var query: String
     var placeholder: String
     var items: [Item]
     @Binding var selection: Item.ID?
-    var row: (Item, Bool) -> Row
+    var header: (Item) -> String? = { _ in nil }
+    var listWidth: CGFloat = CommandMetrics.listWidth
+    var showsDetail = false
+    @ViewBuilder var row: (Item, Bool) -> Row
+    @ViewBuilder var bar: () -> Bar
+    @ViewBuilder var detail: () -> Detail
     var onSubmit: (Item, _ alternate: Bool) -> Void
-    var onKeyPress: ((Item, KeyPress) -> KeyPress.Result)?
+    var onKeyPress: ((Item?, KeyPress) -> KeyPress.Result)?
     @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            TextField(placeholder, text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 16))
-                .padding(.leading, 18)
-                .padding(.trailing, CommandMetrics.switcherWidth)
-                .frame(height: CommandMetrics.searchHeight)
-                .focused($focused)
-                .accessibilityIdentifier("command.search")
-                .onKeyPress(.downArrow) { move(1) }
-                .onKeyPress(.upArrow) { move(-1) }
-                .onKeyPress(.return, phases: .down) { press in
-                    guard let item = current else { return .ignored }
-                    onSubmit(item, press.modifiers.contains(.shift))
-                    return .handled
-                }
-                .onKeyPress(phases: .down) { press in
-                    guard let item = current, let onKeyPress else { return .ignored }
-                    return onKeyPress(item, press)
-                }
-            Divider()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(items) { item in
-                            row(item, item.id == selection)
-                                .contentShape(Rectangle())
-                                .onTapGesture(count: 2) { onSubmit(item, false) }
-                                .onTapGesture { selection = item.id }
-                                .id(item.id)
-                                .accessibilityIdentifier("command.row")
-                                .accessibilityAddTraits(item.id == selection ? .isSelected : [])
-                        }
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(.secondary)
+                TextField(placeholder, text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 19))
+                    .focused($focused)
+                    .accessibilityIdentifier("command.search")
+                    .onKeyPress(.downArrow) { move(1) }
+                    .onKeyPress(.upArrow) { move(-1) }
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard let item = current else { return .ignored }
+                        onSubmit(item, !press.modifiers.isDisjoint(with: [.shift, .command]))
+                        return .handled
                     }
-                    .padding(8)
-                }
-                .onChange(of: selection) { _, id in
-                    if let id { proxy.scrollTo(id) }
+                    .onKeyPress(phases: .down) { press in onKeyPress?(current, press) ?? .ignored }
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, CommandMetrics.switcherWidth)
+            .frame(height: CommandMetrics.searchHeight)
+            bar()
+            Rectangle().fill(Cue.hairline).frame(height: 1)
+            HStack(spacing: 0) {
+                list
+                    .frame(width: showsDetail ? listWidth : nil)
+                    .frame(maxWidth: showsDetail ? nil : .infinity)
+                if showsDetail {
+                    Rectangle().fill(Cue.hairline).frame(width: 1)
+                    detail().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .background(Color.primary.opacity(0.012))
                 }
             }
+            .frame(maxHeight: .infinity)
+        }
+        .background {
+            Button("Copy") { if let current { onSubmit(current, true) } }
+                .keyboardShortcut(.return, modifiers: .command)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .onAppear {
             focused = true
@@ -167,6 +189,35 @@ struct CommandList<Item: Identifiable, Row: View>: View {
         }
         .onChange(of: items.map(\.id)) { _, ids in
             if selection == nil || !ids.contains(where: { $0 == selection }) { selection = ids.first }
+        }
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(items) { item in
+                        if let title = header(item) {
+                            SectionLabel(text: title)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 8)
+                                .padding(.bottom, 3)
+                        }
+                        row(item, item.id == selection)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) { onSubmit(item, false) }
+                            .onTapGesture { selection = item.id }
+                            .id(item.id)
+                            .accessibilityIdentifier("command.row")
+                            .accessibilityAddTraits(item.id == selection ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+            .onChange(of: selection) { _, id in
+                if let id { proxy.scrollTo(id) }
+            }
         }
     }
 
@@ -181,33 +232,39 @@ struct CommandList<Item: Identifiable, Row: View>: View {
 }
 
 enum CommandMetrics {
-    static let searchHeight: CGFloat = 56
-    static let switcherWidth: CGFloat = 190
+    static let searchHeight: CGFloat = 60
+    static let switcherWidth: CGFloat = 340
+    static let listWidth: CGFloat = 430
+    static let panelSize = NSSize(width: 820, height: 540)
 }
 
-struct CommandRow<Accessory: View>: View {
+struct CommandRow<Leading: View, Accessory: View>: View {
     var title: String
     var subtitle: String?
-    var symbol: String
     var selected: Bool
+    var monospaced = false
+    var match = ""
+    @ViewBuilder var leading: () -> Leading
     @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .font(.system(size: 13))
-                .foregroundStyle(selected ? .primary : .secondary)
-                .frame(width: 20)
-            Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1).layoutPriority(1)
-            if let subtitle, !subtitle.isEmpty {
-                Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+            leading()
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(AttributedString.highlighted(title, matching: match))
+                    .font(monospaced ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5, weight: selected ? .semibold : .medium))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             accessory().font(.system(size: 12)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
-        .frame(height: 36)
-        .background(selected ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .frame(height: 40)
+        .background(selected ? Cue.selection : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -223,29 +280,51 @@ struct CommandFooter<Leading: View, Trailing: View>: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .frame(height: 38)
-        .background(Color.primary.opacity(0.03))
-        .overlay(alignment: .top) { Divider() }
+        .padding(.leading, 20)
+        .padding(.trailing, 14)
+        .frame(height: 40)
+        .overlay(alignment: .top) { Rectangle().fill(Cue.hairline).frame(height: 1) }
     }
 }
 
 struct KeyHint: View {
     var label: String
-    var keys: [String]
+    var keys: String
+    var primary = false
+    var dimmed = false
 
     var body: some View {
-        HStack(spacing: 3) {
-            Text(label).padding(.trailing, 3)
-            ForEach(keys, id: \.self) { key in
-                Text(key)
-                    .font(.system(size: 10, weight: .medium))
-                    .frame(minWidth: 17, minHeight: 17)
-                    .padding(.horizontal, 2)
-                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    .overlay { RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(.primary.opacity(0.08)) }
-            }
+        HStack(spacing: 6) {
+            Text(label).fontWeight(primary ? .semibold : .regular).foregroundStyle(primary ? .primary : dimmed ? .tertiary : .secondary)
+            Key(text: keys, dimmed: dimmed)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct ActionsHint: View {
+    var action: () -> Void
+
+    var body: some View {
+        Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 16)
+        Button(action: action) { KeyHint(label: "Actions", keys: "⌘K") }
+            .buttonStyle(.plain)
+            .keyboardShortcut("k", modifiers: .command)
+    }
+}
+
+struct DetailRows: View {
+    var rows: [(String, String)]
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            ForEach(rows, id: \.0) { label, value in
+                GridRow {
+                    Text(label).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
+                    Text(value).lineLimit(2).textSelection(.enabled)
+                }
+            }
+        }
+        .font(.system(size: 12))
     }
 }

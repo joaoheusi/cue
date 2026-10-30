@@ -3,7 +3,7 @@ import Foundation
 
 public actor ClipboardStore {
     public static let fileName = "clipboard.sqlite3"
-    static let schemaVersion = 1
+    static let schemaVersion = 2
 
     public static let keyUnavailable = CueError(
         "HISTORY_KEY_UNAVAILABLE",
@@ -45,6 +45,15 @@ public actor ClipboardStore {
                 try Self.write(ClipboardSettings(), db)
             }
         }
+        if try db.userVersion() < 2 {
+            try db.transaction {
+                try db.executeScript("""
+                ALTER TABLE items ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE items ADD COLUMN expires_at TEXT;
+                PRAGMA user_version=2;
+                """)
+            }
+        }
         self.db = db
         guard let json = try db.scalar("SELECT value FROM meta WHERE key='settings'")?.data,
               let settings = try? JSONDecoder().decode(ClipboardSettings.self, from: json) else { throw CueError.storage() }
@@ -78,17 +87,27 @@ public actor ClipboardStore {
         let crypto = try requireCrypto()
         let (stamp, date) = Self.stamp(now)
         let digest = crypto.digest(text)
+        let sensitive = settings.sensitive != .keep && SensitiveText.matches(text)
+        let expiry = Self.expiry(sensitive: sensitive, settings: settings, now: date)
         if let id = try db.scalar("SELECT id FROM items WHERE digest=?1", [.blob(digest)])?.string {
-            try db.execute("UPDATE items SET last_used_at=?1 WHERE id=?2", [.text(stamp), .text(id)])
+            let pinned = cache[id]?.isPinned ?? false
+            try db.execute("UPDATE items SET last_used_at=?1, expires_at=?2 WHERE id=?3",
+                           [.text(stamp), pinned ? .null : expiry.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
             cache[id]?.lastUsedAt = date
+            cache[id]?.expiresAt = pinned ? nil : expiry
             return id
         }
         let id = Self.newID()
         let sealedSource = try source.map { try crypto.seal($0, context: "\(id).source") }
-        try db.execute("INSERT INTO items(id, digest, text, source, created_at, last_used_at) VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
-                       [.text(id), .blob(digest), .blob(try crypto.seal(text, context: "\(id).text")), sealedSource.map(SQLValue.blob) ?? .null, .text(stamp)])
-        cache[id] = ClipItem(id: id, text: text, source: source, createdAt: date, lastUsedAt: date, pinboardID: nil)
+        try db.execute("INSERT INTO items(id, digest, text, source, created_at, last_used_at, sensitive, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
+                       [.text(id), .blob(digest), .blob(try crypto.seal(text, context: "\(id).text")), sealedSource.map(SQLValue.blob) ?? .null, .text(stamp),
+                        SQLValue(sensitive), expiry.map { .text(Timestamp.iso($0)) } ?? .null])
+        cache[id] = ClipItem(id: id, text: text, source: source, createdAt: date, lastUsedAt: date, pinboardID: nil, sensitive: sensitive, expiresAt: expiry)
         return id
+    }
+
+    private static func expiry(sensitive: Bool, settings: ClipboardSettings, now: Date) -> Date? {
+        sensitive && settings.sensitive == .maskAndExpire ? now.addingTimeInterval(SensitiveText.lifetime) : nil
     }
 
     public func markUsed(_ id: String, now: Date) throws {
@@ -99,8 +118,11 @@ public actor ClipboardStore {
 
     public func setPinboard(_ id: String, _ pinboardID: String?) throws {
         if let pinboardID, !pinboards.contains(where: { $0.id == pinboardID }) { throw CueError.validation("That pinboard no longer exists.") }
-        try db.execute("UPDATE items SET pinboard_id=?1 WHERE id=?2", [SQLValue(pinboardID), .text(id)])
+        let expiry = pinboardID == nil ? Self.expiry(sensitive: cache[id]?.sensitive ?? false, settings: settings, now: Date()) : nil
+        try db.execute("UPDATE items SET pinboard_id=?1, expires_at=?2 WHERE id=?3",
+                       [SQLValue(pinboardID), expiry.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
         cache[id]?.pinboardID = pinboardID
+        cache[id]?.expiresAt = expiry
     }
 
     public func delete(_ id: String) throws {
@@ -111,10 +133,10 @@ public actor ClipboardStore {
 
     @discardableResult
     public func purge(now: Date) throws -> Int {
-        let candidates = try db.query("SELECT id, last_used_at, pinboard_id FROM items").compactMap { row -> PurgeCandidate? in
+        let candidates = try db.query("SELECT id, last_used_at, pinboard_id, expires_at FROM items").compactMap { row -> PurgeCandidate? in
             guard let id = row[0].string else { return nil }
             let used = row[1].string.flatMap(Timestamp.parse) ?? .distantPast
-            return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null)
+            return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null, expiresAt: row[3].string.flatMap(Timestamp.parse))
         }
         let doomed = ClipboardPurge.select(candidates, now: now, retention: settings.retention, maxItems: settings.maxItems)
         guard !doomed.isEmpty else { return 0 }
@@ -181,7 +203,7 @@ public actor ClipboardStore {
         if crypto == nil, try itemCount() > 0 { throw Self.keyUnavailable }
         let file = ClipboardExport(
             schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards,
-            items: items().map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
+            items: items().filter { !$0.sensitive }.map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
         return try file.encoded()
     }
 
@@ -215,12 +237,13 @@ public actor ClipboardStore {
 
     private func load(_ crypto: ClipboardCrypto) throws {
         var cache: [String: ClipItem] = [:]
-        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id FROM items") {
+        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at FROM items") {
             guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
                   let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse)
             else { continue }
             let source = row[2].data.flatMap { try? crypto.open($0, context: "\(id).source") }
-            cache[id] = ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string)
+            cache[id] = ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string,
+                                 sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse))
         }
         self.crypto = crypto
         self.cache = cache

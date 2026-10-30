@@ -19,6 +19,7 @@ import CueKit
     private var nextID: UInt32 = 1
     private var handlerInstalled = false
     private(set) var paused = false
+    private(set) var pausedAt: Date?
     private(set) var statuses: [String: Status] = [:]
     var onChange: () -> Void = {}
 
@@ -60,6 +61,7 @@ import CueKit
     func setPaused(_ value: Bool) {
         guard value != paused else { return }
         paused = value
+        pausedAt = value ? Date() : nil
         let current = bindings
         for (owner, binding) in current {
             if let ref = binding.ref { UnregisterEventHotKey(ref) }

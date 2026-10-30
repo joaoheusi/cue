@@ -47,6 +47,8 @@ public struct Shortcut: Hashable, Sendable, CustomStringConvertible {
 
     public var keyCode: UInt32 { Self.keyCodes[key] ?? 0 }
 
+    public var menuKey: String { key == "Space" ? " " : key.count == 1 ? key.lowercased() : "" }
+
     public init?(keyCode: UInt16, command: Bool, control: Bool, option: Bool, shift: Bool) {
         guard let key = Self.keyCodes.first(where: { $0.value == UInt32(keyCode) })?.key else { return nil }
         self.init(key: key, command: command, control: control, option: option, shift: shift)

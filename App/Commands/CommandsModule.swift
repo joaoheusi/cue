@@ -8,6 +8,9 @@ import SwiftUI
     private(set) var apps: [FileHit] = []
     private(set) var snippetError: CueError?
     private(set) var hasKey = false
+    private(set) var keyPreview: String?
+    private(set) var keyTest: (valid: Bool, at: Date, message: String?)?
+    private(set) var testingKey = false
     var status: (text: String, success: Bool)?
     let files = FileSearch()
 
@@ -32,15 +35,17 @@ import SwiftUI
     func reload() async {
         let snippetsURL, scriptsFolder, directory: URL
         (snippetsURL, scriptsFolder, directory) = (self.snippetsURL, self.scriptsFolder, context.dataDirectory)
+        let service = prompts.snapshot?.settings.keyStorage == .keychain ? context.claudeKeyService : nil
         let loaded = await Task.detached(priority: .userInitiated) {
             (snippets: Result { () throws(CueError) in try Snippets.load(snippetsURL) },
              scripts: Scripts.list(in: scriptsFolder),
              apps: InstalledApps.list(),
-             hasKey: (try? Assistant.credentials(in: directory)) != nil)
+             key: (try? Assistant.credentials(in: directory, storedKey: service.flatMap { ClaudeKey.load(service: $0) }))?.key)
         }.value
         scripts = loaded.scripts
         apps = loaded.apps
-        hasKey = loaded.hasKey
+        hasKey = loaded.key != nil
+        keyPreview = loaded.key.map(SensitiveText.mask)
         switch loaded.snippets {
         case .success(let list):
             snippets = list
@@ -61,6 +66,19 @@ import SwiftUI
         } else {
             NSWorkspace.shared.open(hit.url)
         }
+    }
+
+    func copyPath(_ hit: FileHit) {
+        context.closeCommand()
+        Task { _ = await context.paste.deliver(hit.url.path, paste: false, target: nil, generation: nil, isCancelled: { false }, hide: {}) }
+    }
+
+    func run(_ script: Script) async throws(CueError) -> String {
+        let timeout = TimeInterval(prompts.snapshot?.settings.scriptTimeout ?? Int(Scripts.timeout))
+        let text = try await Scripts.run(script, timeout: timeout)
+        let name = script.url.lastPathComponent
+        await prompts.perform { try await $0.recordScriptUse(name) }
+        return text
     }
 
     func copy(_ text: String) async -> Delivery {
@@ -85,6 +103,49 @@ import SwiftUI
         guard !context.isUITesting else { return }
         for command in WindowCommand.allCases {
             if let shortcut = shortcut(for: command) { _ = register(command, shortcut) }
+        }
+        for script in scripts {
+            if let shortcut = shortcut(for: script) { _ = register(script, shortcut) }
+        }
+    }
+
+    static func owner(_ script: Script) -> String { "script:\(script.url.lastPathComponent)" }
+
+    func shortcut(for script: Script) -> Shortcut? {
+        prompts.snapshot?.bindings[Self.owner(script)].flatMap(Shortcut.init)
+    }
+
+    func shortcutError(for script: Script) -> String? {
+        context.hotKeys.statuses[Self.owner(script)]?.error
+    }
+
+    func setShortcut(_ shortcut: Shortcut?, for script: Script) async {
+        let owner = Self.owner(script)
+        if let shortcut, !register(script, shortcut) { return }
+        if shortcut == nil { context.hotKeys.unregister(owner) }
+        await prompts.perform { try await $0.saveBinding(owner: owner, chord: shortcut?.description ?? "") }
+    }
+
+    private func register(_ script: Script, _ shortcut: Shortcut) -> Bool {
+        do {
+            try context.hotKeys.register(Self.owner(script), shortcut) { [weak self] in
+                guard let self else { return }
+                Task {
+                    do {
+                        let text = try await self.run(script)
+                        if case .failedBeforeCopy(let failure) = await self.copy(text) { self.prompts.report(script.name, failure) } else {
+                            self.context.notifier.post(script.name, "Output copied to the clipboard.")
+                        }
+                    } catch {
+                        self.prompts.report(script.name, error.cueError)
+                    }
+                }
+            }
+            status = nil
+            return true
+        } catch {
+            status = (error.message, false)
+            return false
         }
     }
 
@@ -142,59 +203,105 @@ import SwiftUI
         }
     }
 
-    func settingsView() -> AnyView { AnyView(CommandsSettingsView(module: self)) }
+    var snippetsFile: URL { snippetsURL }
+
+    func revealSnippets() {
+        if !FileManager.default.fileExists(atPath: snippetsURL.path) { return openSnippets() }
+        NSWorkspace.shared.activateFileViewerSelecting([snippetsURL])
+    }
+
+    func importSnippets() async {
+        guard let existing = prompts.snapshot?.actions else { return }
+        let actions = Snippets.actions(snippets, existing: existing)
+        for action in actions {
+            guard await prompts.perform(nil, { try await $0.save(action) }) != nil else { return }
+        }
+        let manager = FileManager.default
+        let done = context.dataDirectory.appendingPathComponent("snippets.imported.json")
+        try? manager.removeItem(at: done)
+        try? manager.moveItem(at: snippetsURL, to: done)
+        status = ("Added \(actions.count) action\(actions.count == 1 ? "" : "s") to the Library. The old file is now snippets.imported.json.", true)
+        await reload()
+    }
+
+    private var storage: KeyStorage { prompts.snapshot?.settings.keyStorage ?? .env }
+
+    private func writeKey(_ key: String?, to storage: KeyStorage) throws(CueError) {
+        switch storage {
+        case .keychain:
+            if let key { try ClaudeKey.save(key, service: context.claudeKeyService) } else { ClaudeKey.delete(service: context.claudeKeyService) }
+        case .env:
+            let manager = FileManager.default
+            try? manager.createDirectory(at: context.dataDirectory, withIntermediateDirectories: true)
+            let current = (try? BoundedFile.read(envURL, maxBytes: 64 * 1024)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+            do {
+                try Data(DotEnv.setting(Assistant.keyName, to: key, in: current).utf8).write(to: envURL, options: .atomic)
+                try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: envURL.path)
+            } catch {
+                throw CueError("KEY_SAVE_FAILED", "Cue could not write the .env file.")
+            }
+        }
+    }
+
+    func replaceKey() {
+        let alert = NSAlert()
+        alert.messageText = hasKey ? "Replace API key" : "Add API key"
+        alert.informativeText = storage == .keychain ? "Cue saves the key in your Keychain." : "Cue saves the key in the .env file in its data folder."
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = "sk-ant-…"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.takeFocus()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        do {
+            try writeKey(key, to: storage)
+            keyTest = nil
+            status = nil
+        } catch {
+            status = (error.message, false)
+        }
+        Task { await reload() }
+    }
+
+    func setKeyStorage(_ target: KeyStorage) async {
+        let source = storage
+        guard target != source else { return }
+        do {
+            if let key = (try? prompts.credentials())?.key {
+                try writeKey(key, to: target)
+                try writeKey(nil, to: source)
+            }
+        } catch {
+            status = (error.message, false)
+            return
+        }
+        await prompts.saveSettings { $0.keyStorage = target }
+        await reload()
+    }
+
+    func testKey() async {
+        testingKey = true
+        defer { testingKey = false }
+        do {
+            try await Assistant.verify(try prompts.credentials())
+            keyTest = (true, Date(), nil)
+        } catch {
+            keyTest = (false, Date(), error.cueError.message)
+        }
+    }
+
+    func settingsView() -> AnyView { AnyView(ActionsSettingsView(module: self, prompts: prompts)) }
 
     func diagnostics() -> [(String, String)] {
         [
-            ("API key in .env", hasKey ? "yes" : "no"),
+            ("API key", hasKey ? "yes (\(storage.rawValue))" : "no"),
             ("Snippets", snippetError?.code ?? "\(snippets.count)"),
             ("Scripts", "\(scripts.count)"),
             ("Window shortcuts", "\(WindowCommand.allCases.filter { shortcut(for: $0) != nil }.count)"),
         ]
-    }
-}
-
-struct CommandsSettingsView: View {
-    let module: CommandsModule
-
-    var body: some View {
-        Form {
-            Section("Claude") {
-                LabeledContent("API key", value: module.hasKey ? "Found in .env" : "Not set")
-                Text("Fix Grammar, Summarize, and Translate are actions in your library. Turn on Run through Claude for any other action. Cue sends text to Anthropic only when you run one of these actions, and Cue itself sends nothing else off this Mac. Scripts you run can use the network like any other program.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Button("Open .env") { module.openEnv() }
-            }
-            Section("Snippets") {
-                Text("Add { \"keyword\", \"expansion\" } entries to snippets.json. Search for a keyword in the command window. {date}, {time}, and {clipboard} are filled in when you use a snippet.")
-                    .font(.callout).foregroundStyle(.secondary)
-                if let error = module.snippetError { ErrorBanner(error: error) }
-                LabeledContent("Saved", value: "\(module.snippets.count)")
-                Button("Open snippets.json") { module.openSnippets() }
-            }
-            Section("Scripts") {
-                Text("Each file in the commands folder appears in the command window by its name. Return copies its output. Shift-Return shows it. Cue stops a script after \(Int(Scripts.timeout)) seconds.")
-                    .font(.callout).foregroundStyle(.secondary)
-                LabeledContent("Found", value: "\(module.scripts.count)")
-                Button("Show Commands Folder") { module.showScripts() }
-            }
-            Section("Window shortcuts") {
-                ForEach(WindowCommand.allCases) { command in
-                    LabeledContent(command.title) {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            ShortcutRecorder(value: module.shortcut(for: command)) { shortcut in
-                                Task { await module.setShortcut(shortcut, for: command) }
-                            }
-                            if let error = module.shortcutError(for: command) {
-                                Text(error).font(.caption).foregroundStyle(.orange)
-                            }
-                        }
-                    }
-                }
-                if let status = module.status { StatusLine(text: status.text, success: status.success) }
-            }
-        }
-        .formStyle(.grouped)
-        .task { await module.reload() }
     }
 }

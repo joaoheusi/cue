@@ -6,8 +6,12 @@ import SwiftUI
     let model: PromptsModel
     private let nav = LibraryNavigation()
     private var window: NSWindow?
+    var commands: CommandsModule!
 
-    init(context: AppContext) { model = PromptsModel(context: context) }
+    init(context: AppContext) {
+        model = PromptsModel(context: context)
+        nav.save = { [model] in await model.save($0, quiet: true) }
+    }
 
     func start() async {
         await model.load()
@@ -19,21 +23,26 @@ import SwiftUI
 
     func stop() {}
 
-    func settingsView() -> AnyView { AnyView(PromptsSettingsView(model: model)) }
+    func settingsView() -> AnyView { AnyView(PaletteSettingsView(model: model)) }
     func generalSettingsView() -> AnyView { AnyView(GeneralSettingsView(model: model)) }
 
     func openLibrary(_ actionID: String?) {
         if window == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, nav: nav).tint(.primary)))
+            let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, commands: commands, nav: nav)))
             window.title = "Cue"
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-            window.setContentSize(NSSize(width: 1100, height: 780))
+            window.setContentSize(NSSize(width: 1160, height: 740))
             window.isReleasedWhenClosed = false
             window.center()
             window.setFrameAutosaveName("CueLibrary")
             self.window = window
         }
-        if let actionID, let snapshot = model.snapshot { nav.select(actionID, in: snapshot) }
+        if let actionID, let snapshot = model.snapshot {
+            nav.filter = .all
+            nav.select(actionID, in: snapshot)
+        }
         NSApp.takeFocus(window)
     }
 

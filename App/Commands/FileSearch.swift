@@ -1,8 +1,10 @@
 import AppKit
+import CoreServices
 import CueKit
 
 struct FileHit: Identifiable, Equatable {
     let url: URL
+    var isFolder = false
     var id: String { url.path }
     var name: String { url.lastPathComponent }
     var isApp: Bool { url.pathExtension == "app" }
@@ -39,29 +41,27 @@ enum InstalledApps {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     private static let minimumLength = 2
-    private static let scanLimit = 400
-    private static let resultLimit = 30
-    private static let skipped: Set = ["node_modules", "DerivedData", ".git", ".build", "build"]
-    private static let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library").path + "/"
+    private static let scanLimit = 2000
+    private static let resultLimit = 60
 
     func clear() {
         stop()
         results = []
     }
 
-    func search(_ text: String) {
+    func search(_ text: String, scope: FileScope) {
         clear()
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard needle.count >= Self.minimumLength else { return }
+        guard needle.count >= Self.minimumLength, !scope.locations.isEmpty else { return }
         let query = NSMetadataQuery()
         query.predicate = NSPredicate(format: "%K CONTAINS[cd] %@", NSMetadataItemFSNameKey, needle)
-        query.searchScopes = [NSMetadataQueryUserHomeScope]
+        query.searchScopes = scope.roots.map { URL(fileURLWithPath: $0, isDirectory: true) }
         query.notificationBatchingInterval = 0.05
         let center = NotificationCenter.default
         for name in [Notification.Name.NSMetadataQueryGatheringProgress, .NSMetadataQueryDidFinishGathering] {
             observers.append(center.addObserver(forName: name, object: query, queue: .main) { [weak self] note in
                 let finished = note.name == .NSMetadataQueryDidFinishGathering
-                MainActor.assumeIsolated { self?.collect(needle, finished: finished) }
+                MainActor.assumeIsolated { self?.collect(needle, scope: scope, finished: finished) }
             })
         }
         self.query = query
@@ -75,18 +75,16 @@ enum InstalledApps {
         observers = []
     }
 
-    private func collect(_ needle: String, finished: Bool) {
+    private func collect(_ needle: String, scope: FileScope, finished: Bool) {
         guard let query else { return }
         query.disableUpdates()
-        let paths = (0..<min(query.resultCount, Self.scanLimit)).compactMap {
-            (query.result(at: $0) as? NSMetadataItem)?.value(forAttribute: NSMetadataItemPathKey) as? String
+        let found = (0..<min(query.resultCount, Self.scanLimit)).compactMap { index -> FileHit? in
+            guard let item = query.result(at: index) as? NSMetadataItem,
+                  let path = item.value(forAttribute: NSMetadataItemPathKey) as? String, scope.allows(path) else { return nil }
+            return FileHit(url: URL(fileURLWithPath: path), isFolder: item.value(forAttribute: NSMetadataItemContentTypeKey) as? String == "public.folder")
         }
         query.enableUpdates()
-        let wanted = paths.filter { path in
-            !path.hasPrefix(Self.library) && !path.split(separator: "/").contains { Self.skipped.contains(String($0)) || $0.hasPrefix(".") }
-                && !path.contains(".app/") && !path.hasSuffix(".app")
-        }
-        results = wanted.map { URL(fileURLWithPath: $0) }.map(FileHit.init).sorted { a, b in
+        results = found.sorted { a, b in
             let first = Self.rank(a, needle), second = Self.rank(b, needle)
             if first != second { return first < second }
             return a.name.count != b.name.count ? a.name.count < b.name.count : a.id < b.id
@@ -96,5 +94,40 @@ enum InstalledApps {
 
     private static func rank(_ hit: FileHit, _ needle: String) -> Int {
         hit.name.lowercased().hasPrefix(needle.lowercased()) ? 0 : 1
+    }
+}
+
+struct FileDetails: Equatable, Sendable {
+    var kind = ""
+    var location = ""
+    var version: String?
+    var size: String?
+    var lastOpened: Date?
+}
+
+enum FileInfo {
+    static func load(_ hit: FileHit) async -> FileDetails {
+        let url = hit.url
+        return await Task.detached(priority: .utility) {
+            var details = FileDetails(location: (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
+            let keys: Set<URLResourceKey> = [.localizedTypeDescriptionKey, .isDirectoryKey, .totalFileAllocatedSizeKey]
+            let values = try? url.resourceValues(forKeys: keys)
+            details.kind = values?.localizedTypeDescription ?? ""
+            details.version = Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            if let item = MDItemCreateWithURL(kCFAllocatorDefault, url as CFURL) {
+                details.lastOpened = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
+            }
+            var bytes = values?.totalFileAllocatedSize.map(Int64.init) ?? 0
+            if values?.isDirectory == true {
+                let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey], options: [])
+                var seen = 0
+                while let next = walker?.nextObject() as? URL, seen < 200_000, !Task.isCancelled {
+                    seen += 1
+                    bytes += Int64((try? next.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+                }
+            }
+            details.size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            return details
+        }.value
     }
 }

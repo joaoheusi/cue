@@ -58,4 +58,18 @@ import Testing
         #expect(TextLimits.firstInvalidControl(in: "🇧🇷\u{1b}") == 3)
         #expect(TextLimits.firstInvalidControl(in: "\u{7f}") == 1)
     }
+
+    @Test func shortAgesReadLikeTheDesign() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let noon = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: now)!
+        #expect(ShortAge.text(noon.addingTimeInterval(-18), now: noon, calendar: calendar) == "18s")
+        #expect(ShortAge.text(noon.addingTimeInterval(-720), now: noon, calendar: calendar) == "12m")
+        #expect(ShortAge.text(noon.addingTimeInterval(-10_800), now: noon, calendar: calendar) == "3h")
+        #expect(ShortAge.text(noon.addingTimeInterval(-86_400), now: noon, calendar: calendar) == "Yesterday")
+        #expect(ShortAge.text(noon.addingTimeInterval(-3 * 86_400), now: noon, calendar: calendar) == "3d")
+        #expect(ShortAge.until(noon.addingTimeInterval(61), now: noon) == "2m")
+        #expect(ShortAge.until(noon.addingTimeInterval(20), now: noon) == "20s")
+    }
 }

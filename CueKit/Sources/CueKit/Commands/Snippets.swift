@@ -37,6 +37,13 @@ public enum Snippets {
         return try decode(data)
     }
 
+    public static func actions(_ snippets: [Snippet], existing: [Action]) -> [Action] {
+        let names = Set(existing.map { ActionRules.key($0.name) })
+        return snippets.filter { !names.contains(ActionRules.key($0.keyword)) }.map {
+            Action(name: $0.keyword, template: $0.template, aliases: [$0.keyword])
+        }
+    }
+
     public static func decode(_ data: Data) throws(CueError) -> [Snippet] {
         guard let list = try? JSONDecoder().decode([Snippet].self, from: data) else {
             throw CueError("SNIPPETS_INVALID", "snippets.json must be a list of { \"keyword\", \"expansion\" } entries.")

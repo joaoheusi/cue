@@ -4,7 +4,19 @@ import SwiftUI
 
 enum LibraryFilter: Hashable {
     case all, favorites, recent, disabled
+    case runs(RunsAs)
     case category(String)
+}
+
+enum LibraryRow: Identifiable {
+    case action(Action), script(Script)
+
+    var id: String {
+        switch self {
+        case .action(let action): action.id
+        case .script(let script): "script:\(script.id)"
+        }
+    }
 }
 
 @MainActor @Observable final class LibraryNavigation {
@@ -12,18 +24,30 @@ enum LibraryFilter: Hashable {
     var query = ""
     private(set) var draft: Action?
     private(set) var original: Action?
+    private(set) var baseline: Action?
+    private(set) var script: Script?
+    var saving = false
     var pendingSelection: String??
+    @ObservationIgnored var save: (Action) async -> Action? = { _ in nil }
 
     var isDirty: Bool { draft != nil && draft != original }
 
     func edit(_ action: Action?) {
         draft = action
         original = action
+        baseline = action
+        script = nil
+    }
+
+    func show(_ script: Script) {
+        edit(nil)
+        self.script = script
     }
 
     func newAction() {
         var action = Action()
         if case .category(let name) = filter { action.category = name }
+        if case .runs(.claude) = filter { action.ai = true }
         edit(action)
     }
 
@@ -33,13 +57,60 @@ enum LibraryFilter: Hashable {
         draft = value
     }
 
-    func select(_ id: String?, in snapshot: LibrarySnapshot) {
-        guard id != draft?.id else { return }
-        if isDirty {
-            pendingSelection = .some(id)
+    func adopt(_ saved: Action, sent: Action) {
+        original = saved
+        if baseline?.revision == 0 { baseline = saved }
+        guard var current = draft, current.id == saved.id else { return }
+        if current == sent {
+            draft = saved
             return
         }
-        apply(id, in: snapshot)
+        current.revision = saved.revision
+        current.updatedAt = saved.updatedAt
+        current.createdAt = saved.createdAt
+        current.useCount = saved.useCount
+        current.lastUsedAt = saved.lastUsedAt
+        draft = current
+    }
+
+    func revert() {
+        guard var value = baseline, let original else { return }
+        value.revision = original.revision
+        value.updatedAt = original.updatedAt
+        value.useCount = original.useCount
+        value.lastUsedAt = original.lastUsedAt
+        draft = value
+    }
+
+    var canSave: Bool {
+        guard var copy = draft else { return false }
+        do {
+            try ActionRules.validate(&copy)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func flush() async {
+        while saving { try? await Task.sleep(for: .milliseconds(20)) }
+        guard isDirty, canSave, let sent = draft else { return }
+        saving = true
+        defer { saving = false }
+        if let saved = await save(sent) { adopt(saved, sent: sent) }
+    }
+
+    func leave(then go: @escaping () -> Void, blocked: @escaping () -> Void) {
+        guard isDirty else { return go() }
+        Task {
+            await flush()
+            isDirty ? blocked() : go()
+        }
+    }
+
+    func select(_ id: String?, in snapshot: LibrarySnapshot) {
+        guard id != draft?.id else { return }
+        leave(then: { self.apply(id, in: snapshot) }, blocked: { self.pendingSelection = .some(id) })
     }
 
     func apply(_ id: String?, in snapshot: LibrarySnapshot) {
@@ -50,9 +121,11 @@ enum LibraryFilter: Hashable {
 
 struct LibraryView: View {
     let model: PromptsModel
+    let commands: CommandsModule
     @Bindable var nav: LibraryNavigation
     @State private var newCategory: String?
     @State private var renaming: (old: String, name: String)?
+    @FocusState private var filterFocused: Bool
 
     var body: some View {
         Group {
@@ -68,10 +141,10 @@ struct LibraryView: View {
             case .loaded(let snapshot) where !snapshot.settings.onboarded:
                 OnboardingView(model: model)
             case .loaded(let snapshot):
-                split(snapshot)
+                content(snapshot)
             }
         }
-        .frame(minWidth: 760, minHeight: 540)
+        .frame(minWidth: 960, minHeight: 600)
         .overlay(alignment: .bottom) {
             if let notice = model.notice {
                 StatusLine(text: notice.text, success: notice.success)
@@ -82,26 +155,37 @@ struct LibraryView: View {
                     }
             }
         }
+        .sheet(item: Binding(get: { model.run?.surface == .library ? model.run : nil }, set: { if $0 == nil { model.closeRun() } })) { run in
+            RunView(run: run, model: model).frame(width: 680, height: 460)
+        }
     }
 
-    private func split(_ snapshot: LibrarySnapshot) -> some View {
-        NavigationSplitView {
+    private func content(_ snapshot: LibrarySnapshot) -> some View {
+        HStack(spacing: 0) {
             sidebar(snapshot)
-        } content: {
-            list(snapshot)
-        } detail: {
-            if nav.draft != nil {
-                EditorView(model: model, nav: nav, snapshot: snapshot)
-            } else {
-                EmptyStateView(symbol: "text.cursor", title: "Your next instruction starts here.",
-                               message: "Select an action, or create one with ⌘N.", actionTitle: "New Action") { nav.select("new", in: snapshot) }
+            Rectangle().fill(Cue.hairline).frame(width: 1)
+            VStack(spacing: 0) {
+                header(snapshot)
+                Rectangle().fill(Cue.hairline).frame(height: 1)
+                HStack(spacing: 0) {
+                    list(snapshot).frame(width: 300)
+                    Rectangle().fill(Cue.hairline).frame(width: 1)
+                    detail(snapshot).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
+            .background(Color(nsColor: .textBackgroundColor))
+        }
+        .ignoresSafeArea(.all, edges: .top)
+        .task { await commands.reload() }
+        .onChange(of: snapshot.actions) { _, actions in
+            guard !nav.isDirty, !nav.saving, let current = nav.draft, let fresh = actions.first(where: { $0.id == current.id }), fresh != current else { return }
+            nav.edit(fresh)
         }
         .confirmationDialog("Discard unsaved changes?", isPresented: Binding(get: { nav.pendingSelection != nil }, set: { if !$0 { nav.pendingSelection = nil } })) {
             Button("Discard Changes", role: .destructive) { nav.apply(nav.pendingSelection ?? nil, in: snapshot) }
             Button("Keep Editing", role: .cancel) { nav.pendingSelection = nil }
         } message: {
-            Text("Your saved action stays as it is. Changes in this editor will be lost.")
+            Text("This action cannot be saved yet. Changes in this editor will be lost.")
         }
         .sheet(item: Binding(get: { model.pendingImport.map(IdentifiedPreview.init) }, set: { model.pendingImport = $0?.preview })) { item in
             ImportSheet(preview: item.preview) { update in
@@ -128,77 +212,196 @@ struct LibraryView: View {
     }
 
     private func sidebar(_ snapshot: LibrarySnapshot) -> some View {
-        List(selection: Binding(get: { nav.filter }, set: { nav.filter = $0 ?? .all })) {
-            Section("Library") {
-                Label("All actions", systemImage: "tray.full").tag(LibraryFilter.all)
-                Label("Favorites", systemImage: "star").tag(LibraryFilter.favorites)
-                Label("Recent", systemImage: "clock").tag(LibraryFilter.recent)
-                Label("Disabled", systemImage: "nosign").tag(LibraryFilter.disabled)
-            }
-            Section("Categories") {
-                ForEach(snapshot.categories, id: \.self) { name in
-                    Label(name, systemImage: "folder").tag(LibraryFilter.category(name))
-                        .contextMenu {
-                            Button("Rename…") { renaming = (name, name) }
-                            Button("Delete Category", role: .destructive) {
-                                Task { await model.perform { try await $0.category(old: name, name: "", revision: snapshot.revision) } }
-                            }
-                        }
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear.frame(height: 30)
+            List(selection: Binding(get: { nav.filter }, set: { nav.filter = $0 ?? .all })) {
+                Section("Library") {
+                    entry("All Actions", "tray.full", .all, snapshot.actions.count + commands.scripts.count)
+                    entry("Favorites", "star", .favorites, snapshot.actions.filter(\.favorite).count)
+                    entry("Recent", "clock", .recent, nil)
+                    entry("Disabled", "nosign", .disabled, snapshot.actions.filter { !$0.enabled }.count)
                 }
-                Button { newCategory = "" } label: { Label("New Category…", systemImage: "plus") }.buttonStyle(.borderless)
+                Section("Runs as") {
+                    runsEntry(.claude, "Claude", snapshot.actions.filter { $0.runsAs == .claude }.count)
+                    runsEntry(.text, "Text", snapshot.actions.filter { $0.runsAs == .text }.count)
+                    runsEntry(.script, "Scripts", commands.scripts.count)
+                }
+                Section("Categories") {
+                    ForEach(snapshot.categories, id: \.self) { name in
+                        entry(name, "folder", .category(name), snapshot.actions.filter { $0.category == name }.count)
+                            .contextMenu {
+                                Button("Rename…") { renaming = (name, name) }
+                                Button("Delete Category", role: .destructive) {
+                                    Task { await model.perform { try await $0.category(old: name, name: "", revision: snapshot.revision) } }
+                                }
+                            }
+                    }
+                }
             }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            Button { newCategory = "" } label: {
+                Label("New Category", systemImage: "plus").font(.system(size: 12.5))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
         }
-        .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+        .frame(width: 220)
+        .background(Color.primary.opacity(0.03))
     }
 
-    private func filtered(_ snapshot: LibrarySnapshot) -> [Action] {
+    private func entry(_ title: String, _ symbol: String, _ filter: LibraryFilter, _ count: Int?) -> some View {
+        HStack {
+            Label(title, systemImage: symbol)
+            Spacer()
+            if let count, count > 0 { Text("\(count)").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+        }
+        .tag(filter)
+    }
+
+    private func runsEntry(_ kind: RunsAs, _ title: String, _ count: Int) -> some View {
+        HStack(spacing: 8) {
+            Tile(kind, size: 15)
+            Text(title)
+            Spacer()
+            if count > 0 { Text("\(count)").font(.system(size: 11.5)).foregroundStyle(.secondary) }
+        }
+        .tag(LibraryFilter.runs(kind))
+    }
+
+    private var filterTitle: String {
+        switch nav.filter {
+        case .all: "All Actions"
+        case .favorites: "Favorites"
+        case .recent: "Recent"
+        case .disabled: "Disabled"
+        case .runs(let kind): kind == .script ? "Scripts" : kind.title
+        case .category(let name): name
+        }
+    }
+
+    private func header(_ snapshot: LibrarySnapshot) -> some View {
+        HStack(spacing: 10) {
+            Text(filterTitle).font(.system(size: 15, weight: .bold))
+            Spacer()
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+                TextField("Filter", text: $nav.query).textFieldStyle(.plain).font(.system(size: 13)).focused($filterFocused)
+                Key(text: "⌘F")
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 220, height: 28)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background {
+                Button("Filter") { filterFocused = true }.keyboardShortcut("f").opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            }
+            Menu {
+                Button("New Action") { nav.select("new", in: snapshot) }
+                Divider()
+                Button("Import Actions…") { Task { model.pendingImport = await model.previewImport() } }
+                Button("Export Actions…") { Task { await model.exportActions() } }
+                Divider()
+                Button("Open Palette") { model.context.openCommand(.prompts) }
+                Button("Settings…") { model.context.openSettings(.actions) }
+            } label: {
+                Label("New", systemImage: "plus")
+            } primaryAction: {
+                nav.select("new", in: snapshot)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderedProminent)
+            .fixedSize()
+            .accessibilityLabel("New action")
+            .background {
+                Button("New Action") { nav.select("new", in: snapshot) }.keyboardShortcut("n").opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 14)
+        .frame(height: 52)
+    }
+
+    private func filtered(_ snapshot: LibrarySnapshot) -> [LibraryRow] {
         let base: [Action] = switch nav.filter {
         case .all: snapshot.actions
         case .favorites: snapshot.actions.filter(\.favorite)
         case .recent: snapshot.actions.filter { $0.lastUsedAt != nil }.sorted { ($0.lastUsedAt ?? "") > ($1.lastUsedAt ?? "") }
         case .disabled: snapshot.actions.filter { !$0.enabled }
+        case .runs(.script): []
+        case .runs(let kind): snapshot.actions.filter { $0.runsAs == kind }
         case .category(let name): snapshot.actions.filter { $0.category == name }
         }
-        if nav.filter == .recent && nav.query.isEmpty { return base }
-        return ActionSearch.search(base, query: nav.query, enabledOnly: false)
+        let actions = nav.filter == .recent && nav.query.isEmpty ? base : ActionSearch.search(base, query: nav.query, enabledOnly: false)
+        var rows = actions.map(LibraryRow.action)
+        switch nav.filter {
+        case .all, .runs(.script):
+            rows += commands.scripts.filter { ActionSearch.score(nav.query, name: $0.name) != nil }.map(LibraryRow.script)
+        default:
+            break
+        }
+        return rows
     }
 
     private func list(_ snapshot: LibrarySnapshot) -> some View {
-        let actions = filtered(snapshot)
-        return List(selection: Binding(get: { nav.draft?.id }, set: { nav.select($0, in: snapshot) })) {
-            ForEach(actions) { action in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(action.name).lineLimit(1)
-                        if action.favorite { Image(systemName: "star.fill").font(.caption).foregroundStyle(.secondary) }
-                        if !action.enabled { Text("Disabled").font(.caption).foregroundStyle(.secondary) }
-                    }
-                    Text(action.description.isEmpty ? (action.category ?? "Text action") : action.description)
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                .tag(action.id)
+        let rows = filtered(snapshot)
+        return List(selection: Binding(get: { nav.script.map { LibraryRow.script($0).id } ?? nav.draft?.id }, set: { id in
+            if let id, id.hasPrefix("script:"), case .script(let script)? = rows.first(where: { $0.id == id }) {
+                nav.leave(then: { nav.show(script) }, blocked: { nav.pendingSelection = .some(nil) })
+            } else {
+                nav.select(id, in: snapshot)
+            }
+        })) {
+            ForEach(rows) { row in
+                listRow(row, snapshot).tag(row.id).listRowSeparator(.hidden)
             }
         }
+        .listStyle(.inset)
         .overlay {
-            if actions.isEmpty {
+            if rows.isEmpty {
                 EmptyStateView(symbol: "magnifyingglass", title: nav.query.isEmpty ? "Nothing here yet" : "No matching actions",
                                message: nav.query.isEmpty ? "Create an action or choose another filter." : "Try another name or tag.")
             }
         }
-        .searchable(text: $nav.query, placement: .sidebar, prompt: "Filter actions")
-        .navigationSplitViewColumnWidth(min: 240, ideal: 280)
-        .toolbar {
-            ToolbarItemGroup {
-                Button { nav.select("new", in: snapshot) } label: { Label("New Action", systemImage: "plus") }
-                    .keyboardShortcut("n")
-                Menu {
-                    Button("Import Actions…") { Task { model.pendingImport = await model.previewImport() } }
-                    Button("Export Actions…") { Task { await model.exportActions() } }
-                    Divider()
-                    Button("Open Palette") { model.context.openCommand(.prompts) }
-                    Button("Settings…") { model.context.openSettings(.prompts) }
-                } label: { Label("More", systemImage: "ellipsis.circle") }
+    }
+
+    @ViewBuilder private func listRow(_ row: LibraryRow, _ snapshot: LibrarySnapshot) -> some View {
+        switch row {
+        case .action(let action):
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(action.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text("\(action.runsAs.title) · \(action.category ?? "No category")").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if action.favorite { Image(systemName: "star.fill").font(.system(size: 11)).foregroundStyle(.yellow) }
+                if let shortcut = snapshot.bindings[PromptsModel.owner(action)].flatMap(Shortcut.init) { Key(text: shortcut.display) }
+                if !action.enabled { Text("Off").font(.system(size: 11)).foregroundStyle(.secondary) }
             }
+            .opacity(action.enabled ? 1 : 0.5)
+            .padding(.vertical, 4)
+        case .script(let script):
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(script.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text("Script · \(script.url.lastPathComponent)").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if let shortcut = commands.shortcut(for: script) { Key(text: shortcut.display) }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder private func detail(_ snapshot: LibrarySnapshot) -> some View {
+        if nav.draft != nil {
+            EditorView(model: model, nav: nav, snapshot: snapshot)
+        } else if let script = nav.script {
+            ScriptEditorView(script: script, model: model, commands: commands).id(script.id)
+        } else {
+            EmptyStateView(symbol: "text.cursor", title: "Your next instruction starts here.",
+                           message: "Select an action, or create one with ⌘N.", actionTitle: "New Action") { nav.select("new", in: snapshot) }
         }
     }
 }

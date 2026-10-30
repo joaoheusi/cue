@@ -18,6 +18,12 @@ extension NSApplication {
     @objc func run() { action() }
 }
 
+extension NSFont {
+    func withWeight(_ weight: NSFont.Weight) -> NSFont {
+        NSFont.systemFont(ofSize: pointSize, weight: weight)
+    }
+}
+
 extension NSMenu {
     @MainActor func add(_ title: String, image: NSImage? = nil, key: String = "", action: @escaping @MainActor () -> Void) {
         let item = NSMenuItem(title: title, action: #selector(MenuAction.run), keyEquivalent: key)
@@ -130,6 +136,29 @@ extension NSMenu {
         case .notFound: "Unavailable for this copy of Cue. Move Cue to Applications"
         default: "Off"
         }
+    }
+}
+
+@MainActor enum Uninstaller {
+    static func run(context: AppContext) {
+        let alert = NSAlert()
+        alert.messageText = "Uninstall Cue?"
+        alert.informativeText = "Cue removes its login item, deletes its Keychain keys, and moves its data folder and app to the Trash. Saved clipboard history cannot be read after the key is gone. Cue then quits."
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.takeFocus()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        try? LaunchAtLogin.set(false)
+        if LaunchAtLogin.hasLegacyAgent { try? LaunchAtLogin.removeLegacyAgent() }
+        ClipboardKeychain.delete(service: context.keychainService)
+        ClaudeKey.delete(service: context.claudeKeyService)
+        let manager = FileManager.default
+        try? manager.trashItem(at: context.dataDirectory, resultingItemURL: nil)
+        #if !DEBUG
+        try? manager.trashItem(at: Bundle.main.bundleURL, resultingItemURL: nil)
+        #endif
+        NSApp.terminate(nil)
     }
 }
 

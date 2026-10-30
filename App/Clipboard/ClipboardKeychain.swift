@@ -8,7 +8,7 @@ enum ClipboardKeychain {
         case dataProtection = "data-protection", legacy
     }
 
-    private static let account = "history-key"
+    static let account = "history-key"
 
     static func load(service: String, create: Bool) throws -> (SymmetricKey, Kind)? {
         for kind in [Kind.dataProtection, .legacy] {
@@ -44,7 +44,7 @@ enum ClipboardKeychain {
         for kind in [Kind.dataProtection, .legacy] { SecItemDelete(base(service, kind) as CFDictionary) }
     }
 
-    private static func base(_ service: String, _ kind: Kind) -> [String: Any] {
+    static func base(_ service: String, _ kind: Kind, account: String = account) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -52,5 +52,42 @@ enum ClipboardKeychain {
         ]
         if kind == .dataProtection { query[kSecUseDataProtectionKeychain as String] = true }
         return query
+    }
+}
+
+enum ClaudeKey {
+    private static let account = "anthropic-api-key"
+
+    static func load(service: String) -> String? {
+        for kind in [ClipboardKeychain.Kind.dataProtection, .legacy] {
+            var query = ClipboardKeychain.base(service, kind, account: account)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: CFTypeRef?
+            if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data {
+                return String(decoding: data, as: UTF8.self)
+            }
+        }
+        return nil
+    }
+
+    static func save(_ key: String, service: String) throws(CueError) {
+        delete(service: service)
+        for kind in [ClipboardKeychain.Kind.dataProtection, .legacy] {
+            var query = ClipboardKeychain.base(service, kind, account: account)
+            query[kSecValueData as String] = Data(key.utf8)
+            if kind == .dataProtection { query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly }
+            query[kSecAttrLabel as String] = "Cue Anthropic API key"
+            let status = SecItemAdd(query as CFDictionary, nil)
+            if status == errSecSuccess { return }
+            if status != errSecMissingEntitlement { break }
+        }
+        throw CueError("KEY_SAVE_FAILED", "Cue could not save the key in the Keychain. Make sure your login keychain is unlocked, then try again.")
+    }
+
+    static func delete(service: String) {
+        for kind in [ClipboardKeychain.Kind.dataProtection, .legacy] {
+            SecItemDelete(ClipboardKeychain.base(service, kind, account: account) as CFDictionary)
+        }
     }
 }

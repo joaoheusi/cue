@@ -209,4 +209,79 @@ struct CommandTests {
         #expect(ActionSearch.score("zzz", name: "Left Half") == nil)
         #expect(ActionSearch.score("", name: "Left Half")?.tier == 0)
     }
+
+    @Test func dotEnvSettingEditsOnlyTheKey() {
+        let text = "# keep\nexport ANTHROPIC_API_KEY=old\nANTHROPIC_MODEL=m\n"
+        #expect(DotEnv.setting("ANTHROPIC_API_KEY", to: "new", in: text) == "# keep\nANTHROPIC_API_KEY=new\nANTHROPIC_MODEL=m\n")
+        #expect(DotEnv.setting("ANTHROPIC_API_KEY", to: nil, in: text) == "# keep\nANTHROPIC_MODEL=m\n")
+        #expect(DotEnv.setting("ANTHROPIC_API_KEY", to: "k", in: "") == "ANTHROPIC_API_KEY=k\n")
+        #expect(DotEnv.setting("ANTHROPIC_API_KEY", to: "k", in: "A=1\n") == "A=1\nANTHROPIC_API_KEY=k\n")
+    }
+
+    @Test func storedKeyWinsOverTheEnvFile() throws {
+        let dir = try folder()
+        try Data("ANTHROPIC_API_KEY=file\nANTHROPIC_MODEL=m\n".utf8).write(to: dir.appendingPathComponent(".env"))
+        #expect(try Assistant.credentials(in: dir, storedKey: "stored") == .init(key: "stored", model: "m"))
+    }
+
+    @Test func streamRequestAsksForStreaming() throws {
+        let request = try Assistant.request("hi", credentials: .init(key: "k", model: "m"), stream: true)
+        let data = try #require(request.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["stream"] as? Bool == true && body["max_tokens"] as? Int == 64000)
+    }
+
+    private func decode(_ lines: [String]) throws -> String {
+        var decoder = Assistant.StreamDecoder()
+        var text = ""
+        for line in lines { text += try decoder.feed(line) ?? "" }
+        try decoder.finish()
+        return text
+    }
+
+    private let start = #"data: {"type":"message_start","message":{"id":"m"}}"#
+    private let hello = #"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#
+
+    private func stop(_ reason: String) -> String { #"data: {"type":"message_delta","delta":{"stop_reason":"\#(reason)"},"usage":{"output_tokens":1}}"# }
+
+    @Test func streamDecoderCollectsTextAndIgnoresOtherEvents() throws {
+        #expect(try decode(["event: message_start", start, "", #"data: {"type":"ping"}"#, hello, #"data: {"type":"content_block_start","index":1,"content_block":{"type":"fallback"}}"#, hello, stop("end_turn")]) == "HelloHello")
+    }
+
+    @Test func streamDecoderRejectsBrokenEndings() {
+        #expect(throws: CueError("AI_REFUSED", "Claude declined this text.")) { try decode([hello, stop("refusal")]) }
+        #expect(throws: CueError("AI_TRUNCATED", "The result was too long, so Cue stopped it here.")) { try decode([hello, stop("max_tokens")]) }
+        #expect(throws: CueError("AI_UNREACHABLE", "The connection to Claude ended early. Try again.")) { try decode([hello]) }
+        #expect(throws: CueError("AI_EMPTY", "Claude returned no text.")) { try decode([stop("end_turn")]) }
+        #expect(throws: CueError("AI_FAILED", "Overloaded")) { try decode([hello, #"data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#]) }
+    }
+
+    @Test func diffMarksOnlyInsertedWords() {
+        let runs = TextDiff.additions(from: "a unica mudanca", to: "a unica mudança, agora")
+        #expect(runs.map(\.text).joined() == "a unica mudança, agora")
+        #expect(runs.filter(\.added).map(\.text) == ["mudança,", "agora"])
+        #expect(TextDiff.additions(from: "same text", to: "same text") == [.init("same text", added: false)])
+        #expect(TextDiff.additions(from: "x", to: "") == [])
+    }
+
+    @Test func fileScopeHonorsDepthAndSkips() {
+        let scope = FileScope(locations: [.init(path: "/Users/a", depth: 2), .init(path: "/Users/a/Projects", depth: nil)],
+                              skip: ["node_modules", "venv*"], home: "/Users/a")
+        #expect(scope.allows("/Users/a/notes.txt"))
+        #expect(scope.allows("/Users/a/Docs/notes.txt"))
+        #expect(!scope.allows("/Users/a/Docs/old/notes.txt"))
+        #expect(scope.allows("/Users/a/Projects/a/b/c/d.txt"))
+        #expect(!scope.allows("/Users/a/Projects/a/node_modules/d.txt"))
+        #expect(!scope.allows("/Users/a/Projects/a/venv3/d.txt"))
+        #expect(!scope.allows("/Users/a/.config/x"))
+        #expect(!scope.allows("/Users/a/Library/x"))
+        #expect(!scope.allows("/Users/a/Projects/App.app/Contents/x"))
+        #expect(!scope.allows("/tmp/x"))
+    }
+
+    @Test func snippetsBecomeActionsOnce() {
+        let existing = [Action(name: "Today", template: "x")]
+        let actions = Snippets.actions([.init(keyword: "today", expansion: "{date}"), .init(keyword: "sig", expansion: "> {clipboard}")], existing: existing)
+        #expect(actions.map(\.name) == ["sig"] && actions[0].template == "> {{clipboard}}")
+    }
 }

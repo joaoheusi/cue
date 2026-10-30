@@ -8,23 +8,94 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public let createdAt: Date
     public var lastUsedAt: Date
     public var pinboardID: String?
+    public let sensitive: Bool
+    public var expiresAt: Date?
+    public let kind: ClipKind
     public let folded: String
     public let preview: String
     public let foldedPreview: String
 
-    public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?) {
+    public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?,
+                sensitive: Bool = false, expiresAt: Date? = nil) {
         self.id = id
         self.text = text
         self.source = source
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
         self.pinboardID = pinboardID
-        folded = ClipboardSearch.fold(text)
-        preview = ClipboardSearch.preview(text)
+        self.sensitive = sensitive
+        self.expiresAt = expiresAt
+        kind = sensitive ? .text : ClipKind.of(text)
+        preview = sensitive ? SensitiveText.mask(text) : ClipboardSearch.preview(text)
+        folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(text)
         foldedPreview = ClipboardSearch.fold(preview)
     }
 
     public var isPinned: Bool { pinboardID != nil }
+    public var display: String { sensitive ? preview : text }
+}
+
+public enum ClipKind: String, Sendable, CaseIterable {
+    case text, link, code
+
+    public static func of(_ text: String) -> ClipKind {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isLink(trimmed) { return .link }
+        return looksLikeCode(trimmed) ? .code : .text
+    }
+
+    private static func isLink(_ text: String) -> Bool {
+        guard !text.isEmpty, text.count <= 2048, !text.contains(where: \.isWhitespace) else { return false }
+        if let scheme = URLComponents(string: text)?.scheme, ["http", "https", "ftp", "mailto"].contains(scheme.lowercased()) { return true }
+        return text.range(of: #"^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(/\S*)?$"#, options: .regularExpression) != nil && text.contains("/")
+    }
+
+    private static func looksLikeCode(_ text: String) -> Bool {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard !lines.isEmpty else { return false }
+        let structural = lines.filter { line in
+            line.hasSuffix(";") || line.hasSuffix("{") || line == "}" || line.hasSuffix(");")
+                || line.range(of: #"^(func|def|class|struct|enum|import|from|const|let|var|return|if|for|while|public|private|#include|SELECT|INSERT|UPDATE)\b"#,
+                              options: .regularExpression) != nil
+        }
+        return lines.count == 1 ? structural.count == 1 && text.count < 400 : structural.count * 3 >= lines.count
+    }
+}
+
+public enum SensitiveHandling: String, Codable, CaseIterable, Sendable {
+    case maskAndExpire, mask, skip, keep
+
+    public var title: String {
+        switch self {
+        case .maskAndExpire: "Mask, delete after 5 min"
+        case .mask: "Mask, keep"
+        case .skip: "Don’t save"
+        case .keep: "Save normally"
+        }
+    }
+}
+
+public enum SensitiveText {
+    public static let lifetime: TimeInterval = 300
+    private static let maxLength = 2048
+    private static let patterns = [
+        #"sk-[A-Za-z0-9_-]{20,}"#, #"gh[pousr]_[A-Za-z0-9]{30,}"#, #"github_pat_[A-Za-z0-9_]{20,}"#,
+        #"xox[abprs]-[A-Za-z0-9-]{10,}"#, #"AKIA[0-9A-Z]{16}"#, #"AIza[0-9A-Za-z_-]{30,}"#, #"glpat-[A-Za-z0-9_-]{16,}"#,
+        #"npm_[A-Za-z0-9]{30,}"#, #"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"#,
+    ]
+
+    public static func matches(_ text: String) -> Bool {
+        let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token.count <= maxLength, !token.contains(where: \.isWhitespace) else { return false }
+        return patterns.contains { token.range(of: "^\($0)$", options: .regularExpression) != nil }
+    }
+
+    public static func mask(_ text: String) -> String {
+        let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = token.prefix(12)
+        let prefix = head.lastIndex { $0 == "-" || $0 == "_" }.map { String(head[...$0]) } ?? String(token.prefix(4))
+        return prefix + String(repeating: "•", count: 8) + token.suffix(4)
+    }
 }
 
 public struct Pinboard: Identifiable, Equatable, Codable, Sendable {
@@ -81,6 +152,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
     public var maxItems = 500
     public var excludedApps: [String] = ClipboardSettings.defaultExcludedApps
     public var shortcut: String? = "Super+Alt+V"
+    public var sensitive = SensitiveHandling.maskAndExpire
 
     public init() {}
 
@@ -114,7 +186,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         if let shortcut, Shortcut(shortcut) == nil { throw .validation("The clipboard shortcut is not valid.") }
     }
 
-    private enum CodingKeys: String, CodingKey { case retention, maxItems, excludedApps, shortcut }
+    private enum CodingKeys: String, CodingKey { case retention, maxItems, excludedApps, shortcut, sensitive }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -122,6 +194,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         maxItems = try c.decode(Int.self, forKey: .maxItems)
         excludedApps = try c.decode([String].self, forKey: .excludedApps)
         shortcut = try c.decodeIfPresent(String.self, forKey: .shortcut)
+        sensitive = try c.decodeIfPresent(SensitiveHandling.self, forKey: .sensitive) ?? .maskAndExpire
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -130,11 +203,12 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         try c.encode(maxItems, forKey: .maxItems)
         try c.encode(excludedApps, forKey: .excludedApps)
         try c.encode(shortcut, forKey: .shortcut)
+        try c.encode(sensitive, forKey: .sensitive)
     }
 }
 
 public enum SkipReason: String, CaseIterable, Sendable {
-    case concealed, ownWrite, secureInput, excludedApp, notText, unreadable, blank, tooLarge
+    case concealed, ownWrite, secureInput, excludedApp, notText, unreadable, blank, tooLarge, sensitive
 }
 
 public enum CaptureDecision: Equatable, Sendable {
@@ -151,7 +225,7 @@ public enum CaptureFilter {
     ]
 
     public static func decide(types: [String], ownType: String, secureInput: Bool, frontmostApp: String?,
-                              excludedApps: [String], readText: () -> String?) -> CaptureDecision {
+                              excludedApps: [String], sensitive: SensitiveHandling = .maskAndExpire, readText: () -> String?) -> CaptureDecision {
         if types.contains(ownType) { return .skip(.ownWrite) }
         if types.contains(where: sensitiveTypes.contains) { return .skip(.concealed) }
         if secureInput { return .skip(.secureInput) }
@@ -161,6 +235,7 @@ public enum CaptureFilter {
         guard types.contains(plainTextType) else { return .skip(.notText) }
         guard let text = readText() else { return .skip(.unreadable) }
         if let reason = textProblem(text) { return .skip(reason) }
+        if sensitive == .skip, SensitiveText.matches(text) { return .skip(.sensitive) }
         return .capture(text)
     }
 
@@ -201,11 +276,13 @@ public struct PurgeCandidate: Sendable {
     public let id: String
     public let lastUsedAt: Date
     public let pinned: Bool
+    public let expiresAt: Date?
 
-    public init(id: String, lastUsedAt: Date, pinned: Bool) {
+    public init(id: String, lastUsedAt: Date, pinned: Bool, expiresAt: Date? = nil) {
         self.id = id
         self.lastUsedAt = lastUsedAt
         self.pinned = pinned
+        self.expiresAt = expiresAt
     }
 }
 
@@ -215,7 +292,8 @@ public enum ClipboardPurge {
         var doomed = Set<String>()
         for (index, item) in unpinned.enumerated() {
             let expired = retention.interval.map { now.timeIntervalSince(item.lastUsedAt) > $0 } ?? false
-            if expired || index >= maxItems { doomed.insert(item.id) }
+            let lapsed = item.expiresAt.map { $0 <= now } ?? false
+            if expired || lapsed || index >= maxItems { doomed.insert(item.id) }
         }
         return doomed
     }
