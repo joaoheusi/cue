@@ -93,6 +93,41 @@ struct CommandTests {
         #expect(await code(try script("#!/bin/sh\nyes\n", in: dir, name: "flood.sh")) == "OUTPUT_TOO_LARGE")
     }
 
+    @Test func timeoutStopsProcessesTheScriptStarted() async throws {
+        let dir = try folder()
+        let marker = dir.appendingPathComponent("child.pid")
+        let parent = try script("#!/bin/sh\nsleep 30 &\necho $! > '\(marker.path)'\nwait\n", in: dir, name: "parent.sh")
+        await #expect(throws: CueError.self) { try await Scripts.run(parent, timeout: 2) }
+        let child = try #require(pid_t(String(decoding: try Data(contentsOf: marker), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(kill(child, 0) != 0, "The child should die with the script.")
+    }
+
+    @Test func assistantNamesTimeoutsSeparately() {
+        #expect(Assistant.failure(URLError(.timedOut)).code == "AI_TIMEOUT")
+        #expect(Assistant.failure(URLError(.notConnectedToInternet)).code == "AI_UNREACHABLE")
+    }
+
+    @Test func itemsAreExposedOnlyOnceTheirSeparatorsCollapse() {
+        let narrow = MenuBarSpan(minX: 900, maxX: 924), wide = MenuBarSpan(minX: -9000, maxX: 1000)
+        let revealed = MenuBarSeparatorFrames(hidden: narrow, alwaysHidden: wide)
+        let collapsed = MenuBarSeparatorFrames(hidden: wide, alwaysHidden: wide)
+        let all = MenuBarSeparatorFrames(hidden: narrow, alwaysHidden: narrow)
+        #expect(MenuBarLayout.isExposed(.visible, separators: collapsed))
+        #expect(!MenuBarLayout.isExposed(.hidden, separators: collapsed))
+        #expect(MenuBarLayout.isExposed(.hidden, separators: revealed))
+        #expect(!MenuBarLayout.isExposed(.alwaysHidden, separators: revealed))
+        #expect(MenuBarLayout.isExposed(.alwaysHidden, separators: all))
+    }
+
+    @Test func onlyWindowsHangingFromTheItemCountAsOpen() {
+        let item = CGPoint(x: 1000, y: 12)
+        #expect(MenuBarLayout.isAnchored(CGRect(x: 800, y: 30, width: 300, height: 400), to: item, barHeight: 40))
+        #expect(!MenuBarLayout.isAnchored(CGRect(x: 800, y: 300, width: 300, height: 400), to: item, barHeight: 40), "A floating palette lower down is not the item's menu.")
+        #expect(!MenuBarLayout.isAnchored(CGRect(x: 100, y: 30, width: 300, height: 400), to: item, barHeight: 40), "A window elsewhere along the bar is not the item's menu.")
+        #expect(!MenuBarLayout.isAnchored(CGRect(x: 980, y: 0, width: 40, height: 24), to: item, barHeight: 40), "The status item itself does not count.")
+    }
+
     @Test func windowFramesFillTheArea() {
         let area = CGRect(x: 100, y: 30, width: 1200, height: 900)
         let window = CGRect(x: 0, y: 0, width: 400, height: 300)
