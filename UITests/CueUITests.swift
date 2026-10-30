@@ -46,4 +46,91 @@ final class CueUITests: XCTestCase {
         wait(for: [copied], timeout: 0.1)
         XCTAssertFalse(search.isHittable, "The command window closes after a successful copy.")
     }
+
+    private func launch(prepare: (URL) throws -> Void = { _ in }) throws -> XCUIApplication {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("cue-ui-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: data) }
+        try prepare(data)
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["CUE_DATA_DIR"] = data.path
+        app.launch()
+        addTeardownBlock { app.terminate() }
+        XCTAssertTrue(app.textFields["command.search"].waitForExistence(timeout: 15), "The command window should open on launch in UI-testing mode.")
+        app.textFields["command.search"].click()
+        return app
+    }
+
+    private func waitForClipboard(_ matches: (String) -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if let text = NSPasteboard.general.string(forType: .string), matches(text) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    func testNewActionOpensWhenSearchHasNoResults() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("nothing matches this at all")
+        XCTAssertTrue(app.staticTexts["No matches"].waitForExistence(timeout: 5))
+        search.typeKey("n", modifierFlags: .command)
+        XCTAssertTrue(app.windows["Cue"].waitForExistence(timeout: 5), "⌘N should open the Library when the search has no results.")
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "The Library should come to the front, not open behind other windows.")
+    }
+
+    func testUnifiedSearchFindsSnippetsScriptsAndWindowCommands() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        let app = try launch { data in
+            try Data(#"[{"keyword": "signoff", "expansion": "Thanks, {clipboard}"}]"#.utf8).write(to: data.appendingPathComponent("snippets.json"))
+            let folder = data.appendingPathComponent("commands")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let script = folder.appendingPathComponent("build-info.sh")
+            try Data("echo script says hello\n".utf8).write(to: script)
+        }
+        let search = app.textFields["command.search"]
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("Ana", forType: .string)
+
+        search.typeText("left half")
+        XCTAssertTrue(app.staticTexts["Left Half"].waitForExistence(timeout: 5))
+        search.typeKey("a", modifierFlags: .command)
+        search.typeText("build-info")
+        XCTAssertTrue(app.staticTexts["build-info"].waitForExistence(timeout: 5))
+        search.typeKey(.return, modifierFlags: .shift)
+        XCTAssertTrue(app.staticTexts["script says hello"].waitForExistence(timeout: 5), "Shift-Return should show the script's output.")
+        app.typeKey("[", modifierFlags: .command)
+
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.click()
+        search.typeKey("a", modifierFlags: .command)
+        search.typeText("build-info")
+        XCTAssertTrue(app.staticTexts["build-info"].waitForExistence(timeout: 5))
+        search.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitForClipboard { $0 == "script says hello" }, "Return should copy the script's output.")
+    }
+
+    func testSnippetFillsPlaceholders() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        let app = try launch { data in
+            try Data(#"[{"keyword": "signoff", "expansion": "Thanks, {clipboard}"}]"#.utf8).write(to: data.appendingPathComponent("snippets.json"))
+        }
+        let search = app.textFields["command.search"]
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("Ana", forType: .string)
+        search.typeText("signoff")
+        XCTAssertTrue(app.staticTexts["signoff"].waitForExistence(timeout: 5))
+        search.typeKey(.return, modifierFlags: .shift)
+        XCTAssertTrue(waitForClipboard { $0 == "Thanks, Ana" })
+    }
 }

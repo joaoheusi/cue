@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 public enum MenuBarSection: String, Codable, CaseIterable, Sendable {
@@ -55,6 +56,16 @@ public struct MenuBarItem: Equatable, Sendable, Identifiable {
         self.label = label
         self.frame = frame
         self.movable = movable
+    }
+}
+
+public struct MenuBarDisplay: Equatable, Sendable {
+    public var frame: CGRect
+    public var notch: ClosedRange<CGFloat>?
+
+    public init(frame: CGRect, notch: ClosedRange<CGFloat>? = nil) {
+        self.frame = frame
+        self.notch = notch
     }
 }
 
@@ -125,6 +136,30 @@ public enum MenuBarLayout {
         }
     }
 
+    public static func clickPoint(for item: CGRect, displays: [MenuBarDisplay], barHeight: CGFloat) -> CGPoint? {
+        let point = CGPoint(x: item.midX, y: item.midY)
+        for display in displays where (display.frame.minX..<display.frame.maxX).contains(point.x) {
+            guard (display.frame.minY..<display.frame.minY + barHeight).contains(point.y) else { continue }
+            return display.notch?.contains(point.x) == true ? nil : point
+        }
+        return nil
+    }
+
+    public static func isExposed(_ section: MenuBarSection, separators: MenuBarSeparatorFrames) -> Bool {
+        func collapsed(_ span: MenuBarSpan) -> Bool { span.maxX - span.minX < expandedSeparatorWidth }
+        return switch section {
+        case .visible: true
+        case .hidden: collapsed(separators.hidden)
+        case .alwaysHidden: collapsed(separators.hidden) && collapsed(separators.alwaysHidden)
+        }
+    }
+
+    public static func isAnchored(_ window: CGRect, to item: CGPoint, barHeight: CGFloat) -> Bool {
+        window.height > barHeight && window.minY <= item.y + barHeight && (window.minX...window.maxX).contains(item.x)
+    }
+
+    private static let expandedSeparatorWidth = 100.0
+
     public static func keys(for raw: [(bundleID: String, identifier: String?, title: String?, description: String?)]) -> [String] {
         var indexInApp: [String: Int] = [:]
         var seen: [String: Int] = [:]
@@ -169,8 +204,8 @@ public enum MenuBarReveal {
         return revealedBy == .frontmostApp ? false : nil
     }
 
-    public static func shouldRehide(now: Date, revealedAt: Date, seconds: Int, cause: Cause, pointerInMenuBar: Bool) -> Bool {
-        guard seconds > 0, cause == .user, !pointerInMenuBar else { return false }
+    public static func shouldRehide(now: Date, revealedAt: Date, seconds: Int, cause: Cause, pointerInMenuBar: Bool, itemOpen: Bool = false) -> Bool {
+        guard seconds > 0, cause == .user, !pointerInMenuBar, !itemOpen else { return false }
         return now.timeIntervalSince(revealedAt) >= Double(seconds)
     }
 }

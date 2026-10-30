@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CueKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -18,6 +19,7 @@ import UniformTypeIdentifiers
     @ObservationIgnored private var rehideTask: Task<Void, Never>?
     @ObservationIgnored private var frontmostObserver: NSObjectProtocol?
     @ObservationIgnored private var lastArrangeCode = "none"
+    @ObservationIgnored private var openedItem: (pid: pid_t, point: CGPoint)?
 
     private(set) var storage: LoadState<MenuBarStore> = .loading
     private(set) var settings = MenuBarSettings()
@@ -72,6 +74,7 @@ import UniformTypeIdentifiers
         if separators == nil {
             let separators = MenuBarSeparators()
             separators.onClick = { [weak self] option in self?.clicked(option: option) }
+            separators.onSecondaryClick = { [weak self] in Task { await self?.showList() } }
             self.separators = separators
         }
         separators?.setVisible(true)
@@ -105,7 +108,8 @@ import UniformTypeIdentifiers
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, let reveal = self.reveal else { return }
                 if !self.arranging, MenuBarReveal.shouldRehide(now: Date(), revealedAt: reveal.at, seconds: self.settings.autoRehideSeconds,
-                                                                cause: reveal.cause, pointerInMenuBar: Self.pointerInMenuBar) {
+                                                                cause: reveal.cause, pointerInMenuBar: Self.pointerInMenuBar,
+                                                                itemOpen: self.openedItem.map { MenuBarAccess.isOpen(pid: $0.pid, at: $0.point) } ?? false) {
                     self.hide()
                     return
                 }
@@ -117,6 +121,7 @@ import UniformTypeIdentifiers
         guard !arranging else { return }
         rehideTask?.cancel()
         reveal = nil
+        openedItem = nil
         separators?.apply(.collapsed)
     }
 
@@ -186,13 +191,13 @@ import UniformTypeIdentifiers
             alert.informativeText = """
             Cue adds a chevron (‹) to your menu bar. Icons to the left of the chevron are hidden. To keep an icon visible, hold ⌘ and drag it to the right of the chevron.
 
-            Click the chevron or press \(settings.shortcut.flatMap(Shortcut.init)?.display ?? "the shortcut") to show hidden icons. ⌥-click the chevron to also show always-hidden icons.
+            Click the chevron or press \(settings.shortcut.flatMap(Shortcut.init)?.display ?? "the shortcut") to show hidden icons. ⌥-click the chevron to also show always-hidden icons. Right-click it to pick a hidden icon from a list.
 
             When you turn this off or quit Cue, every icon comes back.
             """
             alert.addButton(withTitle: "Turn On")
             alert.addButton(withTitle: "Cancel")
-            NSApp.activate()
+            NSApp.takeFocus()
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         guard await update({ $0.enabled = enabled }) else { return }
@@ -303,11 +308,47 @@ import UniformTypeIdentifiers
         }
         if needsReveal {
             show(all: entry.section == .alwaysHidden, cause: .user)
-            try? await Task.sleep(for: .milliseconds(300))
+        } else {
+            reveal?.at = Date()
         }
-        if !MenuBarAccess.press(entry) {
-            report(CueError("ITEM_UNAVAILABLE", "Could not open that item. It may have closed. Open the list again."))
+        let unavailable = CueError("ITEM_UNAVAILABLE", "Could not open that item. It may have closed. Open the list again.")
+        guard let target = await MenuBarAccess.target(entry, separators: { separators?.frames }) else { return report(unavailable) }
+        var pid: pid_t = 0
+        openedItem = AXUIElementGetPid(entry.element, &pid) == .success ? (pid, target.point) : nil
+        if target.clickable, context.paste.canPostPaste, await MenuBarAccess.click(target.point) { return }
+        if !MenuBarAccess.press(entry) { report(unavailable) }
+    }
+
+    private func showList() async {
+        await refreshItems()
+        let menu = NSMenu()
+        if !accessGranted {
+            menu.add("Allow Accessibility to List Items…") { [weak self] in self?.requestAccess() }
+        } else if case .loaded(let entries) = items {
+            let hidden = entries.filter { $0.section != .visible }
+            for entry in hidden {
+                let item = entry.item
+                menu.add(item.label == item.appName ? item.appName : "\(item.appName) — \(item.label)", image: Self.icon(entry)) { [weak self] in
+                    Task { await self?.open(entry) }
+                }
+            }
+            if hidden.isEmpty {
+                menu.add("No Hidden Items") {}
+                menu.items.last?.isEnabled = false
+                menu.autoenablesItems = false
+            }
         }
+        menu.addItem(.separator())
+        menu.add(isRevealed ? "Hide Items" : "Reveal Hidden Items") { [weak self] in self?.toggle() }
+        separators?.popUp(menu)
+    }
+
+    private static func icon(_ entry: ScannedItem) -> NSImage? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(entry.element, &pid) == .success, let source = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
+        let icon = source.copy() as? NSImage
+        icon?.size = NSSize(width: 16, height: 16)
+        return icon
     }
 
     func applyRules(only keys: Set<String>? = nil) async {

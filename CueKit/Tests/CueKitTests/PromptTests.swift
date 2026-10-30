@@ -132,7 +132,7 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         #expect(try await store.get(action.id).deliveryMode == .copy)
         #expect(try await store.get(action.id).template == action.template)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path).count == 1)
-        #expect(try SQLite(path: dir.appendingPathComponent("cue.sqlite3")).userVersion() == 3)
+        #expect(try SQLite(path: dir.appendingPathComponent("cue.sqlite3")).userVersion() == 4)
         _ = try PromptStore(directory: dir)
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("backups").path).count == 1)
     }
@@ -259,6 +259,6 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         let fresh = try PromptStore(directory: tempDirectory())
         let preview = try await fresh.preview(exported)
         try await fresh.commitImport(token: preview.token, update: false)
-        #expect(try await fresh.snapshot().actions.count == 6)
+        #expect(try await fresh.snapshot().actions.count == 9)
     }
 }

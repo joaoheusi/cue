@@ -26,7 +26,7 @@ public actor PromptStore {
         self.directory = directory
         let db = try SQLite(path: directory.appendingPathComponent("cue.sqlite3"))
         let version = try db.userVersion()
-        if version > 3 {
+        if version > 4 {
             throw CueError("STORAGE_FAILURE", "This library was created by a newer Cue. Update Cue to open it.")
         }
         let backups = directory.appendingPathComponent("backups")
@@ -39,7 +39,7 @@ public actor PromptStore {
                 try db.executeScript(Self.initialSchema)
                 try db.execute("INSERT INTO settings VALUES(1,?1)", [.text(defaults)])
             }
-        } else if version < 3 {
+        } else if version < 4 {
             try db.backup(into: backups, prefix: "cue")
         }
         if version < 2 {
@@ -56,6 +56,24 @@ public actor PromptStore {
                 try db.executeScript("""
                     INSERT OR IGNORE INTO schema_migrations VALUES(3, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
                     PRAGMA user_version=3;
+                    """)
+            }
+        }
+        if version < 4 {
+            let settings = try db.scalar("SELECT data FROM settings WHERE id=1")?.data.map { try JSONDecoder().decode(PromptSettings.self, from: $0) }
+            let actions = settings?.onboarded == true ? Starters.assistant() : []
+            try db.transaction {
+                for var action in actions {
+                    action.revision = 1
+                    if let category = action.category {
+                        try db.execute("INSERT OR IGNORE INTO categories VALUES(?1,?2)", [.text(category), .text(ActionRules.key(category))])
+                    }
+                    let json = String(decoding: try JSONEncoder().encode(action), as: UTF8.self)
+                    try db.execute("INSERT INTO actions VALUES(?1,?2,?3)", [.text(action.id), SQLValue(action.revision), .text(json)])
+                }
+                try db.executeScript("""
+                    INSERT OR IGNORE INTO schema_migrations VALUES(4, strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+                    PRAGMA user_version=4;
                     """)
             }
         }
@@ -336,6 +354,7 @@ public actor PromptStore {
                     a.createdAt = old.createdAt
                     a.useCount = old.useCount
                     a.lastUsedAt = old.lastUsedAt
+                    a.ai = old.ai
                     try db.execute("DELETE FROM shortcuts WHERE owner=?1", [.text("action:\(a.id)")])
                 } else {
                     a.id = UUID().uuidString.lowercased()

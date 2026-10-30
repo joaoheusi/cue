@@ -237,7 +237,7 @@ struct OnboardingView: View {
     let model: PromptsModel
     @State private var starters = Starters.actions()
     @State private var chosen = Set(Starters.actions().indices)
-    @State private var shortcut = Shortcut("Super+Shift+Space")
+    @State private var shortcut = Shortcut("Alt+Space")
     @State private var busy = false
 
     var body: some View {
@@ -247,7 +247,7 @@ struct OnboardingView: View {
                 Text("Save the words you use again and again.").font(.largeTitle.weight(.semibold))
                 Text("Cue lives in your menu bar. Press your shortcut in any app, pick an action, and Cue pastes it into the field you were typing in. Clipboard history and menu-bar tidying are off until you turn them on in Settings.")
                     .foregroundStyle(.secondary)
-                GroupBox("Start with six useful actions") {
+                GroupBox("Start with these useful actions") {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(starters.enumerated()), id: \.offset) { index, action in
                             Toggle(isOn: Binding(get: { chosen.contains(index) }, set: { on in

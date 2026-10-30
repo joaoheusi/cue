@@ -72,6 +72,8 @@ struct EditorView: View {
                     Text("Copy").tag(DeliveryMode.copy)
                     Text("Paste").tag(DeliveryMode.paste)
                 }
+                Toggle("Run through Claude", isOn: Binding(get: { draft.ai == true }, set: { on in nav.update { $0.ai = on ? true : nil } }))
+                    .help("Send the rendered text to Claude, then deliver the reply.")
                 Toggle("Favorite", isOn: binding(\.favorite))
                 Toggle("Enabled", isOn: binding(\.enabled))
                 LabeledContent("Shortcut") {

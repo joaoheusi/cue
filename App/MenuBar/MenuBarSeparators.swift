@@ -12,6 +12,7 @@ import CueKit
     private let chevron = NSImageView()
     private let marker = NSImageView()
     var onClick: (_ option: Bool) -> Void = { _ in }
+    var onSecondaryClick: () -> Void = {}
     private(set) var mode: Mode = .revealedAll
 
     override init() {
@@ -27,7 +28,7 @@ import CueKit
         install(marker, in: alwaysHidden, identifier: "menuBar.separator.alwaysHidden")
         hidden.button?.target = self
         hidden.button?.action = #selector(clicked)
-        hidden.button?.sendAction(on: [.leftMouseUp])
+        hidden.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         marker.image = NSImage(systemSymbolName: "chevron.compact.left", accessibilityDescription: nil)
         alwaysHidden.button?.setAccessibilityLabel("Always-hidden menu bar items start left of here")
         apply(.revealedAll)
@@ -43,7 +44,13 @@ import CueKit
     }
 
     @objc private func clicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp { return onSecondaryClick() }
         onClick(NSApp.currentEvent?.modifierFlags.contains(.option) ?? false)
+    }
+
+    func popUp(_ menu: NSMenu) {
+        guard let button = hidden.button else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.width - 20, y: button.bounds.height + 4), in: button)
     }
 
     func setVisible(_ visible: Bool) {

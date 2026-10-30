@@ -15,6 +15,7 @@ public struct Action: Codable, Sendable, Identifiable, Equatable {
     public var deliveryMode: DeliveryMode
     public var favorite: Bool
     public var enabled: Bool
+    public var ai: Bool?
     public var revision: Int
     public var useCount: Int
     public var lastUsedAt: String?
@@ -23,7 +24,7 @@ public struct Action: Codable, Sendable, Identifiable, Equatable {
 
     public init(id: String = UUID().uuidString.lowercased(), name: String = "", description: String = "", template: String = "",
                 aliases: [String] = [], tags: [String] = [], category: String? = nil, deliveryMode: DeliveryMode = .inherit,
-                favorite: Bool = false, enabled: Bool = true) {
+                favorite: Bool = false, enabled: Bool = true, ai: Bool? = nil) {
         self.id = id
         self.name = name
         self.description = description
@@ -34,6 +35,7 @@ public struct Action: Codable, Sendable, Identifiable, Equatable {
         self.deliveryMode = deliveryMode
         self.favorite = favorite
         self.enabled = enabled
+        self.ai = ai
         revision = 0
         useCount = 0
         lastUsedAt = nil
@@ -53,6 +55,7 @@ public struct Action: Codable, Sendable, Identifiable, Equatable {
         try c.encode(deliveryMode, forKey: .deliveryMode)
         try c.encode(favorite, forKey: .favorite)
         try c.encode(enabled, forKey: .enabled)
+        try c.encodeIfPresent(ai, forKey: .ai)
         try c.encode(revision, forKey: .revision)
         try c.encode(useCount, forKey: .useCount)
         try c.encode(lastUsedAt, forKey: .lastUsedAt)
@@ -118,7 +121,7 @@ public struct PromptSettings: Codable, Sendable, Equatable {
     public var theme: Theme = .system
     public var defaultDelivery: DeliveryMode = .paste
     public var onboarded = false
-    public var paletteShortcut = "Super+Shift+Space"
+    public var paletteShortcut = "Alt+Space"
     public var launchAtLogin = false
     public var keepRunning = true
     public var preview = false
@@ -295,7 +298,7 @@ public enum ActionSearch {
         return String(String.UnicodeScalarView(scalars)).lowercased()
     }
 
-    static func match(_ query: String, _ field: String) -> Int? {
+    public static func match(_ query: String, _ field: String) -> Int? {
         let q = Array(query.unicodeScalars), f = Array(field.unicodeScalars)
         if q.count > f.count { return nil }
         if field == query { return 0 }
@@ -307,22 +310,29 @@ public enum ActionSearch {
         return p == q.count ? 4 : nil
     }
 
-    public static func search(_ actions: [Action], query: String, enabledOnly: Bool = true) -> [Action] {
+    public static func score(_ query: String, name: String, fields: [(String, Int)] = []) -> (tier: Int, weight: Int)? {
         let q = normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
-        let tokens = q.split(whereSeparator: \.isWhitespace).map(String.init)
+        if q.isEmpty { return (0, 0) }
+        if normalize(name) == q { return (-1, 0) }
+        var tier = 0, weight = 0
+        for token in q.split(whereSeparator: \.isWhitespace).map(String.init) {
+            let best = ([(name, 0)] + fields).compactMap { field, w in match(token, normalize(field)).map { $0 * 10 + w } }.min()
+            guard let best else { return nil }
+            tier = max(tier, best / 10)
+            weight += best % 10
+        }
+        return (tier, weight)
+    }
+
+    public static func search(_ actions: [Action], query: String, enabledOnly: Bool = true) -> [Action] {
+        scored(actions, query: query, enabledOnly: enabledOnly).map(\.action)
+    }
+
+    public static func scored(_ actions: [Action], query: String, enabledOnly: Bool = true) -> [(action: Action, tier: Int, weight: Int)] {
         var scored: [(action: Action, tier: Int, weight: Int)] = []
         for action in actions where !enabledOnly || action.enabled {
-            if q.isEmpty { scored.append((action, 0, 0)); continue }
-            if normalize(action.name) == q { scored.append((action, -1, 0)); continue }
-            let fields = [(action.name, 0)] + action.aliases.map { ($0, 1) } + action.tags.map { ($0, 2) } + [(action.category ?? "", 3)]
-            var tier = 0, weight = 0, matched = true
-            for token in tokens {
-                let best = fields.compactMap { field, w in match(token, normalize(field)).map { $0 * 10 + w } }.min()
-                guard let best else { matched = false; break }
-                tier = max(tier, best / 10)
-                weight += best % 10
-            }
-            if matched { scored.append((action, tier, weight)) }
+            let fields = action.aliases.map { ($0, 1) } + action.tags.map { ($0, 2) } + [(action.category ?? "", 3)]
+            if let score = score(query, name: action.name, fields: fields) { scored.append((action, score.tier, score.weight)) }
         }
         return scored.sorted { a, b in
             if a.tier != b.tier { return a.tier < b.tier }
@@ -333,11 +343,26 @@ public enum ActionSearch {
             let an = normalize(a.action.name), bn = normalize(b.action.name)
             if an != bn { return an.localizedCompare(bn) == .orderedAscending }
             return a.action.id < b.action.id
-        }.map(\.action)
+        }
     }
 }
 
 public enum Starters {
+    public static func assistant() -> [Action] {
+        let rows: [(String, String, String, String)] = [
+            ("Fix Grammar", "Correct the clipboard with Claude", "grammar,spelling,proofread",
+             "Fix the grammar, spelling, and punctuation of the text below. Keep its meaning, tone, and language. Return only the corrected text.\n\nText:\n{{clipboard}}"),
+            ("Summarize", "Summarize the clipboard with Claude", "summary,tldr",
+             "Summarize the text below in a few short sentences, in the same language. Return only the summary.\n\nText:\n{{clipboard}}"),
+            ("Translate", "Translate the clipboard with Claude", "translation,english",
+             "Translate the text below into English. Keep its tone and formatting. Return only the translation.\n\nText:\n{{clipboard}}"),
+        ]
+        return rows.map { row in
+            Action(name: row.0, description: row.1, template: row.3, aliases: row.2.split(separator: ",").map(String.init),
+                   category: "AI", deliveryMode: .copy, ai: true)
+        }
+    }
+
     public static func actions() -> [Action] {
         let rows: [(String, String, String, String, String, String)] = [
             ("Resolve CI", "Inspect failing checks and make the smallest fix", "Coding", "ci,fix,git", "fix build,fix checks",
@@ -358,6 +383,6 @@ public enum Starters {
                    aliases: row.4.isEmpty ? [] : row.4.split(separator: ",").map(String.init),
                    tags: row.3.split(separator: ",").map(String.init), category: row.2,
                    favorite: [0, 2, 4].contains(index))
-        }
+        } + assistant()
     }
 }

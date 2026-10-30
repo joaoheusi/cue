@@ -19,13 +19,12 @@ import SwiftUI
 
     func stop() {}
 
-    func commandView() -> AnyView { AnyView(PaletteView(model: model)) }
     func settingsView() -> AnyView { AnyView(PromptsSettingsView(model: model)) }
     func generalSettingsView() -> AnyView { AnyView(GeneralSettingsView(model: model)) }
 
     func openLibrary(_ actionID: String?) {
         if window == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, nav: nav).tint(.gray)))
+            let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(model: model, nav: nav).tint(.primary)))
             window.title = "Cue"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.setContentSize(NSSize(width: 1100, height: 780))
@@ -35,8 +34,7 @@ import SwiftUI
             self.window = window
         }
         if let actionID, let snapshot = model.snapshot { nav.select(actionID, in: snapshot) }
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
+        NSApp.takeFocus(window)
     }
 
     func canQuit() -> Bool {

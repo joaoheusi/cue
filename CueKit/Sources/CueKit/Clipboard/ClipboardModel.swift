@@ -10,6 +10,7 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public var pinboardID: String?
     public let folded: String
     public let preview: String
+    public let foldedPreview: String
 
     public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?) {
         self.id = id
@@ -20,6 +21,7 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         self.pinboardID = pinboardID
         folded = ClipboardSearch.fold(text)
         preview = ClipboardSearch.preview(text)
+        foldedPreview = ClipboardSearch.fold(preview)
     }
 
     public var isPinned: Bool { pinboardID != nil }
@@ -170,6 +172,8 @@ public enum CaptureFilter {
 }
 
 public enum ClipboardSearch {
+    static let fuzzyMinimum = 3
+
     public static func fold(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
     }
@@ -182,9 +186,14 @@ public enum ClipboardSearch {
 
     public static func filter(_ items: [ClipItem], query: String, pinboard: String? = nil) -> [ClipItem] {
         let needle = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
-        return items
-            .filter { (pinboard == nil || $0.pinboardID == pinboard) && (needle.isEmpty || $0.folded.contains(needle)) }
-            .sorted { $0.lastUsedAt > $1.lastUsedAt }
+        let sorted = items.filter { pinboard == nil || $0.pinboardID == pinboard }.sorted { $0.lastUsedAt > $1.lastUsedAt }
+        guard !needle.isEmpty else { return sorted }
+        let exact = sorted.filter { $0.folded.contains(needle) }
+        guard needle.count >= fuzzyMinimum else { return exact }
+        let tokens = needle.split(whereSeparator: \.isWhitespace).map(String.init)
+        return exact + sorted.filter { item in
+            !item.folded.contains(needle) && tokens.allSatisfy { ActionSearch.match($0, item.foldedPreview) != nil }
+        }
     }
 }
 
