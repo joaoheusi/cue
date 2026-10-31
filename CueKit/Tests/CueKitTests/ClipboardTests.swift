@@ -1,5 +1,7 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
+import ImageIO
 import Testing
 @testable import CueKit
 
@@ -13,7 +15,7 @@ import Testing
         defer { read = didRead }
         if let reason = CaptureFilter.screen(types: types, ownType: own, secureInput: secure, frontmostApp: app,
                                              excludedApps: ClipboardSettings.defaultExcludedApps) { return .skip(reason) }
-        let decision = CaptureFilter.read(types: types) {
+        let decision = CaptureFilter.readText(types: types) {
             didRead = true
             return content
         }
@@ -38,8 +40,159 @@ import Testing
         #expect(decide([text], content: " \n\t", read: &read) == .skip(.blank))
         #expect(decide([text], content: String(repeating: "a", count: CaptureFilter.maxBytes + 1), read: &read) == .skip(.tooLarge))
         #expect(decide([text], content: String(repeating: "a", count: CaptureFilter.maxBytes), read: &read) != .skip(.tooLarge))
-        #expect(decide([text, "public.rtf"], app: nil, read: &read) == .capture("hello"))
+        #expect(decide([text, "public.rtf"], app: nil, read: &read) == .capture(.plain("hello")))
         #expect(read)
+    }
+
+    private func encoded(_ uti: String, width: Int = 80, height: Int = 40, noise: Bool = false) throws -> Data {
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        if noise, let pixels = context.data {
+            for offset in 0..<(context.bytesPerRow * height) { pixels.storeBytes(of: UInt8.random(in: 0...255), toByteOffset: offset, as: UInt8.self) }
+        }
+        let output = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(output, uti as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return output as Data
+    }
+
+    private final class Reads: @unchecked Sendable {
+        var text = 0
+        var types: [String] = []
+        var files = 0
+    }
+
+    private func source(text: String? = nil, data: [String: Data] = [:], files: [String] = [], log: Reads = Reads()) -> CaptureSource {
+        CaptureSource(text: {
+            log.text += 1
+            return text
+        }, data: {
+            log.types.append($0)
+            return data[$0]
+        }, files: {
+            log.files += 1
+            return files
+        })
+    }
+
+    @Test func finderFilesWinOverTheirIconAndName() {
+        let log = Reads()
+        let types = [CaptureFilter.fileType, text, "public.tiff"]
+        let decision = CaptureFilter.read(types: types, source: source(text: "report.pdf", data: ["public.tiff": Data([1])], files: ["/tmp/report.pdf", "/tmp/Folder/"], log: log))
+        #expect(decision == .capture(ClipCapture(content: .files(["/tmp/report.pdf", "/tmp/Folder/"]))))
+        #expect(log.text == 0 && log.types.isEmpty)
+
+        let many = (0..<8000).map { "/tmp/some/long/enough/folder/name/file-\($0).txt" }
+        #expect(CaptureFilter.read(types: types, source: source(files: many)) == .skip(.tooLarge))
+
+        let notFiles = CaptureFilter.read(types: types, source: source(text: "just text", files: []))
+        #expect(notFiles == .capture(.plain("just text")))
+    }
+
+    @Test func picturesBesideRealTextStayText() {
+        let log = Reads()
+        let rtf = Data("{\\rtf1 cells}".utf8)
+        let types = [text, "public.rtf", "public.tiff"]
+        let decision = CaptureFilter.read(types: types, source: source(text: "Q1\tQ2", data: ["public.rtf": rtf, "public.tiff": Data([1])], log: log))
+        #expect(decision == .capture(ClipCapture(content: .rich, text: "Q1\tQ2", data: ["public.rtf": rtf])))
+        #expect(log.types == ["public.rtf"])
+    }
+
+    @Test func imagesWinOverNoTextBlankTextOrALink() throws {
+        let png = try encoded("public.png")
+        for content in [nil, "", "  \n", "https://example.com/picture.png"] as [String?] {
+            let types = content == nil ? ["public.png"] : [text, "public.png"]
+            guard case .capture(let clip) = CaptureFilter.read(types: types, source: source(text: content, data: ["public.png": png])) else {
+                Issue.record("Expected an image for \(String(describing: content))")
+                continue
+            }
+            #expect(clip.content == .image(type: "public.png", width: 80, height: 40))
+            #expect(clip.text.isEmpty && clip.data == ["public.png": png])
+            #expect(clip.thumbnail?.isEmpty == false)
+        }
+    }
+
+    @Test func oneImageTypeIsReadInPreferenceOrder() throws {
+        let order = [("public.png", "public.jpeg"), ("public.jpeg", "public.heic"), ("public.heic", "public.tiff")]
+        for (better, worse) in order {
+            let log = Reads()
+            let image = try encoded(better)
+            guard case .capture(let clip) = CaptureFilter.read(types: [worse, better], source: source(data: [better: image, worse: Data([1])], log: log)),
+                  case .image(let type, _, _) = clip.content else {
+                Issue.record("Expected \(better)")
+                continue
+            }
+            #expect(type == better && log.types == [better])
+        }
+    }
+
+    @Test func everyImageTypeDecodesToASmallThumbnail() throws {
+        for type in CaptureFilter.imageTypes {
+            let image = try encoded(type, width: 200, height: 120, noise: true)
+            let decision = ClipImage.capture(image, type: type)
+            guard case .capture(let clip) = decision else {
+                Issue.record("\(type) gave \(decision)")
+                continue
+            }
+            #expect(clip.content == .image(type: type, width: 200, height: 120))
+            let thumbnail = try #require(clip.thumbnail)
+            #expect(thumbnail.count < 32 * 1024)
+            let decoded = try #require(CGImageSourceCreateWithData(thumbnail as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+            #expect(max(decoded.width, decoded.height) == ClipImage.thumbnailSize)
+        }
+    }
+
+    @Test func badOrOversizedImagesAreSkippedForTheRightReason() throws {
+        #expect(ClipImage.capture(Data("not an image".utf8), type: "public.png") == .skip(.unreadable))
+        #expect(ClipImage.capture(Data(), type: "public.png") == .skip(.unreadable))
+        #expect(ClipImage.capture(Data(count: CaptureFilter.maxImageBytes + 1), type: "public.png") == .skip(.tooLarge))
+        #expect(ClipImage.capture(Data(count: CaptureFilter.maxImageBytes), type: "public.png") == .skip(.unreadable))
+        #expect(ClipImage.capture(try encoded("public.png"), type: "public.png", maxPixels: 3199) == .skip(.tooLarge))
+        #expect(ClipImage.capture(try encoded("public.png"), type: "public.png", maxPixels: 3200) != .skip(.tooLarge))
+        #expect(CaptureFilter.read(types: ["public.png"], source: source()) == .skip(.unreadable))
+    }
+
+    @Test func richTextNeedsPlainTextAndFitsItsCap() {
+        let html = Data("<b>hello</b>".utf8), rtf = Data("{\\rtf1 hello}".utf8)
+        let log = Reads()
+        #expect(CaptureFilter.read(types: ["public.html"], source: source(data: ["public.html": html], log: log)) == .skip(.unsupported))
+        #expect(log.types.isEmpty && log.text == 0)
+
+        let both = [text, "public.rtf", "public.html"]
+        #expect(CaptureFilter.read(types: both, source: source(text: "hello", data: ["public.rtf": rtf, "public.html": html]))
+            == .capture(ClipCapture(content: .rich, text: "hello", data: ["public.rtf": rtf, "public.html": html])))
+        #expect(CaptureFilter.read(types: both, source: source(text: "hello")) == .capture(.plain("hello")))
+
+        let half = Data(count: CaptureFilter.maxRichBytes / 2)
+        #expect(CaptureFilter.read(types: both, source: source(text: "hello", data: ["public.rtf": half, "public.html": half]))
+            == .capture(ClipCapture(content: .rich, text: "hello", data: ["public.rtf": half, "public.html": half])))
+        let over = Data(count: CaptureFilter.maxRichBytes / 2 + 1)
+        #expect(CaptureFilter.read(types: both, source: source(text: "hello", data: ["public.rtf": over, "public.html": half])) == .capture(.plain("hello")))
+
+        let richLog = Reads()
+        let large = String(repeating: "a", count: CaptureFilter.maxBytes + 1)
+        #expect(CaptureFilter.read(types: both, source: source(text: large, data: ["public.rtf": rtf], log: richLog)) == .skip(.tooLarge))
+        #expect(richLog.types.isEmpty)
+        #expect(CaptureFilter.read(types: both, source: source(text: "  ", data: ["public.rtf": rtf])) == .skip(.blank))
+        #expect(CaptureFilter.read(types: both, source: source(text: nil, data: ["public.rtf": rtf])) == .skip(.unreadable))
+    }
+
+    @Test func theFallbackReadCanOnlyReachText() {
+        var reads = 0
+        func read(_ types: [String]) -> CaptureDecision {
+            CaptureFilter.readText(types: types) {
+                reads += 1
+                return "name.pdf"
+            }
+        }
+        #expect(read(["public.png", "public.tiff"]) == .skip(.unsupported))
+        #expect(read([CaptureFilter.fileType, "public.rtf"]) == .skip(.unsupported))
+        #expect(reads == 0)
+        #expect(read([CaptureFilter.fileType, text, "public.png", "public.html"]) == .capture(.plain("name.pdf")))
+        #expect(reads == 1)
     }
 
     @Test func encryptionRoundTripsAndDetectsTampering() throws {
@@ -853,7 +1006,7 @@ import Testing
         try await store.save(settings)
         let id = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: Date())
         #expect(await store.items().first { $0.id == id }?.sensitive == false)
-        #expect(CaptureFilter.review(.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27"), sensitive: .skip) == .skip(.sensitive))
+        #expect(CaptureFilter.review(.capture(.plain("sk-ant-usr-abcdefghijklmnopqrstuv3c27")), sensitive: .skip) == .skip(.sensitive))
     }
 
     private func oldDatabase(version: Int, at url: URL, key: SymmetricKey, texts: [String]) throws -> [String] {
@@ -997,19 +1150,70 @@ import Testing
 
     @Test func reviewDropsOnlyTokensAndOnlyWhenSettingsSaySo() {
         let token = "sk-ant-usr-abcdefghijklmnopqrstuv3c27"
-        #expect(CaptureFilter.review(.capture(token), sensitive: .skip) == .skip(.sensitive))
-        #expect(CaptureFilter.review(.capture("hello"), sensitive: .skip) == .capture("hello"))
+        #expect(CaptureFilter.review(.capture(.plain(token)), sensitive: .skip) == .skip(.sensitive))
+        #expect(CaptureFilter.review(.capture(.plain("hello")), sensitive: .skip) == .capture(.plain("hello")))
         for handling in [SensitiveHandling.maskAndExpire, .mask, .keep] {
-            #expect(CaptureFilter.review(.capture(token), sensitive: handling) == .capture(token))
+            #expect(CaptureFilter.review(.capture(.plain(token)), sensitive: handling) == .capture(.plain(token)))
         }
         #expect(CaptureFilter.review(.skip(.blank), sensitive: .skip) == .skip(.blank))
+        let rich = CaptureDecision.capture(ClipCapture(content: .rich, text: token, data: ["public.html": Data([1])]))
+        #expect(CaptureFilter.review(rich, sensitive: .skip) == .skip(.sensitive))
+        #expect(CaptureFilter.review(rich, sensitive: .mask) == rich)
+        let files = CaptureDecision.capture(ClipCapture(content: .files([token])))
+        #expect(CaptureFilter.review(files, sensitive: .skip) == files)
+    }
+
+    @Test func theLargestImageFitsTheReplyLimit() async throws {
+        let bytes = Data(repeating: 7, count: CaptureFilter.maxImageBytes)
+        let largest = ClipCapture(content: .image(type: "public.tiff", width: Int.max, height: Int.max), data: ["public.tiff": bytes],
+                                  thumbnail: Data(repeating: 1, count: 64 * 1024))
+        let reply = ClipboardChildReply.decision(.capture(largest), access: .alwaysAllow)
+        let data = try reply.encoded()
+        #expect(data.count > CaptureFilter.maxImageBytes)
+        #expect(data.count <= ClipboardChild.maxReplyBytes)
+        #expect(ClipboardChildReply.decode(data) == reply)
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("reply")
+        try data.write(to: file)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .reply(reply))
+
+        var over = reply
+        if case .decision(.capture(var clip), let access) = reply {
+            clip.data["public.tiff"] = Data(repeating: 7, count: ClipboardChild.maxReplyBytes)
+            over = .decision(.capture(clip), access: access)
+        }
+        try over.encoded().write(to: file)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .crashed)
+    }
+
+    @Test func everyOtherReplyFitsTheLimitToo() throws {
+        let text = String(repeating: "é🌍", count: CaptureFilter.maxBytes / 6)
+        #expect(text.utf8.count <= CaptureFilter.maxBytes)
+        let half = Data(repeating: 1, count: CaptureFilter.maxRichBytes / 2)
+        let rich = ClipCapture(content: .rich, text: text, data: ["public.rtf": half, "public.html": half])
+        #expect(try ClipboardChildReply.decision(.capture(rich), access: .alwaysAllow).encoded().count <= ClipboardChild.maxReplyBytes)
+        let paths = (0..<3000).map { "/tmp/é/file-\($0).txt" }
+        #expect(try ClipboardChildReply.decision(.capture(ClipCapture(content: .files(paths))), access: .alwaysAllow).encoded().count <= ClipboardChild.maxReplyBytes)
+    }
+
+    @Test func aRichReplyRoundTripsThroughEncoding() throws {
+        let clip = ClipCapture(content: .rich, text: "a\u{0}b 🌍", data: ["public.rtf": Data([0, 1, 2]), "public.html": Data()])
+        let reply = ClipboardChildReply.decision(.capture(clip), access: .ask)
+        #expect(ClipboardChildReply.decode(try reply.encoded()) == reply)
+        let files = ClipboardChildReply.decision(.capture(ClipCapture(content: .files(["/tmp/é b/", "/x"]))), access: .ask)
+        #expect(ClipboardChildReply.decode(try files.encoded()) == files)
+        let image = ClipboardChildReply.decision(.capture(ClipCapture(content: .image(type: "public.png", width: 3, height: 4), data: ["public.png": Data([9])], thumbnail: Data([8]))), access: .ask)
+        #expect(ClipboardChildReply.decode(try image.encoded()) == image)
     }
 
     @Test func childRepliesSurviveEncoding() throws {
         let text = String(repeating: "Olá 🌍 a\u{0}b\n", count: 20_000)
         let replies: [ClipboardChildReply] = [
-            .decision(.capture(text), access: .alwaysAllow),
-            .decision(.capture(String(repeating: "é", count: CaptureFilter.maxBytes / 2)), access: .ask),
+            .decision(.capture(.plain(text)), access: .alwaysAllow),
+            .decision(.capture(.plain(String(repeating: "é", count: CaptureFilter.maxBytes / 2))), access: .ask),
             .decision(.skip(.stale), access: .standard),
             .decision(.skip(.tooLarge), access: .unavailable),
             .denied(child: .alwaysDeny, parent: .alwaysAllow),
@@ -1038,6 +1242,8 @@ import Testing
         var accesses: [ClipboardAccess]
         var types = [CaptureFilter.plainTextType]
         var text: String? = "hello"
+        var data: [String: Data] = [:]
+        var files: [String] = []
         var reads = 0
 
         init(counts: [Int] = [7], accesses: [ClipboardAccess] = [.alwaysAllow]) {
@@ -1048,17 +1254,17 @@ import Testing
         private func next<Value>(_ values: inout [Value]) -> Value { values.count > 1 ? values.removeFirst() : values[0] }
 
         var source: ClipboardChild.Source {
-            ClipboardChild.Source(changeCount: { self.next(&self.counts) }, access: { self.next(&self.accesses) }, types: { self.types }, text: {
+            ClipboardChild.Source(changeCount: { self.next(&self.counts) }, access: { self.next(&self.accesses) }, types: { self.types }, content: CaptureSource(text: {
                 self.reads += 1
                 return self.text
-            })
+            }, data: { self.data[$0] }, files: { self.files }))
         }
     }
 
     @Test func childChecksTheChangeCountAroundTheRead() {
         let request = ClipboardChild.Request(changeCount: 7, access: .alwaysAllow)
         let steady = FakeBoard()
-        #expect(ClipboardChild.reply(to: request, source: steady.source) == .decision(.capture("hello"), access: .alwaysAllow))
+        #expect(ClipboardChild.reply(to: request, source: steady.source) == .decision(.capture(.plain("hello")), access: .alwaysAllow))
 
         let changedBefore = FakeBoard(counts: [8])
         #expect(ClipboardChild.reply(to: request, source: changedBefore.source) == .decision(.skip(.stale), access: .alwaysAllow))
@@ -1067,6 +1273,30 @@ import Testing
         let changedDuring = FakeBoard(counts: [7, 8])
         #expect(ClipboardChild.reply(to: request, source: changedDuring.source) == .decision(.skip(.stale), access: .alwaysAllow))
         #expect(changedDuring.reads == 1)
+    }
+
+    @Test func childReadsFilesImagesAndRichTextThroughTheSameChecks() throws {
+        let request = ClipboardChild.Request(changeCount: 7, access: .alwaysAllow)
+        let board = FakeBoard()
+        board.types = [CaptureFilter.fileType, text]
+        board.files = ["/tmp/a.pdf"]
+        #expect(ClipboardChild.reply(to: request, source: board.source) == .decision(.capture(ClipCapture(content: .files(["/tmp/a.pdf"]))), access: .alwaysAllow))
+        #expect(board.reads == 0)
+
+        let picture = FakeBoard()
+        picture.types = ["public.png"]
+        picture.data = ["public.png": try encoded("public.png")]
+        let reply = ClipboardChild.reply(to: request, source: picture.source)
+        guard case .decision(.capture(let clip), _) = reply else {
+            Issue.record("Expected an image, got \(reply)")
+            return
+        }
+        #expect(clip.content == .image(type: "public.png", width: 80, height: 40))
+
+        let moved = FakeBoard(counts: [7, 8])
+        moved.types = ["public.png"]
+        moved.data = picture.data
+        #expect(ClipboardChild.reply(to: request, source: moved.source) == .decision(.skip(.stale), access: .alwaysAllow))
     }
 
     @Test func childReportsDenialExplicitlyAndNeverFromAnEmptyRead() {
@@ -1087,7 +1317,7 @@ import Testing
         #expect(ClipboardChild.reply(to: request, source: empty.source) == .decision(.skip(.unreadable), access: .alwaysAllow))
 
         let same = ClipboardChild.Request(changeCount: 7, access: .standard)
-        #expect(ClipboardChild.reply(to: same, source: FakeBoard(accesses: [.standard]).source) == .decision(.capture("hello"), access: .standard))
+        #expect(ClipboardChild.reply(to: same, source: FakeBoard(accesses: [.standard]).source) == .decision(.capture(.plain("hello")), access: .standard))
     }
 
     @Test func onlyStartFailureAndDenialSwitchToTheMainThread() {
@@ -1115,7 +1345,7 @@ import Testing
     @Test func fallbackLastsForTheSession() {
         var state = ClipboardReaderState()
         _ = state.record(.failedToStart("missing"), milliseconds: 0)
-        _ = state.record(.reply(.decision(.capture("hello"), access: .alwaysAllow)), milliseconds: 10)
+        _ = state.record(.reply(.decision(.capture(.plain("hello")), access: .alwaysAllow)), milliseconds: 10)
         #expect(!state.usesChild)
     }
 
@@ -1130,7 +1360,7 @@ import Testing
         #expect(state.failuresInARow == 2)
         _ = state.record(unreadable(), milliseconds: 5)
         #expect(state.failing)
-        _ = state.record(.reply(.decision(.capture("back"), access: .alwaysAllow)), milliseconds: 5)
+        _ = state.record(.reply(.decision(.capture(.plain("back")), access: .alwaysAllow)), milliseconds: 5)
         #expect(!state.failing && state.failuresInARow == 0)
 
         var skipped = state
@@ -1175,7 +1405,7 @@ import Testing
         #expect(row("Reader fallback reason") == "none")
         #expect(row("Child read average") == "no reads yet")
         let secret = "very private clipboard text"
-        _ = state.record(.reply(.decision(.capture(secret), access: .alwaysAllow)), milliseconds: 80)
+        _ = state.record(.reply(.decision(.capture(.plain(secret)), access: .alwaysAllow)), milliseconds: 80)
         _ = state.record(.reply(.decision(.skip(.blank), access: .alwaysAllow)), milliseconds: 121)
         _ = state.record(.timedOut, milliseconds: 30_000)
         #expect(row("Child reads") == "2")
@@ -1196,7 +1426,7 @@ import Testing
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let reply = ClipboardChildReply.decision(.capture(String(repeating: "x", count: CaptureFilter.maxBytes)), access: .alwaysAllow)
+        let reply = ClipboardChildReply.decision(.capture(.plain(String(repeating: "x", count: CaptureFilter.maxBytes))), access: .alwaysAllow)
         let file = dir.appendingPathComponent("reply")
         try reply.encoded().write(to: file)
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 0.1; cat '\(file.path)'; sleep 0.1")) == .reply(reply))
@@ -1206,7 +1436,7 @@ import Testing
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let reply = ClipboardChildReply.decision(.capture(String(repeating: "🌍", count: 150_000)), access: .alwaysAllow)
+        let reply = ClipboardChildReply.decision(.capture(.plain(String(repeating: "🌍", count: 150_000))), access: .alwaysAllow)
         let data = try reply.encoded()
         #expect(data.count > 256 * 1024 && data.count <= ClipboardChild.maxReplyBytes)
         let file = dir.appendingPathComponent("reply")

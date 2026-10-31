@@ -291,23 +291,23 @@ struct ClipboardStatus: Equatable {
     }
 
     private func readOnMainThread(_ types: [String]) -> CaptureDecision {
-        CaptureFilter.read(types: types) { NSPasteboard.general.string(forType: .string) }
+        CaptureFilter.readText(types: types) { NSPasteboard.general.string(forType: .string) }
     }
 
     private func finish(_ decision: CaptureDecision, count: Int, source: String?) {
         switch CaptureFilter.review(decision, sensitive: settings.sensitive) {
         case .skip(let reason):
             skipCounts[reason, default: 0] += 1
-        case .capture(let text):
+        case .capture(let clip):
             capturedChangeCount = count
-            Task { await save(text, source: source) }
+            Task { await save(clip, source: source) }
         }
     }
 
-    private func save(_ text: String, source: String?) async {
+    private func save(_ clip: ClipCapture, source: String?) async {
         guard let store else { return }
         do {
-            try await store.capture(text, source: source, now: Date())
+            try await store.capture(clip, source: source, now: Date())
             capturedCount += 1
             try await store.purge(now: Date())
             await refresh()

@@ -20,7 +20,13 @@ enum ClipboardReader {
         let board = NSPasteboard.general
         let reply = ClipboardChild.reply(to: request, source: ClipboardChild.Source(
             changeCount: { board.changeCount }, access: { access }, types: { board.types?.map(\.rawValue) ?? [] },
-            text: { board.string(forType: .string) }))
+            content: CaptureSource(
+                text: { board.string(forType: .string) },
+                data: { board.data(forType: NSPasteboard.PasteboardType($0)) },
+                files: {
+                    let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
+                    return urls?.map { $0.path(percentEncoded: false) } ?? []
+                })))
         guard let data = try? reply.encoded(), (try? FileHandle.standardOutput.write(contentsOf: data)) != nil else { exit(1) }
         exit(0)
     }
