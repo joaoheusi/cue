@@ -17,6 +17,7 @@ public actor ClipboardStore {
     private var cache: [String: ClipItem] = [:]
     public private(set) var settings: ClipboardSettings
     public private(set) var captureEnabled: Bool
+    public private(set) var capturePaused: Bool
     public private(set) var pinboards: [Pinboard] = []
 
     public init(url: URL?) throws {
@@ -58,7 +59,9 @@ public actor ClipboardStore {
         guard let json = try db.scalar("SELECT value FROM meta WHERE key='settings'")?.data,
               let settings = try? JSONDecoder().decode(ClipboardSettings.self, from: json) else { throw CueError.storage() }
         self.settings = settings
-        captureEnabled = try db.scalar("SELECT value FROM meta WHERE key='capture'")?.int == 1
+        let capture = try db.scalar("SELECT value FROM meta WHERE key='capture'")?.int
+        captureEnabled = capture == 1
+        capturePaused = capture == 0
         pinboards = try Self.loadPinboards(db)
     }
 
@@ -227,6 +230,7 @@ public actor ClipboardStore {
     public func setCaptureEnabled(_ enabled: Bool) throws {
         try db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('capture', ?1)", [SQLValue(enabled)])
         captureEnabled = enabled
+        capturePaused = !enabled
     }
 
     public func exportData(now: Date) throws -> Data {

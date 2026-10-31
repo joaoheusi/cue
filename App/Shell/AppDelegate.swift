@@ -181,19 +181,19 @@ import SwiftUI
         menu.autoenablesItems = false
         let paused = context.hotKeys.paused
         let update = context.updater.readyVersion
-        let capturing = clipboard.captureEnabled
+        let capturePaused = clipboard.capturePaused
         let clipboardReady = clipboard.phase == .ready
         if paused {
             let age = context.hotKeys.pausedAt.map { "Paused \(ShortAge.text($0))" } ?? "Paused"
             addStatus(menu, "Resume Shortcuts", detail: age, color: .systemOrange) { [unowned self] in context.hotKeys.setPaused(false) }
         }
-        if !capturing {
-            addStatus(menu, "Resume Clipboard Capture", detail: "Off", color: .systemOrange, enabled: clipboardReady) { [unowned self] in clipboard.setCaptureEnabled(true) }
+        if capturePaused {
+            addStatus(menu, "Resume Clipboard Capture", detail: "Paused", color: .systemOrange, enabled: clipboardReady) { [unowned self] in clipboard.setCaptureEnabled(true) }
         }
         if let update {
             addStatus(menu, "Restart to Update", detail: update, color: .systemBlue) { [unowned self] in context.updater.restartToUpdate() }
         }
-        if paused || !capturing || update != nil { menu.addItem(.separator()) }
+        if paused || capturePaused || update != nil { menu.addItem(.separator()) }
         add(menu, "Search", "magnifyingglass", shortcut: shortcut(.prompts), enabled: !paused) { [unowned self] in command.show(.prompts) }
         add(menu, "Clipboard", "clipboard", shortcut: shortcut(.clipboard), enabled: !paused) { [unowned self] in command.show(.clipboard) }
         add(menu, "Menu Bar Items", "menubar.rectangle", shortcut: shortcut(.menuBar), enabled: !paused) { [unowned self] in command.show(.menuBar) }
@@ -214,7 +214,7 @@ import SwiftUI
         if !paused {
             add(menu, "Pause Shortcuts", "pause") { [unowned self] in context.hotKeys.setPaused(true) }
         }
-        if capturing {
+        if clipboard.captureEnabled {
             add(menu, "Pause Clipboard Capture", "pause", enabled: clipboardReady) { [unowned self] in clipboard.setCaptureEnabled(false) }
         }
         if context.updater.isAvailable, update == nil {

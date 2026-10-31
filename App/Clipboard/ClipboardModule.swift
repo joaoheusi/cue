@@ -21,6 +21,7 @@ struct ClipboardStatus: Equatable {
     private(set) var pinboards: [Pinboard] = []
     private(set) var settings = ClipboardSettings()
     private(set) var captureEnabled = false
+    private(set) var capturePaused = false
     private(set) var accessDenied = false
     private(set) var hotKeyError: String?
     var commandStatus: ClipboardStatus?
@@ -110,6 +111,7 @@ struct ClipboardStatus: Equatable {
             self.store = store
             settings = await store.settings
             captureEnabled = await store.captureEnabled
+            capturePaused = await store.capturePaused
             pinboards = await store.pinboards
         } catch {
             fail(error)
@@ -186,12 +188,13 @@ struct ClipboardStatus: Equatable {
 
     func setCaptureEnabled(_ enabled: Bool) {
         guard let store, enabled != captureEnabled else { return }
-        if enabled, !context.permissions.explain(.clipboard, continueTitle: "Turn On") { return }
+        if enabled, !capturePaused, !context.permissions.explain(.clipboard, continueTitle: "Turn On") { return }
         Task {
             do {
                 if enabled, !(await store.isUnlocked) { try await unlock(store) }
                 try await store.setCaptureEnabled(enabled)
                 captureEnabled = enabled
+                capturePaused = !enabled
                 if enabled {
                     await refresh()
                     phase = .ready

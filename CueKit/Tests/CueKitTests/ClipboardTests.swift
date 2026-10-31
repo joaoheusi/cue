@@ -244,6 +244,19 @@ import Testing
         #expect(await reopened.items().map(\.id) == [later, pinned, old])
     }
 
+    @Test func captureOnlyCountsAsPausedAfterBeingOn() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(ClipboardStore.fileName)
+        let store = try ClipboardStore(url: url)
+        #expect(await !store.capturePaused)
+        try await store.setCaptureEnabled(true)
+        #expect(await !store.capturePaused)
+        try await store.setCaptureEnabled(false)
+        #expect(await store.capturePaused)
+        #expect(await (try ClipboardStore(url: url)).capturePaused)
+    }
+
     @Test func lockedStoreDeletesWithoutTheKey() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
