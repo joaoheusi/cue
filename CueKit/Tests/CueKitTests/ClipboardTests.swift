@@ -293,7 +293,7 @@ import Testing
         _ = try ClipboardStore(url: url)
         try SQLite(path: url).execute("UPDATE meta SET value=?1 WHERE key='settings'", [.blob(old)])
         #expect(await (try ClipboardStore(url: url)).settings == decoded)
-        #expect(try SQLite(path: url).userVersion() == 2)
+        #expect(try SQLite(path: url).userVersion() == 3)
     }
 
     @Test func newSettingsSurviveExportAndImport() async throws {
@@ -505,14 +505,112 @@ import Testing
         #expect(CaptureFilter.review(.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27"), sensitive: .skip) == .skip(.sensitive))
     }
 
-    @Test func versionOneHistoryMigrates() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sqlite3")
-        defer { try? FileManager.default.removeItem(at: url) }
-        _ = try ClipboardStore(url: url)
-        let raw = try SQLite(path: url)
-        try raw.executeScript("ALTER TABLE items DROP COLUMN sensitive; ALTER TABLE items DROP COLUMN expires_at; PRAGMA user_version=1;")
-        _ = try ClipboardStore(url: url)
+    private func oldDatabase(version: Int, at url: URL, key: SymmetricKey, texts: [String]) throws -> [String] {
+        let crypto = ClipboardCrypto(master: key)
+        let db = try SQLite(path: url)
+        try db.executeScript("""
+        PRAGMA secure_delete=ON; PRAGMA journal_mode=WAL;
+        CREATE TABLE meta(key TEXT PRIMARY KEY, value BLOB NOT NULL);
+        CREATE TABLE pinboards(id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL);
+        CREATE TABLE items(
+            id TEXT PRIMARY KEY,
+            digest BLOB NOT NULL UNIQUE,
+            text BLOB NOT NULL,
+            source BLOB,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT NOT NULL,
+            pinboard_id TEXT REFERENCES pinboards(id) ON DELETE SET NULL
+        );
+        CREATE INDEX items_pinboard ON items(pinboard_id);
+        """)
+        if version >= 2 {
+            try db.executeScript("""
+            ALTER TABLE items ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE items ADD COLUMN expires_at TEXT;
+            """)
+        }
+        try db.execute("INSERT INTO pinboards(id, name, position) VALUES('b', 'Pinned', 0)")
+        try db.execute("INSERT INTO meta(key, value) VALUES('settings', ?1)", [.blob(try JSONEncoder().encode(ClipboardSettings()))])
+        try db.execute("INSERT INTO meta(key, value) VALUES('key_check', ?1)", [.blob(crypto.keyCheck)])
+        let ids = texts.map { _ in ClipboardStore.newID() }
+        for (index, text) in texts.enumerated() {
+            let id = ids[index]
+            let stamp = Timestamp.iso(Date(timeIntervalSince1970: 1_792_670_100 + Double(index)))
+            try db.execute("INSERT INTO items(id, digest, text, source, created_at, last_used_at, pinboard_id) VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+                           [.text(id), .blob(crypto.digest(text)), .blob(try crypto.seal(text, context: "\(id).text")),
+                            .blob(try crypto.seal("com.apple.Notes", context: "\(id).source")), .text(stamp), index == 0 ? "b" : nil])
+        }
+        try db.executeScript("PRAGMA user_version=\(version)")
+        return ids
+    }
+
+    private func temporaryDatabase() -> (dir: URL, url: URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        return (dir, dir.appendingPathComponent(ClipboardStore.fileName))
+    }
+
+    @Test func versionTwoHistoryMigratesAndStaysReadable() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let texts = ["Meeting notes: Café 🌍", "https://example.com/a", "func a() {\n  return 1;\n}"]
+        let ids = try oldDatabase(version: 2, at: url, key: key, texts: texts)
+        let sealedBefore = try SQLite(path: url).query("SELECT id, text, digest FROM items ORDER BY id")
+
+        let store = try ClipboardStore(url: url)
+        #expect(try SQLite(path: url).userVersion() == 3)
+        #expect(try SQLite(path: url).query("SELECT id, text, digest FROM items ORDER BY id") == sealedBefore)
+        let unused = try SQLite(path: url).query("SELECT format, meta, rich, file_bytes, title, ocr_text, thumbnail FROM items GROUP BY format")
+        #expect(unused == [[.text("plain"), .null, .null, .int(0), .null, .null, .null]])
+
+        try await store.unlock(key)
+        let items = await store.items()
+        #expect(Set(items.map(\.text)) == Set(texts))
+        #expect(items.allSatisfy { $0.content == .plain && $0.source == "com.apple.Notes" })
+        #expect(items.first { $0.id == ids[0] }?.pinboardID == "b")
+        #expect(items.first { $0.id == ids[1] }?.kind == .link)
+
+        #expect(try await store.capture(texts[1], source: nil, now: Date()) == ids[1])
+        #expect(try await store.itemCount() == 3)
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().count == 3)
+    }
+
+    @Test func versionOneHistoryMigratesThroughEveryVersion() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let ids = try oldDatabase(version: 1, at: url, key: key, texts: ["from version one"])
+        let store = try ClipboardStore(url: url)
+        #expect(try SQLite(path: url).userVersion() == 3)
+        try await store.unlock(key)
+        #expect(await store.items().map(\.id) == ids)
+        #expect(await store.items().first?.text == "from version one")
+    }
+
+    @Test func failedMigrationLeavesTheDatabaseUnchanged() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        _ = try oldDatabase(version: 2, at: url, key: key, texts: ["keep me"])
+        try SQLite(path: url).executeScript("ALTER TABLE items ADD COLUMN thumbnail BLOB")
+        func columns() throws -> [String] { try SQLite(path: url).query("PRAGMA table_info(items)").compactMap { $0[1].string } }
+        let before = try columns()
+        let rowsBefore = try SQLite(path: url).query("SELECT * FROM items")
+
+        #expect(throws: (any Error).self) { try ClipboardStore(url: url) }
+
         #expect(try SQLite(path: url).userVersion() == 2)
+        #expect(try columns() == before)
+        #expect(!(try columns()).contains("format"))
+        #expect(try SQLite(path: url).query("SELECT * FROM items") == rowsBefore)
+
+        try SQLite(path: url).executeScript("ALTER TABLE items DROP COLUMN thumbnail")
+        let repaired = try ClipboardStore(url: url)
+        try await repaired.unlock(key)
+        #expect(await repaired.items().first?.text == "keep me")
     }
 
     @Test func recopyingATokenAppliesTheCurrentPolicy() async throws {

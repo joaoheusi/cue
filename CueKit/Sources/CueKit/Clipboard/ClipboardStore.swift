@@ -3,7 +3,7 @@ import Foundation
 
 public actor ClipboardStore {
     public static let fileName = "clipboard.sqlite3"
-    static let schemaVersion = 2
+    static let schemaVersion = 3
 
     public static let keyUnavailable = CueError(
         "HISTORY_KEY_UNAVAILABLE",
@@ -52,6 +52,20 @@ public actor ClipboardStore {
                 ALTER TABLE items ADD COLUMN sensitive INTEGER NOT NULL DEFAULT 0;
                 ALTER TABLE items ADD COLUMN expires_at TEXT;
                 PRAGMA user_version=2;
+                """)
+            }
+        }
+        if try db.userVersion() < 3 {
+            try db.transaction {
+                try db.executeScript("""
+                ALTER TABLE items ADD COLUMN format TEXT NOT NULL DEFAULT 'plain';
+                ALTER TABLE items ADD COLUMN meta BLOB;
+                ALTER TABLE items ADD COLUMN rich BLOB;
+                ALTER TABLE items ADD COLUMN file_bytes INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE items ADD COLUMN title BLOB;
+                ALTER TABLE items ADD COLUMN ocr_text BLOB;
+                ALTER TABLE items ADD COLUMN thumbnail BLOB;
+                PRAGMA user_version=3;
                 """)
             }
         }
