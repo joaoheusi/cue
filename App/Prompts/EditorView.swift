@@ -228,6 +228,7 @@ struct EditorView: View {
         switch mode {
         case .inherit: snapshot.settings.defaultDelivery == .paste ? "Default (Paste)" : "Default (Copy)"
         case .paste: "Paste into front app"
+        case .replace: "Replace selection"
         case .copy: "Copy"
         }
     }
@@ -237,7 +238,7 @@ struct EditorView: View {
             GridRow {
                 Property("Result") {
                     PopMenu(title: deliveryTitle(draft.deliveryMode), selection: binding(\.deliveryMode),
-                            options: [DeliveryMode.inherit, .paste, .copy].map { ($0, deliveryTitle($0)) })
+                            options: [DeliveryMode.inherit, .paste, .replace, .copy].map { ($0, deliveryTitle($0)) })
                 }
                 Property("Category") {
                     PopMenu(title: draft.category ?? "None", dimmed: draft.category == nil, selection: binding(\.category),
@@ -278,7 +279,7 @@ struct EditorView: View {
     }
 
     private func test() {
-        if let draft = nav.draft { model.test(draft) }
+        if let draft = nav.draft { Task { await model.test(draft) } }
     }
 
     private func copyText() {
