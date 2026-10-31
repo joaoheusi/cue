@@ -520,5 +520,17 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
         return file
     }
 
+    public static func lossWarning(_ counts: [String: Int]) -> String? {
+        func entries(_ count: Int?, _ one: String, _ many: String) -> String? {
+            guard let count, count > 0 else { return nil }
+            return count == 1 ? "1 \(one)" : "\(count) \(many)"
+        }
+        var parts = [entries(counts["image"], "image", "images"), entries(counts["files"], "file entry", "file entries")].compactMap { $0 }
+        if let rich = entries(counts["rich"], "rich text entry", "rich text entries") { parts.append("the formatting of \(rich)") }
+        guard let last = parts.last else { return nil }
+        let list = parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " and \(last)" : last
+        return list.prefix(1).uppercased() + list.dropFirst() + " will be lost."
+    }
+
     static func isCanonicalID(_ id: String) -> Bool { UUID(uuidString: id)?.uuidString.lowercased() == id }
 }

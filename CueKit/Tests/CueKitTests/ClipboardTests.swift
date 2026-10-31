@@ -958,6 +958,16 @@ import Testing
         #expect(payloadNames(dir).isEmpty)
     }
 
+    @Test func importWarningNamesWhatWouldBeLost() {
+        #expect(ClipboardExport.lossWarning([:]) == nil)
+        #expect(ClipboardExport.lossWarning(["plain": 12]) == nil)
+        #expect(ClipboardExport.lossWarning(["image": 1]) == "1 image will be lost.")
+        #expect(ClipboardExport.lossWarning(["files": 2]) == "2 file entries will be lost.")
+        #expect(ClipboardExport.lossWarning(["rich": 1]) == "The formatting of 1 rich text entry will be lost.")
+        #expect(ClipboardExport.lossWarning(["image": 3, "files": 1, "rich": 2, "plain": 9])
+            == "3 images, 1 file entry and the formatting of 2 rich text entries will be lost.")
+    }
+
     @Test func missingFilesAreReportedByName() {
         let all = ClipFileCheck(paths: ["/a/one.pdf", "/b/two.pdf"]) { _ in true }
         #expect(all.present.count == 2 && all.missing.isEmpty && all.error == nil && all.warning == nil)

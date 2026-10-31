@@ -97,6 +97,7 @@ struct ClipboardStatus: Equatable {
             rows.append(("Items", "\(counts.items) (\(items.count) readable)"))
             rows.append(("Pinned items", "\(counts.pinned)"))
         }
+        if let store, let bytes = try? await store.storedBytes() { rows.append(("Stored bytes", "\(bytes)")) }
         rows += [
             ("Pinboards", "\(pinboards.count)"),
             ("Capture", captureEnabled ? (pollTask != nil ? "on" : "on, paused") : "off"),
@@ -104,6 +105,7 @@ struct ClipboardStatus: Equatable {
             ("Keychain", keychainKind?.rawValue ?? "not used"),
             ("Retention", settings.retention.rawValue),
             ("Max unpinned items", "\(settings.maxItems)"),
+            ("Max unpinned bytes", "\(settings.maxStorage)"),
             ("Excluded apps", "\(settings.excludedApps.count)"),
             ("Shortcut", settings.shortcut ?? "none"),
             ("Captured this session", "\(capturedCount)"),
@@ -581,13 +583,13 @@ struct ClipboardStatus: Equatable {
     func exportHistory() {
         guard let store,
               confirm("Export clipboard history as plain text?",
-                      "The file is not encrypted. Anyone who can open it can read every saved item. Store it somewhere safe and delete it when you no longer need it.",
+                      "The file is not encrypted. Anyone who can open it can read every saved item. Images and files are left out, and rich text is saved as plain text. Store it somewhere safe and delete it when you no longer need it.",
                       "Export…") else { return }
         Task {
             do {
                 let data = try await store.exportData(now: Date())
                 if try FileTransfer.save(data, suggestedName: SafeFilename.make("Cue Clipboard Export", ext: "json", date: Date()), type: .json) {
-                    settingsStatus = ClipboardStatus(text: "Exported \(items.count == 1 ? "1 item" : "\(items.count) items").", success: true)
+                    settingsStatus = ClipboardStatus(text: "Exported \(Self.itemCount(items.filter(\.isExportable).count)).", success: true)
                 }
             } catch {
                 report(error, .settings)
@@ -601,8 +603,9 @@ struct ClipboardStatus: Equatable {
             do {
                 guard let data = try FileTransfer.open(type: .json, maxBytes: ClipboardExport.maxBytes) else { return }
                 let file = try await Task.detached { try ClipboardExport.decode(data) }.value
+                let loss = ClipboardExport.lossWarning(try await store.formatCounts()).map { " \($0)" } ?? ""
                 guard confirm("Replace clipboard history?",
-                              "Import \(file.items.count) items and \(file.pinboards.count) pinboards. This replaces your current clipboard history, pinboards, and clipboard settings. It cannot be undone.",
+                              "Import \(file.items.count) items and \(file.pinboards.count) pinboards. This replaces your current clipboard history, pinboards, and clipboard settings.\(loss) It cannot be undone.",
                               "Replace") else { return }
                 if !file.items.isEmpty, !(await store.isUnlocked) { try await unlock(store) }
                 cancelRead()
