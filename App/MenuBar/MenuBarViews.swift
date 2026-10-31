@@ -148,7 +148,7 @@ struct MenuBarCommandView: View {
         } trailing: {
             KeyHint(label: "Click item", keys: "↵", primary: true)
             KeyHint(label: "Change state", keys: "← →")
-            if let current { ActionsHint { showMenu(current) } }
+            if let current { ActionsHint(target: current.id) { showMenu(current) } }
         }
     }
 

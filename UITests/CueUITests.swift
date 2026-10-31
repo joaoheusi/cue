@@ -81,6 +81,52 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "The Library should come to the front, not open behind other windows.")
     }
 
+    func testEditShortcutShowsTheSelectedActionInTheLibrary() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review current")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘E should show the selected action in the Library editor.")
+    }
+
+    func testActionsMenuActsOnTheSelectedRow() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review current")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        search.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.menuItems["Edit in Library"].waitForExistence(timeout: 5))
+        app.menuItems["Edit in Library"].click()
+        let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘K should act on the selected row, not an earlier one.")
+    }
+
+    func testCopyPathShortcutCopiesTheSelectedFile() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        NSPasteboard.general.clearContents()
+        search.typeText("preview")
+        XCTAssertTrue(app.staticTexts["Preview"].waitForExistence(timeout: 5))
+        search.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForClipboard { $0.hasSuffix("Preview.app") }, "⌘⇧C should copy the selected file's path.")
+    }
+
+    func testNewActionRowOpensTheLibraryOnANewAction() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("new action")
+        XCTAssertTrue(app.staticTexts["New Action"].waitForExistence(timeout: 5))
+        search.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.windows["Cue"].staticTexts["Not saved"].waitForExistence(timeout: 5), "Return on New Action should open the Library on a new action.")
+    }
+
     func testUnifiedSearchFindsSnippetsScriptsAndWindowCommands() throws {
         let saved = NSPasteboard.general.string(forType: .string)
         addTeardownBlock {

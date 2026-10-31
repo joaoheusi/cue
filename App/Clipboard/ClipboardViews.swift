@@ -244,7 +244,7 @@ struct ClipboardCommandView: View {
             KeyHint(label: "Copy", keys: "⌘↵")
             KeyHint(label: current?.isPinned == true ? "Unpin" : "Pin", keys: "⌘P")
             KeyHint(label: "Delete", keys: "⌘⌫")
-            if let current { ActionsHint { showMenu(current) } }
+            if let current { ActionsHint(target: current.id) { showMenu(current) } }
         }
     }
 

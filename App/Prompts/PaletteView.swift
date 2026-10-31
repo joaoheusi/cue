@@ -8,8 +8,28 @@ enum PaletteFilter: String, CaseIterable {
     var title: String { rawValue.capitalized }
 }
 
+enum PaletteCommand: String, CaseIterable {
+    case newAction, openLibrary
+
+    var title: String {
+        switch self {
+        case .newAction: "New Action"
+        case .openLibrary: "Open Library"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .newAction: "plus"
+        case .openLibrary: "doc.text"
+        }
+    }
+
+    var target: String? { self == .newAction ? "new" : nil }
+}
+
 enum PaletteItem: Identifiable {
-    case action(Action), snippet(Snippet), script(Script), window(WindowCommand), file(FileHit)
+    case action(Action), snippet(Snippet), script(Script), window(WindowCommand), file(FileHit), command(PaletteCommand)
     case showAll(PaletteFilter, Int)
 
     var id: String {
@@ -19,6 +39,7 @@ enum PaletteItem: Identifiable {
         case .script(let script): "script:\(script.id)"
         case .window(let command): command.owner
         case .file(let hit): "file:\(hit.id)"
+        case .command(let command): "command:\(command.rawValue)"
         case .showAll(let filter, _): "all:\(filter.rawValue)"
         }
     }
@@ -151,6 +172,7 @@ struct PaletteView: View {
             commands.snippets.forEach { add(.snippet($0), $0.keyword) }
             commands.scripts.forEach { add(.script($0), $0.name) }
             WindowCommand.allCases.forEach { add(.window($0), $0.title) }
+            PaletteCommand.allCases.forEach { add(.command($0), $0.title) }
             results.actions = ranked.enumerated().sorted { a, b in
                 (a.element.tier, a.element.weight, a.offset) < (b.element.tier, b.element.weight, b.offset)
             }.map(\.element.item)
@@ -202,7 +224,6 @@ struct PaletteView: View {
                 }
             footer(current, count: trimmed.isEmpty ? snapshot.actions.filter(\.enabled).count + commands.scripts.count : found.count(filter), searching: !trimmed.isEmpty)
         }
-        .background { shortcuts(current) }
         .onAppear(perform: takePendingAsk)
         .onChange(of: model.pendingAsk?.id) { takePendingAsk() }
         .onChange(of: query) {
@@ -291,6 +312,10 @@ struct PaletteView: View {
             } accessory: {
                 if hit.isApp { Text("Application") }
             }
+        case .command(let command):
+            CommandRow(title: command.title, subtitle: "Library", selected: selected, match: trimmed) {
+                Tile(symbol: command.symbol, color: Cue.text)
+            } accessory: { EmptyView() }
         case .showAll(let kind, let count):
             HStack {
                 Text("Show all \(count) \(kind.rawValue)").font(.system(size: 13, weight: .medium)).foregroundStyle(Color.accentColor)
@@ -324,7 +349,7 @@ struct PaletteView: View {
                 Text("\(count) \(searching ? "results" : "actions")")
             } trailing: {
                 hints(current)
-                if let current { ActionsHint { showMenu(current) } }
+                if let current { ActionsHint(target: current.id) { showMenu(current) } }
             }
         }
     }
@@ -341,7 +366,7 @@ struct PaletteView: View {
             } else {
                 KeyHint(label: "Copy", keys: "↵", primary: true)
             }
-            KeyHint(label: "Edit", keys: "⌘E")
+            ShortcutHint(label: "Edit", keys: "⌘E", key: "e", target: action.id) { model.context.openLibrary(action.id) }
         case .snippet:
             if model.willPasteByDefault {
                 KeyHint(label: "Paste", keys: "↵", primary: true)
@@ -355,27 +380,17 @@ struct PaletteView: View {
             KeyHint(label: shows ? "Copy Output" : "Show Output", keys: "⌘↵")
         case .window:
             KeyHint(label: "Apply", keys: "↵", primary: true)
-        case .file:
+        case .file(let hit):
             KeyHint(label: "Open", keys: "↵", primary: true)
             KeyHint(label: "Show in Finder", keys: "⌘↵")
-            KeyHint(label: "Copy Path", keys: "⌘⇧C")
+            ShortcutHint(label: "Copy Path", keys: "⌘⇧C", key: "c", modifiers: [.command, .shift], target: hit.id) { commands.copyPath(hit) }
+        case .command:
+            KeyHint(label: "Open", keys: "↵", primary: true)
         case .showAll:
             KeyHint(label: "Show", keys: "↵", primary: true)
         case nil:
             EmptyView()
         }
-    }
-
-    private func shortcuts(_ current: PaletteItem?) -> some View {
-        ZStack {
-            Button("Edit") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
-                .keyboardShortcut("e", modifiers: .command)
-            Button("Copy Path") { if case .file(let hit)? = current { commands.copyPath(hit) } }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-        }
-        .opacity(0)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     private func showMenu(_ item: PaletteItem) {
@@ -401,6 +416,8 @@ struct PaletteView: View {
                 menu.add("Open") { commands.open(hit, reveal: false) }
                 menu.add("Show in Finder") { commands.open(hit, reveal: true) }
                 menu.add("Copy Path") { commands.copyPath(hit) }
+            case .command:
+                menu.add("Open") { submit(item, alternate: false) }
             case .showAll:
                 break
             }
@@ -448,6 +465,8 @@ struct PaletteView: View {
             }
         case .file(let hit):
             commands.open(hit, reveal: alternate)
+        case .command(let command):
+            model.context.openLibrary(command.target)
         case .showAll(let kind, _):
             filter = kind
         }

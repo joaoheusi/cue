@@ -193,6 +193,7 @@ struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View
         .onChange(of: items.map(\.id)) { _, ids in
             if selection == nil || !ids.contains(where: { $0 == selection }) { selection = ids.first }
         }
+        .onChange(of: query) { selection = items.first?.id }
     }
 
     private var list: some View {
@@ -305,14 +306,29 @@ struct KeyHint: View {
     }
 }
 
+struct ShortcutHint: View {
+    var label: String
+    var keys: String
+    var key: KeyEquivalent
+    var modifiers: EventModifiers = .command
+    var target: AnyHashable
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) { KeyHint(label: label, keys: keys) }
+            .buttonStyle(.plain)
+            .keyboardShortcut(key, modifiers: modifiers)
+            .id(target)
+    }
+}
+
 struct ActionsHint: View {
+    var target: AnyHashable
     var action: () -> Void
 
     var body: some View {
         Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 16)
-        Button(action: action) { KeyHint(label: "Actions", keys: "⌘K") }
-            .buttonStyle(.plain)
-            .keyboardShortcut("k", modifiers: .command)
+        ShortcutHint(label: "Actions", keys: "⌘K", key: "k", target: target, action: action)
     }
 }
 
