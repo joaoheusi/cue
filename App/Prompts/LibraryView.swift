@@ -34,6 +34,12 @@ enum LibraryRow: Identifiable {
     var isDirty: Bool { draft != nil && draft != original }
 
     func edit(_ action: Action?) {
+        if let dir = ProcessInfo.processInfo.environment["CUE_DATA_DIR"] {
+            let line = "EDIT \(action?.name ?? "nil")\n" + Thread.callStackSymbols.prefix(14).joined(separator: "\n") + "\n\n"
+            let url = URL(fileURLWithPath: dir).appendingPathComponent("edit.log")
+            let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            try? (old + line).write(to: url, atomically: true, encoding: .utf8)
+        }
         draft = action
         original = action
         baseline = action
