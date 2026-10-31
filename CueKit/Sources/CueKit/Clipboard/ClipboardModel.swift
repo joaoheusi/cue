@@ -581,11 +581,9 @@ public enum ClipboardSearch {
         let bytes = sorted.reduce(0) { $0 + $1.folded.utf8.count }
         if bytes > parallelByteThreshold, sorted.count > 32 {
             let buffer = TierBuffer(count: sorted.count)
-            let chunks = min(ProcessInfo.processInfo.activeProcessorCount, sorted.count)
-            let chunkSize = (sorted.count + chunks - 1) / chunks
-            DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
-                let start = chunk * chunkSize
-                for index in start..<min(start + chunkSize, sorted.count) {
+            let ranges = ParallelChunks.ranges(count: sorted.count, maxParts: ProcessInfo.processInfo.activeProcessorCount)
+            DispatchQueue.concurrentPerform(iterations: ranges.count) { chunk in
+                for index in ranges[chunk] {
                     buffer.pointer[index] = tier(sorted[index], needle: needle, tokens: tokens)
                 }
             }

@@ -601,6 +601,16 @@ import Testing
         #expect(await reopened.pinboards.map(\.name) == ["Pinned"])
     }
 
+    @Test func loadJustAboveParallelThresholdKeepsEveryItem() async throws {
+        let store = try ClipboardStore(url: nil)
+        let key = SymmetricKey(size: .bits256)
+        try await store.unlock(key)
+        let base = Date()
+        for i in 0..<65 { try await store.capture("item \(i)", source: nil, now: base.addingTimeInterval(Double(i))) }
+        try await store.unlock(key)
+        #expect(await store.items().map(\.text) == (0..<65).reversed().map { "item \($0)" })
+    }
+
     @Test func endToEndHappyPath() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }

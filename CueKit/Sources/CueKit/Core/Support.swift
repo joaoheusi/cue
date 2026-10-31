@@ -66,6 +66,14 @@ public enum SafeFilename {
     }
 }
 
+enum ParallelChunks {
+    static func ranges(count: Int, maxParts: Int) -> [Range<Int>] {
+        guard count > 0, maxParts > 0 else { return [] }
+        let parts = min(maxParts, count)
+        return (0..<parts).map { part in (part * count / parts)..<((part + 1) * count / parts) }
+    }
+}
+
 public enum TextLimits {
     public static func firstInvalidControl(in text: String) -> Int? {
         for (index, scalar) in text.unicodeScalars.enumerated() {

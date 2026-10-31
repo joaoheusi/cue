@@ -463,8 +463,9 @@ public actor ClipboardStore {
     }
 
     private final class ChunkResults: @unchecked Sendable {
-        var chunks: [[ClipItem]]
-        init(count: Int) { chunks = [[ClipItem]](repeating: [], count: count) }
+        let pointer: UnsafeMutableBufferPointer<[ClipItem]>
+        init(count: Int) { pointer = .allocate(capacity: count); pointer.initialize(repeating: []) }
+        deinit { pointer.deinitialize(); pointer.deallocate() }
     }
 
     private static func decode(_ row: [SQLValue], crypto: ClipboardCrypto) -> ClipItem? {
@@ -484,14 +485,12 @@ public actor ClipboardStore {
         var cache: [String: ClipItem] = [:]
         cache.reserveCapacity(rows.count)
         if rows.count > 64 {
-            let chunks = min(ProcessInfo.processInfo.activeProcessorCount, rows.count)
-            let chunkSize = (rows.count + chunks - 1) / chunks
-            let results = ChunkResults(count: chunks)
-            DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
-                let start = chunk * chunkSize
-                results.chunks[chunk] = rows[start..<min(start + chunkSize, rows.count)].compactMap { Self.decode($0, crypto: crypto) }
+            let ranges = ParallelChunks.ranges(count: rows.count, maxParts: ProcessInfo.processInfo.activeProcessorCount)
+            let results = ChunkResults(count: ranges.count)
+            DispatchQueue.concurrentPerform(iterations: ranges.count) { chunk in
+                results.pointer[chunk] = rows[ranges[chunk]].compactMap { Self.decode($0, crypto: crypto) }
             }
-            for item in results.chunks.joined() { cache[item.id] = item }
+            for chunk in results.pointer { for item in chunk { cache[item.id] = item } }
         } else {
             for row in rows { if let item = Self.decode(row, crypto: crypto) { cache[item.id] = item } }
         }
