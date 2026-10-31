@@ -14,11 +14,13 @@ struct FileHit: Identifiable, Equatable {
 
 enum InstalledApps {
     private static let roots = ["/Applications", "/System/Applications", "/System/Applications/Utilities",
+                                "/System/Library/CoreServices/Applications",
                                 FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
+    private static let finder = URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")
 
     static func list() -> [FileHit] {
         let manager = FileManager.default
-        var found: [String: FileHit] = [:]
+        var found = [finder.lastPathComponent: FileHit(url: finder)]
         for root in roots {
             for name in (try? manager.contentsOfDirectory(atPath: root)) ?? [] where !name.hasPrefix(".") {
                 let url = URL(fileURLWithPath: root).appendingPathComponent(name)

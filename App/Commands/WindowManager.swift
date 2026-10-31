@@ -14,7 +14,10 @@ import CueKit
         guard let app, !app.isTerminated, app != .current else { return Self.unavailable }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
-        guard let window = Self.focusedWindow(application), let current = Self.frame(of: window) else { return Self.unavailable }
+        let name = app.localizedName ?? "The front app"
+        guard let window = Self.frontWindow(application) else { return CueError("WINDOW_NOT_FOUND", "\(name) has no window Cue can reach.") }
+        let refused = CueError("WINDOW_REFUSED", "\(name) did not let Cue move its window. Full-screen windows and some system windows cannot be moved.")
+        guard let current = Self.frame(of: window) else { return refused }
         let areas = Self.areas
         guard let index = WindowLayout.area(of: current, in: areas) else { return Self.unavailable }
         let next: CGRect?
@@ -40,18 +43,19 @@ import CueKit
             }
             next = WindowLayout.frame(landed, window: current, area: area)
         }
-        guard let next, next == current || Self.set(next, on: window, application: application) else { return Self.unavailable }
+        guard let next, next == current || Self.set(next, on: window, from: current, application: application) else { return refused }
+        let result = Self.frame(of: window)
         if let restored {
-            history.remove(at: restored)
+            if result == next { history.remove(at: restored) }
         } else if next != current {
             history.append((window, current))
             if history.count > Self.maxHistory { history.removeFirst() }
         }
-        last = (window, landed, Self.frame(of: window) ?? next)
+        last = (window, landed, result ?? next)
         return nil
     }
 
-    private static let unavailable = CueError("WINDOW_UNAVAILABLE", "Cue could not move the front window. Full-screen windows and some system windows cannot be moved.")
+    private static let unavailable = CueError("WINDOW_UNAVAILABLE", "Cue could not find a window to move.")
 
     private static var areas: [CGRect] {
         guard let primary = NSScreen.screens.first else { return [] }
@@ -61,11 +65,17 @@ import CueKit
         }.sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
     }
 
-    private static func focusedWindow(_ application: AXUIElement) -> AXUIElement? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &value) == .success,
-              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+    private static func frontWindow(_ application: AXUIElement) -> AXUIElement? {
+        for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(application, attribute as CFString, &value) == .success,
+               let value, CFGetTypeID(value) == AXUIElementGetTypeID() {
+                return (value as! AXUIElement)
+            }
+        }
+        var windows: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windows) == .success else { return nil }
+        return (windows as? [AXUIElement])?.first
     }
 
     private static func frame(of window: AXUIElement) -> CGRect? {
@@ -78,7 +88,7 @@ import CueKit
         return CGRect(origin: point, size: extent)
     }
 
-    private static func set(_ frame: CGRect, on window: AXUIElement, application: AXUIElement) -> Bool {
+    private static func set(_ frame: CGRect, on window: AXUIElement, from current: CGRect, application: AXUIElement) -> Bool {
         let enhanced = "AXEnhancedUserInterface" as CFString
         var value: CFTypeRef?
         let wasEnhanced = AXUIElementCopyAttributeValue(application, enhanced, &value) == .success && (value as? Bool) == true
@@ -89,6 +99,6 @@ import CueKit
         _ = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position)
         let sized = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, extent) == .success
         let placed = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position) == .success
-        return sized && placed
+        return WindowLayout.accepted(frame, from: current, result: Self.frame(of: window), placed: placed, sized: sized)
     }
 }
