@@ -593,15 +593,38 @@ import Testing
         #expect(!state.failing && state.failuresInARow == 0)
 
         var skipped = state
-        for _ in 0..<ClipboardReaderState.failureLimit { _ = skipped.record(.crashed, milliseconds: 5) }
+        for _ in 0..<ClipboardReaderState.failureLimit { _ = skipped.record(.timedOut, milliseconds: 5) }
         #expect(skipped.failing)
         _ = skipped.record(.reply(.decision(.skip(.blank), access: .alwaysAllow)), milliseconds: 5)
         #expect(!skipped.failing)
 
         var fallback = ClipboardReaderState()
-        for _ in 0..<ClipboardReaderState.failureLimit { _ = fallback.record(.crashed, milliseconds: 5) }
+        for _ in 0..<ClipboardReaderState.failureLimit { _ = fallback.record(.timedOut, milliseconds: 5) }
         _ = fallback.record(.failedToStart("missing"), milliseconds: 0)
         #expect(!fallback.failing)
+    }
+
+    @Test func repeatedCrashesFallBackButTimeoutsNeverDo() {
+        var crashing = ClipboardReaderState()
+        for _ in 1..<ClipboardReaderState.failureLimit {
+            #expect(crashing.record(.crashed, milliseconds: 5) == .finish(.skip(.unreadable)))
+        }
+        #expect(crashing.usesChild)
+        #expect(crashing.record(.crashed, milliseconds: 5) == .readOnMainThread)
+        #expect(!crashing.usesChild && !crashing.failing)
+        #expect(crashing.fallbackReason?.contains("crashed") == true)
+
+        var interrupted = ClipboardReaderState()
+        for _ in 0..<20 {
+            _ = interrupted.record(.crashed, milliseconds: 5)
+            _ = interrupted.record(.crashed, milliseconds: 5)
+            _ = interrupted.record(.timedOut, milliseconds: 30_000)
+        }
+        #expect(interrupted.usesChild)
+
+        var stuck = ClipboardReaderState()
+        for _ in 0..<50 { #expect(stuck.record(.timedOut, milliseconds: 30_000) == .finish(.skip(.timedOut))) }
+        #expect(stuck.usesChild)
     }
 
     @Test func readerDiagnosticsAreReadableAndHoldNoContent() {

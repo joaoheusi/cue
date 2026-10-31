@@ -120,6 +120,7 @@ public struct ClipboardReaderState: Equatable, Sendable {
     public private(set) var crashed = 0
     public private(set) var cancelled = 0
     public private(set) var failuresInARow = 0
+    private var crashesInARow = 0
     private var totalMilliseconds = 0.0
 
     public init() {}
@@ -133,6 +134,7 @@ public struct ClipboardReaderState: Equatable, Sendable {
         case .reply(.decision(let decision, let access)):
             timed(milliseconds)
             childAccess = access
+            crashesInARow = 0
             switch decision {
             case .skip(.unreadable): failuresInARow += 1
             case .skip(.stale): break
@@ -150,11 +152,15 @@ public struct ClipboardReaderState: Equatable, Sendable {
         case .timedOut:
             timedOut += 1
             failuresInARow += 1
+            crashesInARow = 0
             return .finish(.skip(.timedOut))
         case .crashed:
             crashed += 1
             failuresInARow += 1
-            return .finish(.skip(.unreadable))
+            crashesInARow += 1
+            guard crashesInARow >= Self.failureLimit else { return .finish(.skip(.unreadable)) }
+            fallbackReason = "The reader crashed \(crashesInARow) times in a row."
+            return .readOnMainThread
         case .cancelled:
             cancelled += 1
             return .finish(.skip(.stale))
