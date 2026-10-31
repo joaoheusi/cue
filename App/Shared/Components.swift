@@ -305,6 +305,7 @@ struct KeyHint: View {
             Key(text: keys, dimmed: dimmed)
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("hint.\(label)")
     }
 }
 
