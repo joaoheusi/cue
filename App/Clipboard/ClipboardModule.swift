@@ -372,6 +372,15 @@ struct ClipboardStatus: Equatable {
         await run(.command) { try await $0.delete(item.id) }
     }
 
+    func goToLink(_ item: ClipItem) {
+        guard let url = item.linkURL else { return }
+        guard NSWorkspace.shared.open(url) else {
+            commandStatus = ClipboardStatus(text: "Could not open this link.", success: false)
+            return
+        }
+        context.closeCommand()
+    }
+
     func deleteRecent(_ range: RecentRange, from surface: Surface) {
         guard let store else { return }
         let window = range.window(endingAt: Date())

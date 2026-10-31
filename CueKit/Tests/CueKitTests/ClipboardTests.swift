@@ -77,6 +77,21 @@ import Testing
         #expect(ClipboardPurge.select(items, now: now, retention: .never, maxItems: 500).isEmpty)
     }
 
+    @Test func onlyLinkRowsResolveToAURL() {
+        func url(_ text: String, sensitive: Bool = false) -> String? {
+            ClipItem(id: "1", text: text, source: nil, createdAt: .distantPast, lastUsedAt: .distantPast, pinboardID: nil, sensitive: sensitive).linkURL?.absoluteString
+        }
+        #expect(url("https://example.com/a?b=1") == "https://example.com/a?b=1")
+        #expect(url("  https://example.com/a\n") == "https://example.com/a")
+        #expect(url("example.com/a") == "https://example.com/a")
+        #expect(url("mailto:a@example.com") == "mailto:a@example.com")
+        #expect(url("just some words") == nil)
+        #expect(url("a@example.com") == nil)
+        #expect(url("file:///etc/hosts") == nil)
+        #expect(url("javascript:alert(1)") == nil)
+        #expect(url("https://example.com/a", sensitive: true) == nil)
+    }
+
     @Test func recentWindowIncludesBothEdgesAndSkipsPins() {
         let end = Date(timeIntervalSince1970: 1_000_000)
         let window = RecentRange.fiveMinutes.window(endingAt: end)

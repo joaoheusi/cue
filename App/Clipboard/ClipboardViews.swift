@@ -196,6 +196,7 @@ struct ClipboardCommandView: View {
         .contextMenu {
             Button("Paste") { Task { await module.use(item, paste: true) } }
             Button("Copy") { Task { await module.use(item, paste: false) } }
+            if item.linkURL != nil { Button("Go to Link") { module.goToLink(item) } }
             Menu("Pin To") {
                 ForEach(module.pinboards) { board in
                     Button(board.name) { Task { await module.pin(item, to: board.id) } }.disabled(board.id == item.pinboardID)
@@ -257,6 +258,8 @@ struct ClipboardCommandView: View {
                 .keyboardShortcut("p", modifiers: .command)
             Button("Delete") { if let current { Task { await module.delete(current) } } }
                 .keyboardShortcut(.delete, modifiers: .command)
+            Button("Go to Link") { if let current { module.goToLink(current) } }
+                .keyboardShortcut("o", modifiers: .command)
             Button("Previous Pinboard") { cyclePinboard(-1) }.keyboardShortcut("[", modifiers: .command)
             Button("Next Pinboard") { cyclePinboard(1) }.keyboardShortcut("]", modifiers: .command)
         }
@@ -269,6 +272,7 @@ struct ClipboardCommandView: View {
         PanelMenu.show { menu in
             menu.add(pasteLabel) { Task { await module.use(item, paste: true) } }
             menu.add("Copy") { Task { await module.use(item, paste: false) } }
+            if item.linkURL != nil { menu.add("Go to Link", key: "o") { module.goToLink(item) } }
             menu.addItem(.separator())
             for board in module.pinboards where board.id != item.pinboardID {
                 menu.add("Pin to \(board.name)") { Task { await module.pin(item, to: board.id) } }

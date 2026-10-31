@@ -283,7 +283,7 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 5))
     }
 
-    func testWhatYouCopyAppearsInClipboardHistory() throws {
+    private func launchWithCapture() throws -> XCUIApplication {
         let saved = NSPasteboard.general.string(forType: .string)
         addTeardownBlock {
             NSPasteboard.general.clearContents()
@@ -298,10 +298,29 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Cue should explain clipboard access before turning capture on.")
         confirm.click()
         XCTAssertTrue(app.staticTexts["Nothing copied yet"].waitForExistence(timeout: 20), "Capture did not turn on. In CI, the Keychain is the likely cause.")
+        return app
+    }
 
+    func testWhatYouCopyAppearsInClipboardHistory() throws {
+        let app = try launchWithCapture()
         let copied = "copied through the reader \(UUID().uuidString)"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(copied, forType: .string)
         XCTAssertTrue(app.staticTexts[copied].firstMatch.waitForExistence(timeout: 40), "The copy should appear as a row in clipboard history.")
+    }
+
+    func testWhatYouCopyOpensInTheBrowserWhenItIsALink() throws {
+        let app = try launchWithCapture()
+        let search = app.textFields["command.search"]
+        let link = "https://example.com/\(UUID().uuidString)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
+        XCTAssertTrue(app.staticTexts[link].firstMatch.waitForExistence(timeout: 40))
+        search.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.menuItems["Go to Link"].waitForExistence(timeout: 5), "⌘K should offer Go to Link on a link row.")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.typeKey("o", modifierFlags: .command)
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5), "⌘O should open the link and close the panel.")
     }
 }
