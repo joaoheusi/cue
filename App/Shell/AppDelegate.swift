@@ -12,6 +12,7 @@ import SwiftUI
     private var settings: SettingsWindowController!
     private var statusItem: NSStatusItem?
     private var statusBadge: NSView?
+    private var quitPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
@@ -79,7 +80,25 @@ import SwiftUI
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        context.quitApproved || prompts.canQuit() ? .terminateNow : .terminateCancel
+        guard !quitPending else { return .terminateLater }
+        guard context.quitApproved || prompts.canQuit() else { return .terminateCancel }
+        guard clipboard.clearsOnQuit else { return .terminateNow }
+        quitPending = true
+        Task {
+            await clipboard.clearForQuit()
+            finishQuit()
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            finishQuit()
+        }
+        return .terminateLater
+    }
+
+    private func finishQuit() {
+        guard quitPending else { return }
+        quitPending = false
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -162,14 +181,19 @@ import SwiftUI
         menu.autoenablesItems = false
         let paused = context.hotKeys.paused
         let update = context.updater.readyVersion
+        let capturePaused = clipboard.capturePaused
+        let clipboardReady = clipboard.phase == .ready
         if paused {
             let age = context.hotKeys.pausedAt.map { "Paused \(ShortAge.text($0))" } ?? "Paused"
             addStatus(menu, "Resume Shortcuts", detail: age, color: .systemOrange) { [unowned self] in context.hotKeys.setPaused(false) }
         }
+        if capturePaused {
+            addStatus(menu, "Resume Clipboard Capture", detail: "Paused", color: .systemOrange, enabled: clipboardReady) { [unowned self] in clipboard.setCaptureEnabled(true) }
+        }
         if let update {
             addStatus(menu, "Restart to Update", detail: update, color: .systemBlue) { [unowned self] in context.updater.restartToUpdate() }
         }
-        if paused || update != nil { menu.addItem(.separator()) }
+        if paused || capturePaused || update != nil { menu.addItem(.separator()) }
         add(menu, "Search", "magnifyingglass", shortcut: shortcut(.prompts), enabled: !paused) { [unowned self] in command.show(.prompts) }
         add(menu, "Clipboard", "clipboard", shortcut: shortcut(.clipboard), enabled: !paused) { [unowned self] in command.show(.clipboard) }
         add(menu, "Menu Bar Items", "menubar.rectangle", shortcut: shortcut(.menuBar), enabled: !paused) { [unowned self] in command.show(.menuBar) }
@@ -189,6 +213,9 @@ import SwiftUI
         menu.addItem(.separator())
         if !paused {
             add(menu, "Pause Shortcuts", "pause") { [unowned self] in context.hotKeys.setPaused(true) }
+        }
+        if clipboard.captureEnabled {
+            add(menu, "Pause Clipboard Capture", "pause", enabled: clipboardReady) { [unowned self] in clipboard.setCaptureEnabled(false) }
         }
         if context.updater.isAvailable, update == nil {
             add(menu, "Check for Updates…", "arrow.clockwise") { [unowned self] in context.updater.checkNow() }
@@ -243,7 +270,7 @@ import SwiftUI
         }
     }
 
-    private func addStatus(_ menu: NSMenu, _ title: String, detail: String, color: NSColor, action: @escaping @MainActor () -> Void) {
+    private func addStatus(_ menu: NSMenu, _ title: String, detail: String, color: NSColor, enabled: Bool = true, action: @escaping @MainActor () -> Void) {
         let dot = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
             color.setFill()
             NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 8, height: 8)).fill()
@@ -252,9 +279,12 @@ import SwiftUI
         menu.add(title, image: dot, action: action)
         let style = NSMutableParagraphStyle()
         style.tabStops = [NSTextTab(textAlignment: .right, location: 230)]
-        let text = NSMutableAttributedString(string: title, attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold), .paragraphStyle: style])
+        var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold), .paragraphStyle: style]
+        if !enabled { attributes[.foregroundColor] = NSColor.disabledControlTextColor }
+        let text = NSMutableAttributedString(string: title, attributes: attributes)
         text.append(NSAttributedString(string: "\t\(detail)", attributes: [.font: NSFont.menuFont(ofSize: 0), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style]))
         menu.items.last?.attributedTitle = text
+        menu.items.last?.isEnabled = enabled
     }
 
     private func diagnosticsReport() async -> String {

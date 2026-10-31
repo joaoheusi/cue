@@ -184,7 +184,7 @@ struct ClipboardCommandView: View {
 
     private func row(_ item: ClipItem, _ selected: Bool) -> some View {
         let (name, color) = symbol(item)
-        return CommandRow(title: item.preview, selected: selected, monospaced: item.sensitive) {
+        return CommandRow(title: item.preview, selected: selected, monospaced: item.sensitive, match: query.trimmingCharacters(in: .whitespacesAndNewlines)) {
             Image(systemName: name).font(.system(size: 13)).foregroundStyle(color).frame(width: 16)
         } accessory: {
             meta(item)
@@ -273,6 +273,13 @@ struct ClipboardCommandView: View {
             if item.isPinned { menu.add("Unpin") { Task { await module.pin(item, to: nil) } } }
             menu.addItem(.separator())
             menu.add("Delete") { Task { await module.delete(item) } }
+            let recent = NSMenu()
+            for range in RecentRange.allCases {
+                recent.add(range.title) { module.deleteRecent(range, from: .command) }
+            }
+            let delete = NSMenuItem(title: "Delete Recent", action: nil, keyEquivalent: "")
+            delete.submenu = recent
+            menu.addItem(delete)
             menu.add("Settings…") { module.openSettings() }
         }
     }
@@ -307,7 +314,21 @@ struct ClipboardSettingsView: View {
                 }
                 CardDivider()
                 SettingsRow("Stored", note: stored) {
+                    Menu("Delete Recent") {
+                        ForEach(RecentRange.allCases, id: \.self) { range in
+                            Button(range.title) { module.deleteRecent(range, from: .settings) }
+                        }
+                    }
+                    .fixedSize()
                     Button("Clear History…", role: .destructive, action: module.clearHistory).foregroundStyle(.red)
+                }
+                CardDivider()
+                SettingsRow("Clear history on quit", note: "Deletes unpinned items. Pinned items stay.") {
+                    toggle(\.clearOnQuit, "Clear history on quit")
+                }
+                CardDivider()
+                SettingsRow("Also clear the system clipboard", note: "With Clear History, Delete Recent, and clear on quit.") {
+                    toggle(\.clearSystemClipboard, "Also clear the system clipboard")
                 }
             }
             problems
@@ -398,6 +419,10 @@ struct ClipboardSettingsView: View {
         }
         .labelsHidden()
         .fixedSize()
+    }
+
+    private func toggle(_ path: WritableKeyPath<ClipboardSettings, Bool>, _ label: String) -> some View {
+        SwitchToggle(isOn: Binding(get: { module.settings[keyPath: path] }, set: { value in module.update { $0[keyPath: path] = value } }), label: label)
     }
 
     @ViewBuilder private func appIcon(_ id: String) -> some View {

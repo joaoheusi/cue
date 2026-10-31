@@ -17,6 +17,7 @@ public actor ClipboardStore {
     private var cache: [String: ClipItem] = [:]
     public private(set) var settings: ClipboardSettings
     public private(set) var captureEnabled: Bool
+    public private(set) var capturePaused: Bool
     public private(set) var pinboards: [Pinboard] = []
 
     public init(url: URL?) throws {
@@ -58,7 +59,9 @@ public actor ClipboardStore {
         guard let json = try db.scalar("SELECT value FROM meta WHERE key='settings'")?.data,
               let settings = try? JSONDecoder().decode(ClipboardSettings.self, from: json) else { throw CueError.storage() }
         self.settings = settings
-        captureEnabled = try db.scalar("SELECT value FROM meta WHERE key='capture'")?.int == 1
+        let capture = try db.scalar("SELECT value FROM meta WHERE key='capture'")?.int
+        captureEnabled = capture == 1
+        capturePaused = capture == 0
         pinboards = try Self.loadPinboards(db)
     }
 
@@ -134,19 +137,37 @@ public actor ClipboardStore {
 
     @discardableResult
     public func purge(now: Date) throws -> Int {
-        let candidates = try db.query("SELECT id, last_used_at, pinboard_id, expires_at FROM items").compactMap { row -> PurgeCandidate? in
+        let doomed = ClipboardPurge.select(try purgeCandidates(), now: now, retention: settings.retention, maxItems: settings.maxItems)
+        try remove(doomed)
+        return doomed.count
+    }
+
+    public func recentCount(in window: ClosedRange<Date>) throws -> Int {
+        ClipboardPurge.recent(try purgeCandidates(), in: window).count
+    }
+
+    @discardableResult
+    public func deleteRecent(in window: ClosedRange<Date>) throws -> Int {
+        let doomed = ClipboardPurge.recent(try purgeCandidates(), in: window)
+        try remove(doomed)
+        return doomed.count
+    }
+
+    private func purgeCandidates() throws -> [PurgeCandidate] {
+        try db.query("SELECT id, last_used_at, pinboard_id, expires_at FROM items").compactMap { row in
             guard let id = row[0].string else { return nil }
             let used = row[1].string.flatMap(Timestamp.parse) ?? .distantPast
             return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null, expiresAt: row[3].string.flatMap(Timestamp.parse))
         }
-        let doomed = ClipboardPurge.select(candidates, now: now, retention: settings.retention, maxItems: settings.maxItems)
-        guard !doomed.isEmpty else { return 0 }
+    }
+
+    private func remove(_ ids: Set<String>) throws {
+        guard !ids.isEmpty else { return }
         try db.transaction {
-            for id in doomed { try db.execute("DELETE FROM items WHERE id=?1", [.text(id)]) }
+            for id in ids { try db.execute("DELETE FROM items WHERE id=?1", [.text(id)]) }
         }
-        for id in doomed { cache[id] = nil }
+        for id in ids { cache[id] = nil }
         try checkpoint()
-        return doomed.count
     }
 
     public func clear(keepPinned: Bool) throws {
@@ -209,6 +230,7 @@ public actor ClipboardStore {
     public func setCaptureEnabled(_ enabled: Bool) throws {
         try db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('capture', ?1)", [SQLValue(enabled)])
         captureEnabled = enabled
+        capturePaused = !enabled
     }
 
     public func exportData(now: Date) throws -> Data {

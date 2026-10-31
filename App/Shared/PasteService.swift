@@ -156,6 +156,8 @@ enum Delivery: Equatable {
         return board.changeCount
     }
 
+    func clear() -> Int { NSPasteboard.general.clearContents() }
+
     func readText() throws(CueError) -> String {
         guard let text = NSPasteboard.general.string(forType: .string) else {
             throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.")

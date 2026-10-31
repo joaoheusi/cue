@@ -147,12 +147,30 @@ public enum Retention: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum RecentRange: TimeInterval, CaseIterable, Sendable {
+    case fiveMinutes = 300, fifteenMinutes = 900, thirtyMinutes = 1800, hour = 3600, day = 86_400
+
+    public var title: String {
+        switch self {
+        case .fiveMinutes: "Last 5 minutes"
+        case .fifteenMinutes: "Last 15 minutes"
+        case .thirtyMinutes: "Last 30 minutes"
+        case .hour: "Last hour"
+        case .day: "Last 24 hours"
+        }
+    }
+
+    public func window(endingAt end: Date) -> ClosedRange<Date> { end.addingTimeInterval(-rawValue)...end }
+}
+
 public struct ClipboardSettings: Codable, Equatable, Sendable {
     public var retention: Retention = .week
     public var maxItems = 500
     public var excludedApps: [String] = ClipboardSettings.defaultExcludedApps
     public var shortcut: String? = "Super+Alt+V"
     public var sensitive = SensitiveHandling.maskAndExpire
+    public var clearOnQuit = false
+    public var clearSystemClipboard = false
 
     public init() {}
 
@@ -186,7 +204,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         if let shortcut, Shortcut(shortcut) == nil { throw .validation("The clipboard shortcut is not valid.") }
     }
 
-    private enum CodingKeys: String, CodingKey { case retention, maxItems, excludedApps, shortcut, sensitive }
+    private enum CodingKeys: String, CodingKey { case retention, maxItems, excludedApps, shortcut, sensitive, clearOnQuit, clearSystemClipboard }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -195,6 +213,8 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         excludedApps = try c.decode([String].self, forKey: .excludedApps)
         shortcut = try c.decodeIfPresent(String.self, forKey: .shortcut)
         sensitive = try c.decodeIfPresent(SensitiveHandling.self, forKey: .sensitive) ?? .maskAndExpire
+        clearOnQuit = try c.decodeIfPresent(Bool.self, forKey: .clearOnQuit) ?? false
+        clearSystemClipboard = try c.decodeIfPresent(Bool.self, forKey: .clearSystemClipboard) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -204,6 +224,8 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         try c.encode(excludedApps, forKey: .excludedApps)
         try c.encode(shortcut, forKey: .shortcut)
         try c.encode(sensitive, forKey: .sensitive)
+        try c.encode(clearOnQuit, forKey: .clearOnQuit)
+        try c.encode(clearSystemClipboard, forKey: .clearSystemClipboard)
     }
 }
 
@@ -296,6 +318,10 @@ public enum ClipboardPurge {
             if expired || lapsed || index >= maxItems { doomed.insert(item.id) }
         }
         return doomed
+    }
+
+    public static func recent(_ items: [PurgeCandidate], in window: ClosedRange<Date>) -> Set<String> {
+        Set(items.filter { !$0.pinned && window.contains($0.lastUsedAt) }.map(\.id))
     }
 }
 
