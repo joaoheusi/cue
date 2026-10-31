@@ -183,6 +183,7 @@ struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View
         .background {
             Button("Copy") { if let current { onSubmit(current, true) } }
                 .keyboardShortcut(.return, modifiers: .command)
+                .id(selection)
                 .opacity(0)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

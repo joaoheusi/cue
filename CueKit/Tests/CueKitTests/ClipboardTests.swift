@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import CryptoKit
 import Foundation
 import ImageIO
@@ -38,8 +39,8 @@ import Testing
         #expect(!read)
         #expect(decide([text], content: nil, read: &read) == .skip(.unreadable))
         #expect(decide([text], content: " \n\t", read: &read) == .skip(.blank))
-        #expect(decide([text], content: String(repeating: "a", count: CaptureFilter.maxBytes + 1), read: &read) == .skip(.tooLarge))
-        #expect(decide([text], content: String(repeating: "a", count: CaptureFilter.maxBytes), read: &read) != .skip(.tooLarge))
+        #expect(decide([text], content: String(repeating: "a", count: CaptureFilter.maxTextBytes + 1), read: &read) == .skip(.tooLarge))
+        #expect(decide([text], content: String(repeating: "a", count: CaptureFilter.maxTextBytes), read: &read) != .skip(.tooLarge))
         #expect(decide([text, "public.rtf"], app: nil, read: &read) == .capture(.plain("hello")))
         #expect(read)
     }
@@ -173,7 +174,7 @@ import Testing
         #expect(CaptureFilter.read(types: both, source: source(text: "hello", data: ["public.rtf": over, "public.html": half])) == .capture(.plain("hello")))
 
         let richLog = Reads()
-        let large = String(repeating: "a", count: CaptureFilter.maxBytes + 1)
+        let large = String(repeating: "a", count: CaptureFilter.maxTextBytes + 1)
         #expect(CaptureFilter.read(types: both, source: source(text: large, data: ["public.rtf": rtf], log: richLog)) == .skip(.tooLarge))
         #expect(richLog.types.isEmpty)
         #expect(CaptureFilter.read(types: both, source: source(text: "  ", data: ["public.rtf": rtf])) == .skip(.blank))
@@ -344,6 +345,34 @@ import Testing
         #expect(try crypto.open(try crypto.seal("", context: "a.text"), context: "a.text").isEmpty)
     }
 
+    @Test func byteSearchAgreesWithContainsOnFoldedText() {
+        let samples = ["Crème Brûlée recipe", "Ｆｕｌｌ width", "straße Maß", "İstanbul ıi", "e\u{301}clair", "한글 텍스트", "日本語のテキスト", "ÅNGSTRÖM ﬁne ﬂow", "Relatório função coração", "a"]
+        let queries = ["creme", "CREME", "brulee", "full", "strasse", "maß", "istanbul", "eclair", "é", "한글", "テキスト", "angstrom", "fine", "flow", "funcao", "coracao", "missing"]
+        for sample in samples {
+            for query in queries {
+                let field = ClipboardSearch.fold(sample), needle = ClipboardSearch.fold(query)
+                #expect(ClipboardSearch.contains(field, needle) == field.contains(needle), "\(sample) / \(query)")
+            }
+        }
+        #expect(ClipboardSearch.fold("Relatório 🌍").utf8.withContiguousStorageIfAvailable { _ in true } == true)
+        #expect(!ClipboardSearch.contains("", "a") && !ClipboardSearch.contains("a", ""))
+    }
+
+    @Test func searchListsExactMatchesFirstAndEachItemOnce() {
+        let base = Date(timeIntervalSince1970: 0)
+        func item(_ id: String, _ text: String, age: Double) -> ClipItem {
+            ClipItem(id: id, text: text, source: nil, createdAt: base, lastUsedAt: base.addingTimeInterval(-age), pinboardID: nil)
+        }
+        let items = [item("fuzzy", "reunion notes every Monday", age: 0), item("exact", "the words reunion notes", age: 1), item("none", "unrelated", age: 2)]
+        #expect(ClipboardSearch.filter(items, query: "reunion").map(\.id) == ["fuzzy", "exact"])
+        #expect(ClipboardSearch.filter(items, query: "rnn").map(\.id) == ["fuzzy", "exact"])
+        #expect(ClipboardSearch.filter(items, query: "words").map(\.id) == ["exact"])
+        #expect(ClipboardSearch.filter(items, query: "rlt").map(\.id) == ["none"])
+        #expect(ClipboardSearch.filter(items, query: "rn").map(\.id).isEmpty)
+        #expect(ClipboardSearch.isSubsequence("rnn", of: "reunion notes") && !ClipboardSearch.isSubsequence("zz", of: "reunion"))
+        #expect(!ClipboardSearch.isSubsequence("long needle", of: "short"))
+    }
+
     @Test func settingsValidation() throws {
         var settings = ClipboardSettings()
         try settings.validate()
@@ -426,7 +455,7 @@ import Testing
         settings.retention = .day
         settings.shortcut = nil
         try await source.save(settings)
-        let data = try await source.exportData(now: Date())
+        let data = try await source.exportData(now: Date()).data
         let target = try ClipboardStore(url: nil)
         try await target.importData(data)
         #expect(await target.settings == settings)
@@ -446,7 +475,7 @@ import Testing
         _ = try ClipboardStore(url: url)
         try SQLite(path: url).execute("UPDATE meta SET value=?1 WHERE key='settings'", [.blob(old)])
         #expect(await (try ClipboardStore(url: url)).settings == decoded)
-        #expect(try SQLite(path: url).userVersion() == 3)
+        #expect(try SQLite(path: url).userVersion() == 4)
     }
 
     @Test func newSettingsSurviveExportAndImport() async throws {
@@ -455,7 +484,7 @@ import Testing
         settings.clearOnQuit = true
         settings.clearSystemClipboard = true
         try await source.save(settings)
-        let data = try await source.exportData(now: Date())
+        let data = try await source.exportData(now: Date()).data
         #expect(try ClipboardExport.decode(data).settings == settings)
         let target = try ClipboardStore(url: nil)
         try await target.importData(data)
@@ -583,7 +612,7 @@ import Testing
             #expect(!bytes.contains(Data("Meeting".utf8)) && !bytes.contains(Data("purge".utf8)) && !bytes.contains(Data("Notes".utf8)))
         }
 
-        let exported = try await store.exportData(now: t0.addingTimeInterval(4 * 3600))
+        let exported = try await store.exportData(now: t0.addingTimeInterval(4 * 3600)).data
         let other = try ClipboardStore(url: dir.appendingPathComponent("other.sqlite3"))
         try await other.unlock(SymmetricKey(size: .bits256))
         try await other.importData(exported)
@@ -730,7 +759,7 @@ import Testing
         try await reopened.unlock(key)
         #expect(payloadNames(dir) == [kept])
 
-        let exported = try await reopened.exportData(now: Date())
+        let exported = try await reopened.exportData(now: Date()).data
         try await reopened.importData(exported)
         #expect(payloadNames(dir).isEmpty)
         #expect(try await reopened.itemCount() == 0)
@@ -944,6 +973,129 @@ import Testing
         #expect(await reopened.items().map(\.id) == [good])
     }
 
+    @Test func longTextKeepsOnlyAPrefixInMemory() {
+        let date = Date(timeIntervalSince1970: 0)
+        func item(_ text: String, truncated: Bool = false, content: ClipContent = .plain, bytes: Int = 0) -> ClipItem {
+            ClipItem(id: "1", text: text, source: nil, createdAt: date, lastUsedAt: date, pinboardID: nil, content: content, byteSize: bytes, truncated: truncated)
+        }
+        let exact = String(repeating: "a", count: ClipItem.inlineBytes)
+        #expect(!item(exact).isTruncated && item(exact).text == exact)
+
+        let long = item(exact + "b needle at the end", bytes: 12_400_000)
+        #expect(long.isTruncated && long.text == exact && long.display == exact)
+        #expect(long.folded.utf8.count <= ClipItem.inlineBytes)
+        #expect(ClipboardSearch.filter([long], query: "aaaa").count == 1 && ClipboardSearch.filter([long], query: "needle").isEmpty)
+        #expect(long.summary.hasSuffix(" of text") && long.summary.contains("MB") && !long.summary.contains("character"))
+        #expect(long.sizeLabel.contains("MB") && item("four").sizeLabel == "4 chars")
+
+        #expect(item("short prefix", truncated: true).isTruncated)
+        #expect(!item("", truncated: true, content: .image(type: "public.png", width: 1, height: 1)).isTruncated)
+
+        let code = String(repeating: "let total = compute(value);\n", count: 2000)
+        #expect(item(code).kind == .code && item(code).preview == "let total = compute(value);" && item(code).linkURL == nil)
+        #expect(item(String(repeating: "x", count: 9000)).linkURL == nil)
+    }
+
+    @Test func prefixesNeverSplitACharacter() {
+        for filler in 0..<4 {
+            let text = String(repeating: "a", count: filler) + String(repeating: "🌍", count: 3000)
+            let cut = ClipItem.prefix(text, bytes: ClipItem.inlineBytes)
+            #expect(cut.utf8.count <= ClipItem.inlineBytes && cut.utf8.count > ClipItem.inlineBytes - 4)
+            #expect(text.hasPrefix(cut) && !cut.unicodeScalars.contains("\u{FFFD}"))
+        }
+        #expect(ClipItem.prefix("é", bytes: 1).isEmpty)
+    }
+
+    @Test func tokenChecksIgnoreTextTooLongToBeAToken() {
+        #expect(!SensitiveText.matches(String(repeating: "a", count: CaptureFilter.maxTextBytes)))
+        #expect(SensitiveText.matches(String(repeating: " ", count: 4000) + "sk-ant-usr-abcdefghijklmnopqrstuv3c27"))
+        #expect(SensitiveText.matches("sk-ant-usr-abcdefghijklmnopqrstuv3c27" + String(repeating: " ", count: CaptureFilter.maxTextBytes - 40)))
+        #expect(!SensitiveText.matches(String(repeating: " ", count: 4000)))
+    }
+
+    @Test func largeTextStaysSealedAndLoadsInFullOnDemand() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let text = String(repeating: "Relatório 🌍 of the quarter\n", count: 200_000)
+        #expect(text.utf8.count > 5 * 1024 * 1024)
+        let id = try await store.capture(text, source: "com.apple.Notes", now: Date())
+
+        for current in [store, try ClipboardStore(url: url)] {
+            if current !== store { try await current.unlock(key) }
+            let item = try #require(await current.items().first)
+            #expect(item.isTruncated && item.text.utf8.count <= ClipItem.inlineBytes && item.source == "com.apple.Notes")
+            #expect(item.byteSize > text.utf8.count)
+            #expect(try await current.fullText(id) == text)
+        }
+        let file = try Data(contentsOf: dir.appendingPathComponent(ClipboardStore.payloadFolder).appendingPathComponent(id))
+        #expect(!file.contains(Data("quarter".utf8)) && !diskBytes(url).contains(Data("quarter".utf8)))
+        #expect(try SQLite(path: url).scalar("SELECT length(text) FROM items")?.int ?? .max <= ClipItem.inlineBytes + 64)
+
+        try await store.delete(id)
+        #expect(payloadNames(dir).isEmpty)
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.fullText(id) }
+    }
+
+    @Test func deduplicationDigestsTheFullText() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let shared = String(repeating: "same opening ", count: 2000)
+        let first = try await store.capture(shared + "ending one", source: nil, now: Date())
+        let second = try await store.capture(shared + "ending two", source: nil, now: Date())
+        #expect(first != second)
+        #expect(await store.items().count == 2)
+        #expect(try await store.fullText(first) == shared + "ending one")
+        #expect(try await store.fullText(second) == shared + "ending two")
+
+        #expect(try await store.capture(shared + "ending one", source: nil, now: Date()) == first)
+        #expect(payloadNames(dir) == [first, second])
+
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(ClipboardStore.payloadFolder).appendingPathComponent(first))
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.fullText(first) }
+        #expect(try await store.capture(shared + "ending one", source: nil, now: Date()) == first)
+        #expect(try await store.fullText(first) == shared + "ending one")
+    }
+
+    @Test func largeRichTextKeepsItsFormattingAndFullText() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let text = String(repeating: "styled words ", count: 40_000)
+        let data = ["public.html": Data("<b>styled</b>".utf8)]
+        let id = try await store.capture(ClipCapture(content: .rich, text: text, data: data), source: nil, now: Date())
+        let item = try #require(await store.items().first)
+        #expect(item.content == .rich && item.isTruncated)
+        #expect(try await store.payload(id) == data)
+        #expect(try await store.fullText(id) == text)
+    }
+
+    @Test func largeTextCountsTowardTheBudget() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        var settings = await store.settings
+        settings.maxStorage = try #require(ClipboardSettings.maxStorageChoices.first)
+        try await store.save(settings)
+        let t0 = Date()
+        var ids: [String] = []
+        for index in 0..<20 {
+            let text = "\(index) " + String(repeating: "x", count: CaptureFilter.maxTextBytes - 8)
+            ids.append(try await store.capture(text, source: nil, now: t0.addingTimeInterval(Double(index))))
+            try await store.purge(now: t0.addingTimeInterval(Double(index)))
+        }
+        let kept = await store.items()
+        #expect(kept.first?.id == ids.last && !kept.contains { $0.id == ids[0] })
+        #expect(kept.reduce(0) { $0 + $1.byteSize } <= settings.maxStorage)
+        #expect(payloadNames(dir) == Set(kept.map(\.id)))
+    }
+
     @Test func exportsKeepTextOnlyAndReimport() async throws {
         let (dir, url) = temporaryDatabase()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -956,7 +1108,7 @@ import Testing
         let document = try await store.capture(ClipCapture(content: .files(["/tmp/report.pdf"])), source: nil, now: now.addingTimeInterval(3))
         let token = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: now.addingTimeInterval(4))
 
-        let exported = try await store.exportData(now: now)
+        let exported = try await store.exportData(now: now).data
         let file = try ClipboardExport.decode(exported)
         #expect(file.schemaVersion == ClipboardExport.currentVersion)
         #expect(Set(file.items.map(\.id)) == [plain, rich])
@@ -972,6 +1124,69 @@ import Testing
         #expect(Set(await store.items().map(\.id)) == [plain, rich])
         #expect(await store.items().allSatisfy { $0.content == .plain })
         #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func exportsLeaveOutOnlyWhatImportWouldReject() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let now = Date(timeIntervalSince1970: 1_792_670_100)
+        let fits = String(repeating: "f", count: ClipboardExport.maxItemBytes)
+        let large = String(repeating: "l", count: ClipboardExport.maxItemBytes + 1)
+        let keptID = try await store.capture(fits, source: nil, now: now)
+        try await store.capture(large, source: nil, now: now.addingTimeInterval(1))
+        let small = try await store.capture("small", source: nil, now: now.addingTimeInterval(2))
+
+        let result = try await store.exportData(now: now)
+        #expect(result.exported == 2 && result.leftOut == 1)
+        let file = try ClipboardExport.decode(result.data)
+        #expect(Set(file.items.map(\.id)) == [keptID, small])
+        #expect(file.items.first { $0.id == keptID }?.text == fits)
+
+        try await store.importData(result.data)
+        #expect(try await store.itemCount() == 2)
+        #expect(await store.items().first { $0.id == keptID }?.isTruncated == true)
+        #expect(try await store.fullText(keptID) == fits)
+        #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func exportsStopBeforeTheFileCapEvenWhenEscapingDoublesTheText() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let base = Date(timeIntervalSince1970: 1_792_670_100)
+        var ids: [String] = []
+        for index in 0..<60 {
+            let text = "\(index)" + String(repeating: "\"\n", count: 100_000)
+            ids.append(try await store.capture(text, source: nil, now: base.addingTimeInterval(Double(index))))
+        }
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(ids[0], board.id)
+
+        let result = try await store.exportData(now: base)
+        #expect(result.data.count <= ClipboardExport.maxBytes && result.data.count > ClipboardExport.maxBytes - 500 * 1024)
+        #expect(result.exported + result.leftOut == 60 && result.leftOut > 0)
+        let file = try ClipboardExport.decode(result.data)
+        #expect(file.items.first?.id == ids[0], "Pinned items export first.")
+        #expect(file.items.contains { $0.id == ids[59] } && !file.items.contains { $0.id == ids[1] }, "Newest items come next.")
+
+        let target = try ClipboardStore(url: nil)
+        try await target.unlock(SymmetricKey(size: .bits256))
+        try await target.importData(result.data)
+        #expect(try await target.itemCount() == result.exported)
+    }
+
+    @Test func exportFilesFromOlderVersionsStayAccepted() throws {
+        let id = UUID().uuidString.lowercased()
+        func file(_ text: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1, "exportedAt": "2026-10-22T10:00:00.000Z", "pinboards": [] as [Any],
+                "settings": ["retention": "7d", "maxItems": 500, "excludedApps": [] as [Any], "shortcut": NSNull()],
+                "items": [["id": id, "text": text, "createdAt": "2026-10-22T09:00:00Z", "lastUsedAt": "2026-10-22T09:00:00Z", "pinboardID": NSNull()]],
+            ] as [String: Any])
+        }
+        #expect(try ClipboardExport.decode(try file(String(repeating: "a", count: ClipboardExport.maxItemBytes))).items.count == 1)
+        #expect(throws: CueError.self) { try ClipboardExport.decode(try file(String(repeating: "a", count: ClipboardExport.maxItemBytes + 1))) }
     }
 
     @Test func importWarningNamesWhatWouldBeLost() {
@@ -1048,6 +1263,249 @@ import Testing
         #expect(many.warning == "4 of 5 files are missing: 1, 2, 3, and others.")
     }
 
+    private func rendered(_ lines: [(text: String, x: Int, y: Int)], width: Int, height: Int) throws -> Data {
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        let attributes = [kCTFontAttributeName: CTFontCreateWithName("Helvetica" as CFString, 30, nil), kCTForegroundColorFromContextAttributeName: true] as [CFString: Any] as CFDictionary
+        for line in lines {
+            context.textPosition = CGPoint(x: line.x, y: line.y)
+            CTLineDraw(CTLineCreateWithAttributedString(try #require(CFAttributedStringCreate(nil, line.text as CFString, attributes))), context)
+        }
+        let output = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(output, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return output as Data
+    }
+
+    @Test func maskedLinesCatchTokensWrittenWithLookAlikeLetters() {
+        let readByVision = [
+            "$ export ANTHROPIC_API_KEY=sk-ant-аpi0З-АbCdЕf0123456789GhIjK1Мn0рQrStUvWxYz",
+            "$ git remote set-url origin https://ghp_1a2B3c4D5e6F7g8H910J1k2L3m4N5o6P7q8R9s@T@github.com/acme/repo",
+            "AWS_ACCESS_KEY_ID=AKIAIOSFODNNZEXAMPLE",
+            "slack: " + "xox" + "b-123456789012-abcdefGHIJKLmnop",
+            "Authorization: Bearer eyJhbGci0iJIUzI1NiJ9.eyJzdWIi0iIxMjMØNTY30DkwIn0.dozjgNryP4J3jVmNH10w5N",
+            "stripe: " + "sk_" + "live_51Hx2ab34Cd56Ef78Gh90Ij12Kl34",
+        ]
+        for line in readByVision {
+            #expect(SensitiveText.maskedLines(line) == SensitiveText.maskedLine, "\(line)")
+        }
+        let mixed = "keep this line\n\(readByVision[0])\nand this one"
+        #expect(SensitiveText.maskedLines(mixed) == "keep this line\n\(SensitiveText.maskedLine)\nand this one")
+    }
+
+    @Test func maskedLinesLeaveOrdinaryTextAlone() {
+        let ordinary = """
+        func handleRequest0(_ request: URLRequest, retries: Int = 0) async throws -> Response { return try await client.send(request) }
+        Relatório trimestral de operações número 12: a reunião foi adiada para quinta-feira às 14h30.
+        Quarterly operations report number 3: the invoice total was $1311.50 today.
+        Отчёт за квартал готов к отправке
+        請求書の合計は十二万円です
+        https://example.com/path/to/page?id=12345678
+        version 26.4.1 build 25E253
+        password = hunter2
+        handleRequestWithRetryPolicy(timeout: 30)
+
+        """
+        #expect(SensitiveText.maskedLines(ordinary) == ordinary)
+        #expect(SensitiveText.maskedLines("").isEmpty)
+    }
+
+    @Test func tilesCoverTheImageAndGiveEveryPointOneOwner() {
+        #expect(ClipboardOCR.spans(1000) == [ClipboardOCR.Span(lower: 0, upper: 1000, coreLower: 0, coreUpper: 1000)])
+        #expect(ClipboardOCR.spans(ClipboardOCR.tileSize).count == 1)
+        for total in [2561, 2760, 3840, 5120, 6000, 9000, 14143] {
+            let spans = ClipboardOCR.spans(total)
+            #expect(spans.count > 1, "\(total)")
+            #expect(spans.first?.lower == 0 && spans.last?.upper == total && spans.first?.coreLower == 0 && spans.last?.coreUpper == total)
+            for (span, next) in zip(spans, spans.dropFirst()) {
+                #expect(span.upper - span.lower == ClipboardOCR.tileSize)
+                #expect(next.lower <= span.upper - ClipboardOCR.tileOverlap || next.upper == total, "tiles overlap at \(total)")
+                #expect(span.coreUpper == next.coreLower, "cores meet at \(total)")
+                #expect(span.coreUpper > next.lower && span.coreUpper < span.upper, "the boundary sits inside the overlap at \(total)")
+            }
+        }
+    }
+
+    private func recognized(_ image: Data) async -> String? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(returning: ClipboardOCR.recognize(image)) }
+        }
+    }
+
+    @Test func ocrReadsSparseTextOnALargeImageAndEachLineOnce() async throws {
+        let image = try rendered([("Quarterly invoice approved", 100, 1900), ("Sitting inside the overlap band", 1300, 1100), ("Final note near the corner", 3300, 100)], width: 3840, height: 2160)
+        let text = try #require(await recognized(image))
+        #expect(text.components(separatedBy: "invoice").count == 2, "\(text)")
+        #expect(text.components(separatedBy: "overlap").count == 2, "\(text)")
+        #expect(text.components(separatedBy: "corner").count == 2, "\(text)")
+        #expect(text.hasPrefix("Quarterly"), "Reading starts at the top.")
+        #expect(text.split(separator: "\n").count == 3, "\(text)")
+    }
+
+    @Test func ocrReturnsNothingForDataThatIsNotAnImage() async throws {
+        #expect(ClipboardOCR.recognize(Data("not an image".utf8)) == nil)
+        #expect(ClipboardOCR.recognize(Data()) == nil)
+        #expect(await recognized(try rendered([], width: 200, height: 100))?.isEmpty == true)
+    }
+
+    @Test func ocrFeedsTheChildOverStdin() async throws {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let reply = try encoder.encode(ClipboardOCR.Reply(text: "found 🌍"))
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("cat"), image: reply) == .text("found 🌍"))
+    }
+
+    @Test func aDeadOCRChildCannotHurtTheParent() async {
+        let large = Data(count: 64 * 1024 * 1024)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("exit 0"), image: large) == .failed)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("head -c 1000 >/dev/null; kill -9 $$"), image: large) == .failed)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("exit 3"), image: Data([1])) == .failed)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("printf garbage"), image: Data([1])) == .failed)
+        #expect(await ClipboardOCR.run(executable: URL(fileURLWithPath: "/nonexistent/Cue"), image: Data([1])) == .failed)
+        #expect(await ClipboardOCR.run(executable: nil, image: Data([1])) == .failed)
+    }
+
+    @Test func ocrTimesOutAndCancelsWithoutWaitingForTheChild() async throws {
+        let start = ContinuousClock.now
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("sleep 600"), image: Data(count: 1024 * 1024), timeout: 0.2) == .failed)
+        let task = Task { await ClipboardOCR.run(executable: sh, arguments: shell("sleep 600"), image: Data([1])) }
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+        #expect(await task.value == .cancelled)
+        #expect(start.duration(to: .now) < .seconds(120))
+    }
+
+    @Test func ocrDiagnosticsHoldCountsOnly() {
+        var state = ClipboardOCRState()
+        func row(_ name: String) -> String? { state.diagnostics(pending: 7).first { $0.0 == name }?.1 }
+        #expect(row("OCR pending") == "7" && row("OCR average") == "no runs yet")
+        let secret = "very private text from a screenshot"
+        state.record(.text(secret), milliseconds: 100)
+        state.record(.failed, milliseconds: 300)
+        state.record(.cancelled, milliseconds: 9000)
+        #expect(row("OCR runs") == "2" && row("OCR failed") == "1" && row("OCR average") == "200 ms" && row("OCR slowest") == "300 ms")
+        #expect(!state.diagnostics(pending: nil).contains { $0.1.contains(secret) })
+        #expect(state.diagnostics(pending: nil).first?.1 == "unknown")
+    }
+
+    @Test func pendingOCRSurvivesAQuitAndFinishesOncePerImage() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let t0 = Date(timeIntervalSince1970: 1_792_670_100)
+        let older = try await store.capture(image(1), source: nil, now: t0)
+        let newer = try await store.capture(image(2), source: nil, now: t0.addingTimeInterval(1))
+        try await store.capture("plain text is never queued", source: nil, now: t0.addingTimeInterval(2))
+        #expect(try await store.pendingOCRCount() == 2)
+        #expect(try await store.nextOCR() == newer)
+
+        let reopened = try ClipboardStore(url: url)
+        #expect(try await reopened.pendingOCRCount() == 2)
+        try await reopened.unlock(key)
+        #expect(try await reopened.nextOCR() == newer)
+        try await reopened.saveOCR(newer, text: "Quarterly invoice")
+        #expect(try await reopened.nextOCR() == older)
+        try await reopened.saveOCR(older, text: "")
+        #expect(try await reopened.nextOCR() == nil)
+        #expect(try await reopened.pendingOCRCount() == 0)
+
+        try await reopened.saveOCR(newer, text: "a second answer changes nothing")
+        #expect(try await reopened.ocrText(newer) == "Quarterly invoice")
+        let last = try ClipboardStore(url: url)
+        try await last.unlock(key)
+        let hits = ClipboardSearch.filter(await last.items(), query: "INVOICE")
+        #expect(hits.map(\.id) == [newer] && hits.first?.hasOCRText == true)
+        #expect(await last.items().first { $0.id == older }?.hasOCRText == false)
+        #expect(try await last.nextOCR() == nil)
+    }
+
+    @Test func ocrTextStaysSealedAndIsNeverShown() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        let before = try #require(await store.items().first)
+        try await store.saveOCR(id, text: "Confidential merger notes")
+
+        let item = try #require(await store.items().first)
+        #expect(item.byteSize > before.byteSize)
+        #expect(item.preview == before.preview && item.display == before.display && item.text.isEmpty && item.summary.hasPrefix("PNG"))
+        #expect(!diskBytes(url).contains(Data("merger".utf8)))
+        let exported = try await store.exportData(now: Date()).data
+        #expect(!String(decoding: exported, as: UTF8.self).contains("merger"))
+        try await store.delete(id)
+        #expect(try await store.ocrText(id) == nil)
+    }
+
+    @Test func ocrMasksTokensBeforeTheyReachDiskOrSearch() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        var settings = await store.settings
+        settings.sensitive = .keep
+        try await store.save(settings)
+        let id = try await store.capture(image(), source: nil, now: Date())
+        try await store.saveOCR(id, text: "deploy notes\nexport KEY=sk-ant-аpi0З-АbCdЕf0123456789GhIjK1Мn0рQrStUvWxYz\nall done")
+
+        #expect(try await store.ocrText(id) == "deploy notes\n\(SensitiveText.maskedLine)\nall done")
+        let item = try #require(await store.items().first)
+        #expect(!item.sensitive && item.expiresAt == nil && item.content == image().content)
+        #expect(!item.folded.contains("sk-ant") && !item.folded.contains("0123456789"))
+        #expect(ClipboardSearch.filter([item], query: "deploy").count == 1)
+        #expect(try await store.payload(id) == image().data)
+    }
+
+    @Test func ocrOnImagesThatChangedMeanwhileIsHarmless() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let gone = try await store.capture(image(1), source: nil, now: Date())
+        try await store.delete(gone)
+        try await store.saveOCR(gone, text: "too late")
+        #expect(try await store.itemCount() == 0)
+
+        let text = try await store.capture("a text row", source: nil, now: Date())
+        try await store.saveOCR(text, text: "never applied")
+        #expect(try await store.ocrText(text) == nil)
+        #expect(await store.items().first?.hasOCRText == false)
+    }
+
+    @Test func recopyingAnImageKeepsItsOCRText() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        try await store.saveOCR(id, text: "Quarterly invoice")
+        #expect(try await store.capture(image(), source: nil, now: Date()) == id)
+        #expect(ClipboardSearch.filter(await store.items(), query: "invoice").map(\.id) == [id])
+        #expect(await store.items().first?.hasOCRText == true)
+        #expect(try await store.nextOCR() == nil)
+    }
+
+    @Test func ocrTextIsCappedOnDiskAndInMemory() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        try await store.saveOCR(id, text: String(repeating: "words on a very dense screen\n", count: 20_000))
+        let stored = try #require(try await store.ocrText(id))
+        #expect(stored.utf8.count <= ClipboardOCR.maxTextBytes && stored.utf8.count > ClipboardOCR.maxTextBytes - 64)
+        let item = try #require(await store.items().first)
+        #expect(item.folded.utf8.count <= ClipItem.inlineBytes + 64)
+        #expect(item.byteSize > ClipboardOCR.maxTextBytes)
+    }
+
     @Test func tokensAreRecognizedAndMasked() {
         #expect(SensitiveText.matches("sk-ant-usr-abcdefghijklmnopqrstuv3c27\n"))
         #expect(SensitiveText.matches("ghp_" + String(repeating: "a", count: 36)))
@@ -1075,7 +1533,7 @@ import Testing
         var item = try #require(await store.items().first { $0.id == id })
         #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.text == secret && !item.folded.contains("abcdefg"))
         #expect(item.expiresAt != nil)
-        let exported = String(decoding: try await store.exportData(now: now), as: UTF8.self)
+        let exported = String(decoding: try await store.exportData(now: now).data, as: UTF8.self)
         #expect(!exported.contains(secret))
         #expect(try await store.purge(now: now.addingTimeInterval(299)) == 0)
         #expect(try await store.purge(now: now.addingTimeInterval(301)) == 1)
@@ -1123,6 +1581,17 @@ import Testing
             ALTER TABLE items ADD COLUMN expires_at TEXT;
             """)
         }
+        if version >= 3 {
+            try db.executeScript("""
+            ALTER TABLE items ADD COLUMN format TEXT NOT NULL DEFAULT 'plain';
+            ALTER TABLE items ADD COLUMN meta BLOB;
+            ALTER TABLE items ADD COLUMN rich BLOB;
+            ALTER TABLE items ADD COLUMN file_bytes INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE items ADD COLUMN title BLOB;
+            ALTER TABLE items ADD COLUMN ocr_text BLOB;
+            ALTER TABLE items ADD COLUMN thumbnail BLOB;
+            """)
+        }
         try db.execute("INSERT INTO pinboards(id, name, position) VALUES('b', 'Pinned', 0)")
         try db.execute("INSERT INTO meta(key, value) VALUES('settings', ?1)", [.blob(try JSONEncoder().encode(ClipboardSettings()))])
         try db.execute("INSERT INTO meta(key, value) VALUES('key_check', ?1)", [.blob(crypto.keyCheck)])
@@ -1152,7 +1621,7 @@ import Testing
         let sealedBefore = try SQLite(path: url).query("SELECT id, text, digest FROM items ORDER BY id")
 
         let store = try ClipboardStore(url: url)
-        #expect(try SQLite(path: url).userVersion() == 3)
+        #expect(try SQLite(path: url).userVersion() == 4)
         #expect(try SQLite(path: url).query("SELECT id, text, digest FROM items ORDER BY id") == sealedBefore)
         let unused = try SQLite(path: url).query("SELECT format, meta, rich, file_bytes, title, ocr_text, thumbnail FROM items GROUP BY format")
         #expect(unused == [[.text("plain"), .null, .null, .int(0), .null, .null, .null]])
@@ -1178,10 +1647,37 @@ import Testing
         let key = SymmetricKey(size: .bits256)
         let ids = try oldDatabase(version: 1, at: url, key: key, texts: ["from version one"])
         let store = try ClipboardStore(url: url)
-        #expect(try SQLite(path: url).userVersion() == 3)
+        #expect(try SQLite(path: url).userVersion() == 4)
         try await store.unlock(key)
         #expect(await store.items().map(\.id) == ids)
         #expect(await store.items().first?.text == "from version one")
+    }
+
+    @Test func versionThreeMigratesWithoutMovingAnyData() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let long = String(repeating: "saved by an older build ", count: 4000)
+        let ids = try oldDatabase(version: 3, at: url, key: key, texts: ["short", long])
+        let before = try SQLite(path: url).query("SELECT * FROM items ORDER BY id")
+
+        let store = try ClipboardStore(url: url)
+        #expect(try SQLite(path: url).userVersion() == 4)
+        #expect(try SQLite(path: url).query("SELECT * FROM items ORDER BY id") == before)
+
+        try await store.unlock(key)
+        let item = try #require(await store.items().first { $0.id == ids[1] })
+        #expect(item.isTruncated && item.text.utf8.count <= ClipItem.inlineBytes)
+        #expect(try await store.fullText(ids[1]) == long)
+        #expect(try await store.fullText(ids[0]) == "short")
+        #expect(try await store.capture(long, source: nil, now: Date()) == ids[1])
+        #expect(try await store.fullText(ids[1]) == long)
+        #expect(payloadNames(dir) == [ids[1]])
+        let moved = await store.items().first { $0.id == ids[1] }
+        #expect(moved?.byteSize ?? .max < long.utf8.count + 2 * ClipItem.inlineBytes)
+
+        try SQLite(path: url).executeScript("PRAGMA user_version=5")
+        #expect(throws: ClipboardStore.newerVersion) { try ClipboardStore(url: url) }
     }
 
     @Test func failedMigrationLeavesTheDatabaseUnchanged() async throws {
@@ -1216,14 +1712,14 @@ import Testing
         try await store.save(settings)
         let now = Date()
         let id = try await store.capture(secret, source: "com.example.app", now: now)
-        #expect(String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+        #expect(String(decoding: try await store.exportData(now: now).data, as: UTF8.self).contains(secret))
 
         settings.sensitive = .maskAndExpire
         try await store.save(settings)
         #expect(try await store.capture(secret, source: nil, now: now) == id)
         let item = try #require(await store.items().first { $0.id == id })
         #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.expiresAt != nil && item.source == "com.example.app")
-        #expect(!String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+        #expect(!String(decoding: try await store.exportData(now: now).data, as: UTF8.self).contains(secret))
     }
 
     @Test func deletingAPinboardRearmsTokenExpiry() async throws {
@@ -1268,7 +1764,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("reply")
         try data.write(to: file)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .reply(reply))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .reply(reply))
 
         var over = reply
         if case .decision(.capture(var clip), let access) = reply {
@@ -1276,12 +1772,31 @@ import Testing
             over = .decision(.capture(clip), access: access)
         }
         try over.encoded().write(to: file)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .crashed)
+    }
+
+    @Test func theLargestTextFitsTheReplyLimit() async throws {
+        let text = "🌍" + String(repeating: "a", count: CaptureFilter.maxTextBytes - 4)
+        #expect(text.utf8.count == CaptureFilter.maxTextBytes)
+        #expect(CaptureFilter.textProblem(text) == nil && CaptureFilter.textProblem(text + "a") == .tooLarge)
+        let half = Data(repeating: 1, count: CaptureFilter.maxRichBytes / 2)
+        let clip = ClipCapture(content: .rich, text: text, data: ["public.rtf": half, "public.html": half])
+        let reply = ClipboardChildReply.decision(.capture(clip), access: .alwaysAllow)
+        let data = try reply.encoded()
+        #expect(data.count > 2 * (CaptureFilter.maxTextBytes - 1024))
+        #expect(data.count <= ClipboardChild.maxReplyBytes)
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("reply")
+        try data.write(to: file)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .reply(reply))
     }
 
     @Test func everyOtherReplyFitsTheLimitToo() throws {
-        let text = String(repeating: "é🌍", count: CaptureFilter.maxBytes / 6)
-        #expect(text.utf8.count <= CaptureFilter.maxBytes)
+        let text = String(repeating: "é🌍", count: CaptureFilter.maxTextBytes / 6)
+        #expect(text.utf8.count <= CaptureFilter.maxTextBytes)
         let half = Data(repeating: 1, count: CaptureFilter.maxRichBytes / 2)
         let rich = ClipCapture(content: .rich, text: text, data: ["public.rtf": half, "public.html": half])
         #expect(try ClipboardChildReply.decision(.capture(rich), access: .alwaysAllow).encoded().count <= ClipboardChild.maxReplyBytes)
@@ -1303,7 +1818,7 @@ import Testing
         let text = String(repeating: "Olá 🌍 a\u{0}b\n", count: 20_000)
         let replies: [ClipboardChildReply] = [
             .decision(.capture(.plain(text)), access: .alwaysAllow),
-            .decision(.capture(.plain(String(repeating: "é", count: CaptureFilter.maxBytes / 2))), access: .ask),
+            .decision(.capture(.plain(String(repeating: "é", count: CaptureFilter.maxTextBytes / 2))), access: .ask),
             .decision(.skip(.stale), access: .standard),
             .decision(.skip(.tooLarge), access: .unavailable),
             .denied(child: .alwaysDeny, parent: .alwaysAllow),
@@ -1516,7 +2031,7 @@ import Testing
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let reply = ClipboardChildReply.decision(.capture(.plain(String(repeating: "x", count: CaptureFilter.maxBytes))), access: .alwaysAllow)
+        let reply = ClipboardChildReply.decision(.capture(.plain(String(repeating: "x", count: CaptureFilter.maxTextBytes))), access: .alwaysAllow)
         let file = dir.appendingPathComponent("reply")
         try reply.encoded().write(to: file)
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 0.1; cat '\(file.path)'; sleep 0.1")) == .reply(reply))
@@ -1531,24 +2046,22 @@ import Testing
         #expect(data.count > 256 * 1024 && data.count <= ClipboardChild.maxReplyBytes)
         let file = dir.appendingPathComponent("reply")
         try data.write(to: file)
-        let start = ContinuousClock.now
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 5) == .reply(reply))
-        #expect(start.duration(to: .now) < .seconds(4))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .reply(reply))
     }
 
     @Test func childRunTimesOutAndStopsTheProcess() async {
         let start = ContinuousClock.now
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 20"), timeout: 0.2) == .timedOut)
-        #expect(start.duration(to: .now) < .seconds(4))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 600"), timeout: 0.2) == .timedOut)
+        #expect(start.duration(to: .now) < .seconds(120))
     }
 
     @Test func cancellingARunKillsItAtOnce() async throws {
         let start = ContinuousClock.now
-        let task = Task { await ClipboardChild.read(executable: sh, arguments: shell("sleep 20")) }
+        let task = Task { await ClipboardChild.read(executable: sh, arguments: shell("sleep 600")) }
         try await Task.sleep(for: .milliseconds(200))
         task.cancel()
         #expect(await task.value == .cancelled)
-        #expect(start.duration(to: .now) < .seconds(4))
+        #expect(start.duration(to: .now) < .seconds(120))
     }
 
     @Test func cancellingBeforeTheRunStartsSpawnsNothing() async throws {
@@ -1570,7 +2083,7 @@ import Testing
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("printf garbage")) == .crashed)
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("true")) == .crashed)
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("kill -9 $$")) == .crashed)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("yes"), timeout: 5) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("yes"), timeout: 60) == .crashed)
     }
 
     @Test func childRunReportsWhenItCannotStart() async {

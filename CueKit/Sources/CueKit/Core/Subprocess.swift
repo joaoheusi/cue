@@ -11,6 +11,7 @@ public final class Subprocess: @unchecked Sendable {
     }
 
     private let process = Process()
+    private let input: Data?
     private let lock = NSLock()
     private var stdout = Data()
     private var stderr = Data()
@@ -19,7 +20,10 @@ public final class Subprocess: @unchecked Sendable {
     private var stopped = false
     private var group: pid_t?
 
-    public init(executable: URL, arguments: [String] = [], directory: URL? = nil, environment: [String: String]? = nil) {
+    public init(executable: URL, arguments: [String] = [], directory: URL? = nil, environment: [String: String]? = nil, input: Data? = nil,
+                quality: QualityOfService = .default) {
+        self.input = input
+        process.qualityOfService = quality
         process.executableURL = executable
         process.arguments = arguments
         process.currentDirectoryURL = directory
@@ -34,13 +38,30 @@ public final class Subprocess: @unchecked Sendable {
         if let group { Self.terminate(group) }
     }
 
+    public func run(timeout: TimeInterval, limit: Int, priority: DispatchQoS.QoSClass) async throws -> Output {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: priority).async { continuation.resume(with: Result { try self.run(timeout: timeout, limit: limit) }) }
+            }
+        } onCancel: {
+            stop()
+        }
+    }
+
     public func run(timeout: TimeInterval, limit: Int) throws -> Output {
         guard !lock.withLock({ stopped }) else { return output(status: -1) }
-        let out = Pipe(), err = Pipe()
+        let out = Pipe(), err = Pipe(), feed = Pipe()
         process.standardOutput = out
         process.standardError = err
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = input == nil ? FileHandle.nullDevice : feed
+        _ = fcntl(feed.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         try process.run()
+        try? feed.fileHandleForReading.close()
+        let writer = feed.fileHandleForWriting
+        DispatchQueue.global().async { [input] in
+            if let input { try? writer.write(contentsOf: input) }
+            try? writer.close()
+        }
         let group = -process.processIdentifier
         if lock.withLock({
             self.group = group

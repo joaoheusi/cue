@@ -83,22 +83,9 @@ public enum ClipboardChild {
 
     public static func read(executable: URL?, arguments: [String], timeout: TimeInterval = timeout) async -> ClipboardReadOutcome {
         guard let executable else { return .failedToStart("Cue could not find its own executable.") }
-        let process = Subprocess(executable: executable, arguments: arguments)
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
-                    continuation.resume(returning: outcome(of: process, timeout: timeout))
-                }
-            }
-        } onCancel: {
-            process.stop()
-        }
-    }
-
-    private static func outcome(of process: Subprocess, timeout: TimeInterval) -> ClipboardReadOutcome {
         let output: Subprocess.Output
         do {
-            output = try process.run(timeout: timeout, limit: maxReplyBytes)
+            output = try await Subprocess(executable: executable, arguments: arguments).run(timeout: timeout, limit: maxReplyBytes, priority: .utility)
         } catch {
             return .failedToStart(error.localizedDescription)
         }

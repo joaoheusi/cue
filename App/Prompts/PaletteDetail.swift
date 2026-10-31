@@ -62,7 +62,7 @@ struct ActionDetail: View {
                     HStack(alignment: .firstTextBaseline) {
                         SectionLabel(text: "clipboard")
                         Spacer()
-                        Text(([item.source.map(clipboard.appName), ShortAge.text(item.lastUsedAt), "\(item.display.count) chars"] as [String?]).compactMap { $0 }.joined(separator: " · "))
+                        Text(([item.source.map(clipboard.appName), ShortAge.text(item.lastUsedAt), item.sizeLabel] as [String?]).compactMap { $0 }.joined(separator: " · "))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     DetailCard(content: AttributedString(String(item.display.prefix(600))))

@@ -4,8 +4,8 @@ import Foundation
 public actor ClipboardStore {
     public static let fileName = "clipboard.sqlite3"
     public static let payloadFolder = "clipboard-payloads"
-    static let schemaVersion = 3
-    private static let bytesSQL = "length(text) + file_bytes + COALESCE(length(meta), 0) + COALESCE(length(rich), 0) + COALESCE(length(thumbnail), 0)"
+    static let schemaVersion = 4
+    private static let bytesSQL = "length(text) + file_bytes + COALESCE(length(meta), 0) + COALESCE(length(rich), 0) + COALESCE(length(ocr_text), 0) + COALESCE(length(thumbnail), 0)"
 
     public static let keyUnavailable = CueError(
         "HISTORY_KEY_UNAVAILABLE",
@@ -75,6 +75,9 @@ public actor ClipboardStore {
                 """)
             }
         }
+        if try db.userVersion() < 4 {
+            try db.transaction { try db.executeScript("PRAGMA user_version=4") }
+        }
         self.db = db
         guard let json = try db.scalar("SELECT value FROM meta WHERE key='settings'")?.data,
               let settings = try? JSONDecoder().decode(ClipboardSettings.self, from: json) else { throw CueError.storage() }
@@ -126,7 +129,9 @@ public actor ClipboardStore {
             let rich = try Self.sealedRich(clip, id: id, crypto: crypto)
             let restored = FileManager.default.fileExists(atPath: payloadFile(id).path) ? 0 : try writePayload(clip, id: id, crypto: crypto)
             try db.transaction {
-                if restored > 0 { try db.execute("UPDATE items SET file_bytes=?1 WHERE id=?2", [SQLValue(restored), .text(id)]) }
+                if restored > 0 {
+                    try db.execute("UPDATE items SET file_bytes=?1, text=?2 WHERE id=?3", [SQLValue(restored), .blob(try Self.sealedInline(clip, id: id, crypto: crypto)), .text(id)])
+                }
                 try db.execute("UPDATE items SET last_used_at=?1, sensitive=?2, expires_at=?3 WHERE id=?4",
                                [.text(stamp), SQLValue(sensitive), kept.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
                 if replaces {
@@ -134,7 +139,7 @@ public actor ClipboardStore {
                 }
             }
             cache[id] = ClipItem(id: id, text: clip.text, source: old?.source, createdAt: old?.createdAt ?? date, lastUsedAt: date,
-                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept, content: content, byteSize: try storedBytes(id))
+                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept, content: content, byteSize: try storedBytes(id), ocrText: try ocrText(id))
             return id
         }
         let id = Self.newID()
@@ -147,7 +152,7 @@ public actor ClipboardStore {
             try db.execute("""
             INSERT INTO items(id, digest, text, source, created_at, last_used_at, sensitive, expires_at, format, meta, rich, file_bytes, thumbnail)
             VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-            """, [.text(id), .blob(digest), .blob(try crypto.seal(clip.text, context: "\(id).text")), sealedSource.map(SQLValue.blob) ?? .null, .text(stamp),
+            """, [.text(id), .blob(digest), .blob(try Self.sealedInline(clip, id: id, crypto: crypto)), sealedSource.map(SQLValue.blob) ?? .null, .text(stamp),
                   SQLValue(sensitive), expiry.map { .text(Timestamp.iso($0)) } ?? .null, .text(clip.content.format), sealedMeta.map(SQLValue.blob) ?? .null,
                   rich.map(SQLValue.blob) ?? .null, SQLValue(fileBytes), sealedThumbnail.map(SQLValue.blob) ?? .null])
         } catch {
@@ -157,6 +162,39 @@ public actor ClipboardStore {
         cache[id] = ClipItem(id: id, text: clip.text, source: source, createdAt: date, lastUsedAt: date, pinboardID: nil, sensitive: sensitive,
                              expiresAt: expiry, content: clip.content, byteSize: try storedBytes(id))
         return id
+    }
+
+    public func nextOCR() throws -> String? {
+        try db.scalar("SELECT id FROM items WHERE format='image' AND ocr_text IS NULL ORDER BY last_used_at DESC LIMIT 1")?.string
+    }
+
+    public func pendingOCRCount() throws -> Int {
+        try db.scalar("SELECT COUNT(*) FROM items WHERE format='image' AND ocr_text IS NULL")?.int ?? 0
+    }
+
+    public func saveOCR(_ id: String, text: String) throws {
+        let crypto = try requireCrypto()
+        let masked = SensitiveText.maskedLines(ClipItem.prefix(text, bytes: ClipboardOCR.maxTextBytes))
+        try db.execute("UPDATE items SET ocr_text=?1 WHERE id=?2 AND format='image' AND ocr_text IS NULL", [.blob(try crypto.seal(masked, context: "\(id).ocr")), .text(id)])
+        guard db.changes > 0 else { return }
+        cache[id] = try cache[id]?.withOCRText(masked, byteSize: storedBytes(id))
+    }
+
+    public func ocrText(_ id: String) throws -> String? {
+        let crypto = try requireCrypto()
+        guard let sealed = try db.scalar("SELECT ocr_text FROM items WHERE id=?1", [.text(id)])?.data else { return nil }
+        return try? crypto.open(sealed, context: "\(id).ocr")
+    }
+
+    public func fullText(_ id: String) throws -> String {
+        let crypto = try requireCrypto()
+        guard let row = try db.query("SELECT text, file_bytes FROM items WHERE id=?1", [.text(id)]).first, let sealed = row[0].data else { throw Self.dataMissing }
+        guard row[1].int ?? 0 > 0 else {
+            guard let text = try? crypto.open(sealed, context: "\(id).text") else { throw Self.dataMissing }
+            return text
+        }
+        guard let file = try? Data(contentsOf: payloadFile(id)), let text = try? crypto.open(file, context: "\(id).payload") else { throw Self.dataMissing }
+        return text
     }
 
     public func payload(_ id: String) throws -> [String: Data] {
@@ -196,6 +234,10 @@ public actor ClipboardStore {
         try db.scalar("SELECT \(Self.bytesSQL) FROM items WHERE id=?1", [.text(id)])?.int ?? 0
     }
 
+    private static func sealedInline(_ clip: ClipCapture, id: String, crypto: ClipboardCrypto) throws -> Data {
+        try crypto.seal(ClipItem.prefix(clip.text, bytes: ClipItem.inlineBytes), context: "\(id).text")
+    }
+
     private static func sealedRich(_ clip: ClipCapture, id: String, crypto: ClipboardCrypto) throws -> Data? {
         guard clip.content == .rich else { return nil }
         let encoder = PropertyListEncoder()
@@ -206,8 +248,17 @@ public actor ClipboardStore {
     private func payloadFile(_ id: String) -> URL { payloads.appendingPathComponent(id) }
 
     private func writePayload(_ clip: ClipCapture, id: String, crypto: ClipboardCrypto) throws -> Int {
-        guard case .image(let type, _, _) = clip.content else { return 0 }
-        guard let data = clip.data[type] else { throw CueError.storage() }
+        let data: Data
+        switch clip.content {
+        case .image(let type, _, _):
+            guard let image = clip.data[type] else { throw CueError.storage() }
+            data = image
+        case .plain, .rich:
+            guard clip.text.utf8.count > ClipItem.inlineBytes else { return 0 }
+            data = Data(clip.text.utf8)
+        case .files:
+            return 0
+        }
         let sealed = try crypto.seal(data, context: "\(id).payload")
         let manager = FileManager.default
         try manager.createDirectory(at: payloads, withIntermediateDirectories: true)
@@ -357,12 +408,30 @@ public actor ClipboardStore {
         capturePaused = !enabled
     }
 
-    public func exportData(now: Date) throws -> Data {
+    public func exportData(now: Date) throws -> ClipboardExport.Result {
         if crypto == nil, try itemCount() > 0 { throw Self.keyUnavailable }
-        let file = ClipboardExport(
-            schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards,
-            items: items().filter(\.isExportable).map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
-        return try file.encoded()
+        var file = ClipboardExport(schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards, items: [])
+        var room = ClipboardExport.maxBytes - (try file.encoded().count)
+        var leftOut = 0
+        let exportable = items().filter(\.isExportable)
+        for item in exportable.filter(\.isPinned) + exportable.filter({ !$0.isPinned }) {
+            guard room > 0, let text = item.isTruncated ? try? fullText(item.id) : item.text, text.utf8.count <= ClipboardExport.maxItemBytes else {
+                leftOut += 1
+                continue
+            }
+            let entry = ClipboardExport.Item(id: item.id, text: text, createdAt: Timestamp.iso(item.createdAt), lastUsedAt: Timestamp.iso(item.lastUsedAt), pinboardID: item.pinboardID)
+            let size = try ClipboardExport.encoder.encode(entry).count + ClipboardExport.itemOverhead
+            guard size <= room else {
+                room = 0
+                leftOut += 1
+                continue
+            }
+            room -= size
+            file.items.append(entry)
+        }
+        let data = try file.encoded()
+        _ = try ClipboardExport.decode(data)
+        return ClipboardExport.Result(data: data, exported: file.items.count, leftOut: leftOut)
     }
 
     public func importData(_ data: Data) throws {
@@ -395,14 +464,16 @@ public actor ClipboardStore {
 
     private func load(_ crypto: ClipboardCrypto) throws {
         var cache: [String: ClipItem] = [:]
-        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL) FROM items") {
+        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL), file_bytes, ocr_text FROM items") {
             guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
                   let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse),
                   let content = Self.content(format: row[8].string, meta: row[9].data, id: id, crypto: crypto)
             else { continue }
             let source = row[2].data.flatMap { try? crypto.open($0, context: "\(id).source") }
+            let ocrText = row[12].data.flatMap { try? crypto.open($0, context: "\(id).ocr") }
             cache[id] = ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string,
-                                 sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse), content: content, byteSize: row[10].int ?? 0)
+                                 sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse), content: content, byteSize: row[10].int ?? 0,
+                                 truncated: row[11].int ?? 0 > 0, ocrText: ocrText)
         }
         self.crypto = crypto
         self.cache = cache
@@ -448,6 +519,14 @@ public actor ClipboardStore {
 public struct ClipboardExport: Codable, Equatable, Sendable {
     public static let currentVersion = 1
     public static let maxBytes = 20 * 1024 * 1024
+    public static let maxItemBytes = 256 * 1024
+    static let itemOverhead = 64
+
+    public struct Result: Equatable, Sendable {
+        public let data: Data
+        public let exported: Int
+        public let leftOut: Int
+    }
 
     public var schemaVersion: Int
     public var exportedAt: String
@@ -482,11 +561,13 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
         }
     }
 
-    public func encoded() throws -> Data {
+    static var encoder: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        return encoder
     }
+
+    public func encoded() throws -> Data { try Self.encoder.encode(self) }
 
     public static func decode(_ data: Data) throws(CueError) -> ClipboardExport {
         guard data.count <= maxBytes else { throw .validation("The file is larger than 20 MB.") }
@@ -511,7 +592,7 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
         for (index, item) in file.items.enumerated() {
             let n = index + 1
             guard isCanonicalID(item.id), itemIDs.insert(item.id).inserted else { throw .validation("Item \(n) has a missing or repeated ID.") }
-            if CaptureFilter.textProblem(item.text) != nil { throw .validation("Item \(n) is empty or larger than 256 KB.") }
+            if CaptureFilter.textProblem(item.text, limit: maxItemBytes) != nil { throw .validation("Item \(n) is empty or larger than 256 KB.") }
             guard let created = Timestamp.parse(item.createdAt), let used = Timestamp.parse(item.lastUsedAt) else {
                 throw .validation("Item \(n) has an invalid date.")
             }

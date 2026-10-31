@@ -21,6 +21,27 @@ private enum ClipFilter: String, CaseIterable {
     }
 }
 
+private struct ClipResultsKey: Equatable {
+    var revision: Int
+    var query: String
+    var filter: ClipFilter
+    var app: String?
+    var pinboard: String?
+}
+
+@MainActor private final class ClipResults {
+    private var key: ClipResultsKey?
+    private var items: [ClipItem] = []
+
+    func value(for key: ClipResultsKey, compute: () -> [ClipItem]) -> [ClipItem] {
+        if key != self.key {
+            self.key = key
+            items = compute()
+        }
+        return items
+    }
+}
+
 private struct ClipEntry: Identifiable {
     var item: ClipItem
     var header: String?
@@ -34,10 +55,13 @@ struct ClipboardCommandView: View {
     @State private var filter = ClipFilter.all
     @State private var app: String?
     @State private var pinboard: String?
+    @State private var memo = ClipResults()
 
     private var results: [ClipItem] {
-        ClipboardSearch.filter(module.items, query: query, pinboard: filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil)
-            .filter { filter.matches($0) && (app == nil || $0.source == app) }
+        let board = filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil
+        return memo.value(for: ClipResultsKey(revision: module.itemsRevision, query: query, filter: filter, app: app, pinboard: board)) {
+            ClipboardSearch.filter(module.items, query: query, pinboard: board).filter { filter.matches($0) && (app == nil || $0.source == app) }
+        }
     }
 
     private var entries: [ClipEntry] {
@@ -211,6 +235,7 @@ struct ClipboardCommandView: View {
             Button("Paste") { Task { await module.use(item, paste: true) } }
             Button("Copy") { Task { await module.use(item, paste: false) } }
             if item.content == .rich { Button("Paste as Text") { Task { await module.use(item, paste: true, plain: true) } } }
+            if item.hasOCRText { Button("Copy Text") { Task { await module.copyText(item) } } }
             if item.linkURL != nil { Button("Go to Link") { module.goToLink(item) } }
             Menu("Pin To") {
                 ForEach(module.pinboards) { board in
@@ -262,11 +287,13 @@ struct ClipboardCommandView: View {
         .accessibilityHidden(true)
     }
 
-    private func showMenu(_ item: ClipItem) {
+    private func showMenu(_ selected: ClipItem) {
+        let item = current ?? selected
         PanelMenu.show { menu in
             menu.add(pasteLabel) { Task { await module.use(item, paste: true) } }
             menu.add("Copy") { Task { await module.use(item, paste: false) } }
             if item.content == .rich { menu.add("Paste as Text", key: "V") { Task { await module.use(item, paste: true, plain: true) } } }
+            if item.hasOCRText { menu.add("Copy Text") { Task { await module.copyText(item) } } }
             if item.linkURL != nil { menu.add("Go to Link", key: "o") { module.goToLink(item) } }
             menu.addItem(.separator())
             for board in module.pinboards where board.id != item.pinboardID {
@@ -339,6 +366,7 @@ private struct ClipDetail: View {
             ("Content", item.summary),
         ]
         if item.content == .rich { rows.append(("Format", "Rich text")) }
+        if item.isTruncated { rows.append(("Search", "First 8 KB")) }
         if let status = files?.error?.message ?? files?.warning { rows.append(("Status", status)) }
         return rows
     }
@@ -383,7 +411,7 @@ private struct ClipDetail: View {
             }
         case .plain, .rich:
             ScrollView {
-                Text(item.display)
+                Text(item.isTruncated ? item.display + "…" : item.display)
                     .font(item.sensitive ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5))
                     .lineSpacing(4)
                     .textSelection(.enabled)

@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 
 public struct ClipItem: Identifiable, Equatable, Sendable {
+    public static let inlineBytes = 8 * 1024
+
     public let id: String
     public let text: String
     public let source: String?
@@ -12,15 +14,18 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public var expiresAt: Date?
     public let content: ClipContent
     public let byteSize: Int
+    public let isTruncated: Bool
+    public let hasOCRText: Bool
     public let kind: ClipKind
     public let folded: String
     public let preview: String
     public let foldedPreview: String
 
     public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?,
-                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0) {
+                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0, truncated: Bool = false, ocrText: String? = nil) {
+        let inline = Self.prefix(text, bytes: Self.inlineBytes)
         self.id = id
-        self.text = text
+        self.text = inline
         self.source = source
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
@@ -29,15 +34,17 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         self.expiresAt = expiresAt
         self.content = content
         self.byteSize = byteSize
+        isTruncated = content.isText && (truncated || inline.utf8.count < text.utf8.count)
+        hasOCRText = !content.isText && ocrText?.isEmpty == false
         switch content {
         case .plain, .rich:
-            kind = sensitive ? .text : ClipKind.of(text)
-            preview = sensitive ? SensitiveText.mask(text) : ClipboardSearch.preview(text)
-            folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(text)
+            kind = sensitive ? .text : ClipKind.of(inline)
+            preview = sensitive ? SensitiveText.mask(inline) : ClipboardSearch.preview(inline)
+            folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(inline)
         case .image(let type, let width, let height):
             kind = .image
             preview = "\(ClipContent.imageName(type)) image · \(width) × \(height)"
-            folded = ClipboardSearch.fold(preview)
+            folded = ClipboardSearch.fold(preview + "\n" + Self.prefix(ocrText ?? "", bytes: Self.inlineBytes))
         case .files(let paths):
             let names = paths.map(ClipContent.fileName)
             kind = .file
@@ -47,18 +54,33 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         foldedPreview = ClipboardSearch.fold(preview)
     }
 
+    func withOCRText(_ ocrText: String, byteSize: Int) -> ClipItem {
+        ClipItem(id: id, text: text, source: source, createdAt: createdAt, lastUsedAt: lastUsedAt, pinboardID: pinboardID, sensitive: sensitive,
+                 expiresAt: expiresAt, content: content, byteSize: byteSize, truncated: isTruncated, ocrText: ocrText)
+    }
+
     public var isPinned: Bool { pinboardID != nil }
     public var display: String { sensitive || !content.isText ? preview : text }
     public var isExportable: Bool { content.isText && !sensitive }
+    public var sizeLabel: String { isTruncated ? byteLabel : "\(display.count) chars" }
+    private var byteLabel: String { ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file) }
+
+    public static func prefix(_ text: String, bytes: Int) -> String {
+        guard text.utf8.count > bytes else { return text }
+        var end = text.utf8.index(text.startIndex, offsetBy: bytes)
+        while end.samePosition(in: text.unicodeScalars) == nil { end = text.utf8.index(before: end) }
+        return String(text[..<end])
+    }
 
     public var summary: String {
         if sensitive { return "Hidden API key or token" }
         switch content {
         case .plain, .rich:
+            if isTruncated { return "\(byteLabel) of text" }
             let words = text.split(whereSeparator: \.isWhitespace).count
             return "\(text.count) character\(text.count == 1 ? "" : "s") · \(words) word\(words == 1 ? "" : "s")"
         case .image(let type, let width, let height):
-            return "\(ClipContent.imageName(type)) · \(width) × \(height) · \(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file))"
+            return "\(ClipContent.imageName(type)) · \(width) × \(height) · \(byteLabel)"
         case .files(let paths):
             let folders = paths.filter { $0.hasSuffix("/") }.count
             let parts = [(paths.count - folders, "file"), (folders, "folder")].filter { $0.0 > 0 }
@@ -186,9 +208,32 @@ public enum SensitiveText {
     ]
 
     public static func matches(_ text: String) -> Bool {
-        let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = text.unicodeScalars, blank = CharacterSet.whitespacesAndNewlines
+        guard let first = scalars.firstIndex(where: { !blank.contains($0) }), let last = scalars.lastIndex(where: { !blank.contains($0) }),
+              text.utf8.distance(from: first, to: last) < maxLength * 8 else { return false }
+        let token = String(String.UnicodeScalarView(scalars[first...last]))
         guard token.count <= maxLength, !token.contains(where: \.isWhitespace) else { return false }
         return patterns.contains { token.range(of: "^\($0)$", options: .regularExpression) != nil }
+    }
+
+    static let maskedLine = "••••••••"
+    private static let lookAlikes = Dictionary(uniqueKeysWithValues: zip(
+        "аеорсухіјѕһАВЕКМНОРСТХЗЅІЈØøοΟαΑΒΕΖΗΙΚΜΝΡΤΥΧ–—‐ßб", "aeopcyxijshABEKMHOPCTX3SIJ00oOaABEZHIKMNPTYX---B6"))
+
+    public static func maskedLines(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { hasSecret($0) ? maskedLine : String($0) }.joined(separator: "\n")
+    }
+
+    private static func hasSecret(_ line: Substring) -> Bool {
+        let plain = String(line.map { lookAlikes[$0] ?? $0 })
+        if patterns.contains(where: { plain.range(of: $0, options: .regularExpression) != nil }) { return true }
+        var start = plain.startIndex
+        while let range = plain.range(of: #"[\p{L}\p{N}_-]{16,}"#, options: .regularExpression, range: start..<plain.endIndex) {
+            let word = plain[range], digits = word.filter(\.isNumber).count
+            if digits >= 2, word.contains(where: \.isLetter), digits >= 6 || word.contains(where: \.isUppercase) { return true }
+            start = range.upperBound
+        }
+        return false
     }
 
     public static func mask(_ text: String) -> String {
@@ -364,7 +409,8 @@ public struct CaptureSource {
 }
 
 public enum CaptureFilter {
-    public static let maxBytes = 256 * 1024
+    public static let maxTextBytes = 16 * 1024 * 1024
+    public static let maxPathBytes = 256 * 1024
     public static let maxImageBytes = 64 * 1024 * 1024
     public static let maxRichBytes = 1024 * 1024
     public static let plainTextType = "public.utf8-plain-text"
@@ -395,7 +441,7 @@ public enum CaptureFilter {
         if types.contains(fileType) {
             let paths = source.files()
             if !paths.isEmpty {
-                return paths.reduce(0) { $0 + $1.utf8.count } > maxBytes ? .skip(.tooLarge) : .capture(ClipCapture(content: .files(paths)))
+                return paths.reduce(0) { $0 + $1.utf8.count } > maxPathBytes ? .skip(.tooLarge) : .capture(ClipCapture(content: .files(paths)))
             }
         }
         let hasText = types.contains(plainTextType)
@@ -425,14 +471,17 @@ public enum CaptureFilter {
     }
 
     private static func imageWins(over text: String?) -> Bool {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        guard let text, !isBlank(text) else { return true }
         return text.utf8.count <= 4096 && ClipKind.of(text) == .link
     }
 
-    static func textProblem(_ text: String) -> SkipReason? {
-        if text.utf8.count > maxBytes { return .tooLarge }
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .blank }
-        return nil
+    private static func isBlank(_ text: String) -> Bool {
+        text.unicodeScalars.allSatisfy(CharacterSet.whitespacesAndNewlines.contains)
+    }
+
+    static func textProblem(_ text: String, limit: Int = maxTextBytes) -> SkipReason? {
+        if text.utf8.count > limit { return .tooLarge }
+        return isBlank(text) ? .blank : nil
     }
 }
 
@@ -440,7 +489,27 @@ public enum ClipboardSearch {
     static let fuzzyMinimum = 3
 
     public static func fold(_ text: String) -> String {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        var folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        folded.makeContiguousUTF8()
+        return folded
+    }
+
+    static func contains(_ haystack: String, _ needle: String) -> Bool {
+        guard !haystack.isEmpty, !needle.isEmpty else { return false }
+        let found = haystack.utf8.withContiguousStorageIfAvailable { field in
+            needle.utf8.withContiguousStorageIfAvailable { memmem(field.baseAddress, field.count, $0.baseAddress, $0.count) != nil }
+        }
+        return (found ?? nil) ?? haystack.contains(needle)
+    }
+
+    static func isSubsequence(_ needle: String, of field: String) -> Bool {
+        var pending = needle.unicodeScalars.makeIterator()
+        var next = pending.next()
+        for scalar in field.unicodeScalars where scalar == next {
+            next = pending.next()
+            if next == nil { return true }
+        }
+        return next == nil
     }
 
     public static func preview(_ text: String) -> String {
@@ -453,12 +522,16 @@ public enum ClipboardSearch {
         let needle = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         let sorted = items.filter { pinboard == nil || $0.pinboardID == pinboard }.sorted { $0.lastUsedAt > $1.lastUsedAt }
         guard !needle.isEmpty else { return sorted }
-        let exact = sorted.filter { $0.folded.contains(needle) }
-        guard needle.count >= fuzzyMinimum else { return exact }
-        let tokens = needle.split(whereSeparator: \.isWhitespace).map(String.init)
-        return exact + sorted.filter { item in
-            !item.folded.contains(needle) && tokens.allSatisfy { ActionSearch.match($0, item.foldedPreview) != nil }
+        let tokens = needle.count >= fuzzyMinimum ? needle.split(whereSeparator: \.isWhitespace).map(String.init) : []
+        var exact: [ClipItem] = [], fuzzy: [ClipItem] = []
+        for item in sorted {
+            if contains(item.folded, needle) {
+                exact.append(item)
+            } else if !tokens.isEmpty, tokens.allSatisfy({ isSubsequence($0, of: item.foldedPreview) }) {
+                fuzzy.append(item)
+            }
         }
+        return exact + fuzzy
     }
 }
 
