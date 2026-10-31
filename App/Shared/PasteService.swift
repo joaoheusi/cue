@@ -93,17 +93,17 @@ enum PasteContent {
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
     }
 
-    func selectedText(in app: NSRunningApplication?) async -> (text: String?, copied: Bool) {
+    func selectedText(in app: NSRunningApplication?, unchanged generation: Int? = nil) async -> (text: String?, copied: Bool) {
         guard canReadTarget, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return (nil, false) }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
         let field = element(application, kAXFocusedUIElementAttribute)
         if isSecure(field) { return (nil, false) }
         if let text = field.flatMap({ attribute($0, kAXSelectedTextAttribute) as? String }), !text.isEmpty { return (text, false) }
-        return await copySelection(from: app, application: application)
+        return await copySelection(from: app, application: application, unchanged: generation)
     }
 
-    private func copySelection(from app: NSRunningApplication, application: AXUIElement) async -> (text: String?, copied: Bool) {
+    private func copySelection(from app: NSRunningApplication, application: AXUIElement, unchanged generation: Int?) async -> (text: String?, copied: Bool) {
         let released = Date().addingTimeInterval(0.8)
         while modifiersHeld {
             guard Date() < released, !Task.isCancelled else { return (nil, false) }
@@ -113,7 +113,7 @@ enum PasteContent {
               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
         else { return (nil, false) }
         let before = changeCount
-        guard post(kVK_ANSI_C, to: app) else { return (nil, false) }
+        guard generation == nil || before == generation, post(kVK_ANSI_C, to: app) else { return (nil, false) }
         let deadline = Date().addingTimeInterval(0.3)
         var copied = false
         while Date() < deadline, !Task.isCancelled {
@@ -222,11 +222,12 @@ enum PasteContent {
         if let generation, changeCount != generation { return .failedBeforeCopy(PasteFailure.clipboardChanged.error) }
         hide()
         if let failure = await focus(target, isCancelled: isCancelled) { return copyInstead(text, expected: generation, failure) }
-        if let failure = await retry(target, isCancelled: isCancelled, { check(target, foreground: true) }) {
+        if let failure = await retry(target, isCancelled: isCancelled, { check(target, foreground: true) ?? (modifiersHeld ? .modifiersHeld : nil) }) {
             return copyInstead(text, expected: generation, failure)
         }
-        let selection = await selectedText(in: target.app)
+        let selection = await selectedText(in: target.app, unchanged: generation)
         let expected = selection.copied && generation != nil ? changeCount : generation
+        if isCancelled() { return copyInstead(text, expected: expected, .cancelled) }
         if let failure = PasteRules.replace(original: original, current: selection.text) {
             return copyInstead(text, expected: expected, failure)
         }
@@ -236,7 +237,7 @@ enum PasteContent {
         } catch {
             return .failedBeforeCopy(error)
         }
-        if let failure = await retry(target, isCancelled: isCancelled, { send(target, generation: written) }) { return .copiedNotPasted(failure.error) }
+        if let failure = send(target, generation: written) { return .copiedNotPasted(failure.error) }
         return .pasted
     }
 
