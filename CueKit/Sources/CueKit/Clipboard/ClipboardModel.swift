@@ -33,6 +33,12 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
 
     public var isPinned: Bool { pinboardID != nil }
     public var display: String { sensitive ? preview : text }
+
+    public var linkURL: URL? {
+        guard kind == .link else { return nil }
+        let link = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return URL(string: URLComponents(string: link)?.scheme == nil ? "https://\(link)" : link)
+    }
 }
 
 public enum ClipKind: String, Sendable, CaseIterable {
