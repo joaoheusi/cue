@@ -107,6 +107,9 @@ struct ClipboardCommandView: View {
                 ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Settings", retry: module.openPasteSettings)
                     .padding(.horizontal, 12).padding(.vertical, 6)
             }
+            if let error = module.readerError {
+                ErrorBanner(error: error).padding(.horizontal, 12).padding(.vertical, 6)
+            }
             if let status = module.commandStatus {
                 StatusLine(text: status.text, success: status.success)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -411,6 +414,7 @@ struct ClipboardSettingsView: View {
         if module.accessDenied && module.captureEnabled {
             ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Paste Settings", retry: module.openPasteSettings)
         }
+        if let error = module.readerError { ErrorBanner(error: error) }
     }
 
     private func picker<Value: Hashable>(_ path: WritableKeyPath<ClipboardSettings, Value>, _ options: [Value], title: @escaping (Value) -> String) -> some View {

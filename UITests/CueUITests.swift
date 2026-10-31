@@ -202,4 +202,26 @@ final class CueUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         XCTAssertTrue(search.waitForExistence(timeout: 5))
     }
+
+    func testWhatYouCopyAppearsInClipboardHistory() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        let app = try launch()
+        app.textFields["command.search"].typeKey("2", modifierFlags: .command)
+        let turnOn = app.buttons["Turn On Clipboard History"]
+        XCTAssertTrue(turnOn.waitForExistence(timeout: 5))
+        turnOn.click()
+        let confirm = app.dialogs.buttons["Turn On"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Cue should explain clipboard access before turning capture on.")
+        confirm.click()
+        XCTAssertTrue(app.staticTexts["Nothing copied yet"].waitForExistence(timeout: 20), "Capture did not turn on. In CI, the Keychain is the likely cause.")
+
+        let copied = "copied through the reader \(UUID().uuidString)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(copied, forType: .string)
+        XCTAssertTrue(app.staticTexts[copied].firstMatch.waitForExistence(timeout: 40), "The copy should appear as a row in clipboard history.")
+    }
 }
