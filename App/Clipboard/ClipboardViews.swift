@@ -235,6 +235,11 @@ struct ClipboardCommandView: View {
             KeyHint(label: "Copy", keys: "⌘↵")
             KeyHint(label: current?.isPinned == true ? "Unpin" : "Pin", keys: "⌘P")
             KeyHint(label: "Delete", keys: "⌘⌫")
+            if current?.linkURL != nil {
+                KeyHint(label: "Go to Link", keys: "⌘O")
+            } else if current?.content == .rich {
+                KeyHint(label: "Paste as Text", keys: "⌘⇧V")
+            }
             if let current { ActionsHint(target: current.id) { showMenu(current) } }
         }
     }
@@ -268,6 +273,10 @@ struct ClipboardCommandView: View {
                 menu.add("Pin to \(board.name)") { Task { await module.pin(item, to: board.id) } }
             }
             if item.isPinned { menu.add("Unpin") { Task { await module.pin(item, to: nil) } } }
+            if !module.pinboards.isEmpty {
+                menu.add("Previous Pinboard", key: "[") { cyclePinboard(-1) }
+                menu.add("Next Pinboard", key: "]") { cyclePinboard(1) }
+            }
             menu.addItem(.separator())
             menu.add("Delete") { Task { await module.delete(item) } }
             let recent = NSMenu()
@@ -277,7 +286,7 @@ struct ClipboardCommandView: View {
             let delete = NSMenuItem(title: "Delete Recent", action: nil, keyEquivalent: "")
             delete.submenu = recent
             menu.addItem(delete)
-            menu.add("Settings…") { module.openSettings() }
+            menu.add("Settings…", key: ",") { module.openSettings() }
         }
     }
 
