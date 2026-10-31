@@ -17,7 +17,8 @@ struct ClipboardStatus: Equatable {
     }
 
     private(set) var phase = Phase.loading
-    private(set) var items: [ClipItem] = []
+    private(set) var items: [ClipItem] = [] { didSet { itemsRevision += 1 } }
+    private(set) var itemsRevision = 0
     private(set) var pinboards: [Pinboard] = []
     private(set) var settings = ClipboardSettings()
     private(set) var captureEnabled = false
@@ -32,6 +33,9 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var store: ClipboardStore?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
+    @ObservationIgnored private var ocrTask: Task<Void, Never>?
+    @ObservationIgnored private var ocrRequested = false
+    @ObservationIgnored private var ocr = ClipboardOCRState()
     @ObservationIgnored private var purgeTask: Task<Void, Never>?
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var lastChangeCount = 0
@@ -52,7 +56,12 @@ struct ClipboardStatus: Equatable {
         "CLIPBOARD_READ_FAILED",
         "Cue could not read your last few copies, so they were not saved. Copy again to try once more. If this keeps happening, quit and reopen Cue.")
 
-    init(context: AppContext) { self.context = context }
+    init(context: AppContext) {
+        self.context = context
+        NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.startOCR() }
+        }
+    }
 
     func start() async {
         await openStore()
@@ -112,6 +121,7 @@ struct ClipboardStatus: Equatable {
             ("Captured this session", "\(capturedCount)"),
         ]
         rows += reader.diagnostics
+        rows += ocr.diagnostics(pending: try? await store?.pendingOCRCount())
         rows += SkipReason.allCases.map { ("Skipped: \($0.rawValue)", "\(skipCounts[$0, default: 0])") }
         return rows
     }
@@ -232,6 +242,7 @@ struct ClipboardStatus: Equatable {
                 if !Task.isCancelled { self?.poll() }
             }
         }
+        startOCR()
     }
 
     private func stopCapture() {
@@ -243,6 +254,53 @@ struct ClipboardStatus: Equatable {
     private func cancelRead() {
         readTask?.cancel()
         readTask = nil
+        ocrRequested = false
+        ocrTask?.cancel()
+    }
+
+    private func startOCR() {
+        ocrRequested = true
+        guard ocrTask == nil, captureEnabled, let store else { return }
+        ocrTask = Task {
+            while ocrRequested, !Task.isCancelled {
+                ocrRequested = false
+                await runOCR(store)
+            }
+            ocrTask = nil
+            if ocrRequested { startOCR() }
+        }
+    }
+
+    private func runOCR(_ store: ClipboardStore) async {
+        var changed = false
+        var refreshed = ContinuousClock.now
+        while !Task.isCancelled, !ProcessInfo.processInfo.isLowPowerModeEnabled, let id = try? await store.nextOCR() {
+            let start = ContinuousClock.now
+            let outcome: ClipboardOCROutcome
+            do {
+                guard let image = try await store.payload(id).values.first else { throw ClipboardStore.dataMissing }
+                outcome = await ClipboardOCR.run(executable: Bundle.main.executableURL, image: image)
+            } catch let error as CueError where error == ClipboardStore.dataMissing {
+                outcome = .failed
+            } catch {
+                break
+            }
+            ocr.record(outcome, milliseconds: start.duration(to: .now) / .milliseconds(1))
+            let text: String
+            switch outcome {
+            case .cancelled: return
+            case .failed: text = ""
+            case .text(let found): text = found
+            }
+            guard (try? await store.saveOCR(id, text: text)) != nil else { break }
+            changed = true
+            if refreshed.duration(to: .now) > .seconds(5) {
+                await refresh()
+                refreshed = .now
+                changed = false
+            }
+        }
+        if changed { await refresh() }
     }
 
     func recheckAccess() {
@@ -315,6 +373,7 @@ struct ClipboardStatus: Equatable {
             capturedCount += 1
             try await store.purge(now: Date())
             await refresh()
+            if !clip.content.isText { startOCR() }
         } catch {
             report(error, .command)
         }
@@ -325,11 +384,11 @@ struct ClipboardStatus: Equatable {
     private func pasteContent(_ item: ClipItem, plain: Bool) async throws -> (content: PasteContent, warning: String?) {
         switch item.content {
         case .plain:
-            return (.text(item.text), nil)
+            return (.text(try await fullText(item)), nil)
         case .rich where plain:
-            return (.text(item.text), nil)
+            return (.text(try await fullText(item)), nil)
         case .rich:
-            return (.data(text: item.text, try await payload(item)), nil)
+            return (.data(text: try await fullText(item), try await payload(item)), nil)
         case .image:
             return (.data(text: nil, try await payload(item)), nil)
         case .files(let paths):
@@ -337,6 +396,12 @@ struct ClipboardStatus: Equatable {
             if let error = check.error { throw error }
             return (.files(check.present), check.warning)
         }
+    }
+
+    private func fullText(_ item: ClipItem) async throws -> String {
+        guard item.isTruncated else { return item.text }
+        guard let store else { throw ClipboardStore.dataMissing }
+        return try await store.fullText(item.id)
     }
 
     private func payload(_ item: ClipItem) async throws -> [String: Data] {
@@ -387,7 +452,7 @@ struct ClipboardStatus: Equatable {
         } catch {
             return report(error, .command)
         }
-        if case .text = loaded.content {} else if invocation?.cancelled == true { return }
+        if item.isTruncated || !item.content.isText || item.content == .rich && !plain, invocation?.cancelled == true { return }
         if let warning = loaded.warning {
             reason = warning
             target = nil
@@ -411,6 +476,20 @@ struct ClipboardStatus: Equatable {
             report(error, .command)
         case .cancelled:
             break
+        }
+    }
+
+    func copyText(_ item: ClipItem) async {
+        commandStatus = nil
+        guard let store else { return }
+        let invocation = context.invocation, generation = context.paste.changeCount
+        do {
+            guard let text = try await store.ocrText(item.id), !text.isEmpty else { throw ClipboardStore.dataMissing }
+            if invocation?.cancelled == true { return }
+            let delivery = await context.paste.deliver(text, paste: false, target: nil, generation: generation, isCancelled: { false }, hide: context.closeCommand)
+            commandStatus = ClipboardStatus(text: delivery.message, success: delivery.succeeded)
+        } catch {
+            report(error, .command)
         }
     }
 
@@ -467,6 +546,7 @@ struct ClipboardStatus: Equatable {
     private func historyDeleted() {
         capturedChangeCount = nil
         clearSystemClipboard()
+        startOCR()
     }
 
     private func clearSystemClipboard() {
@@ -602,13 +682,14 @@ struct ClipboardStatus: Equatable {
     func exportHistory() {
         guard let store,
               confirm("Export clipboard history as plain text?",
-                      "The file is not encrypted. Anyone who can open it can read every saved item. Images and files are left out, and rich text is saved as plain text. Store it somewhere safe and delete it when you no longer need it.",
+                      "The file is not encrypted. Anyone who can open it can read every saved item. Images, files, and text over 256 KB are left out, rich text is saved as plain text, and the file stops at 20 MB. Store it somewhere safe and delete it when you no longer need it.",
                       "Export…") else { return }
         Task {
             do {
-                let data = try await store.exportData(now: Date())
-                if try FileTransfer.save(data, suggestedName: SafeFilename.make("Cue Clipboard Export", ext: "json", date: Date()), type: .json) {
-                    settingsStatus = ClipboardStatus(text: "Exported \(Self.itemCount(items.filter(\.isExportable).count)).", success: true)
+                let result = try await store.exportData(now: Date())
+                if try FileTransfer.save(result.data, suggestedName: SafeFilename.make("Cue Clipboard Export", ext: "json", date: Date()), type: .json) {
+                    let leftOut = result.leftOut > 0 ? " \(Self.itemCount(result.leftOut)) left out." : ""
+                    settingsStatus = ClipboardStatus(text: "Exported \(Self.itemCount(result.exported)).\(leftOut)", success: true)
                 }
             } catch {
                 report(error, .settings)
