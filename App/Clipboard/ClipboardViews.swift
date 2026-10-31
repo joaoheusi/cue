@@ -21,6 +21,27 @@ private enum ClipFilter: String, CaseIterable {
     }
 }
 
+private struct ClipResultsKey: Equatable {
+    var revision: Int
+    var query: String
+    var filter: ClipFilter
+    var app: String?
+    var pinboard: String?
+}
+
+@MainActor private final class ClipResults {
+    private var key: ClipResultsKey?
+    private var items: [ClipItem] = []
+
+    func value(for key: ClipResultsKey, compute: () -> [ClipItem]) -> [ClipItem] {
+        if key != self.key {
+            self.key = key
+            items = compute()
+        }
+        return items
+    }
+}
+
 private struct ClipEntry: Identifiable {
     var item: ClipItem
     var header: String?
@@ -34,10 +55,13 @@ struct ClipboardCommandView: View {
     @State private var filter = ClipFilter.all
     @State private var app: String?
     @State private var pinboard: String?
+    @State private var memo = ClipResults()
 
     private var results: [ClipItem] {
-        ClipboardSearch.filter(module.items, query: query, pinboard: filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil)
-            .filter { filter.matches($0) && (app == nil || $0.source == app) }
+        let board = filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil
+        return memo.value(for: ClipResultsKey(revision: module.itemsRevision, query: query, filter: filter, app: app, pinboard: board)) {
+            ClipboardSearch.filter(module.items, query: query, pinboard: board).filter { filter.matches($0) && (app == nil || $0.source == app) }
+        }
     }
 
     private var entries: [ClipEntry] {

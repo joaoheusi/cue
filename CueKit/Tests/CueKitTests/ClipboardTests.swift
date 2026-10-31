@@ -344,6 +344,34 @@ import Testing
         #expect(try crypto.open(try crypto.seal("", context: "a.text"), context: "a.text").isEmpty)
     }
 
+    @Test func byteSearchAgreesWithContainsOnFoldedText() {
+        let samples = ["Crème Brûlée recipe", "Ｆｕｌｌ width", "straße Maß", "İstanbul ıi", "e\u{301}clair", "한글 텍스트", "日本語のテキスト", "ÅNGSTRÖM ﬁne ﬂow", "Relatório função coração", "a"]
+        let queries = ["creme", "CREME", "brulee", "full", "strasse", "maß", "istanbul", "eclair", "é", "한글", "テキスト", "angstrom", "fine", "flow", "funcao", "coracao", "missing"]
+        for sample in samples {
+            for query in queries {
+                let field = ClipboardSearch.fold(sample), needle = ClipboardSearch.fold(query)
+                #expect(ClipboardSearch.contains(field, needle) == field.contains(needle), "\(sample) / \(query)")
+            }
+        }
+        #expect(ClipboardSearch.fold("Relatório 🌍").utf8.withContiguousStorageIfAvailable { _ in true } == true)
+        #expect(!ClipboardSearch.contains("", "a") && !ClipboardSearch.contains("a", ""))
+    }
+
+    @Test func searchListsExactMatchesFirstAndEachItemOnce() {
+        let base = Date(timeIntervalSince1970: 0)
+        func item(_ id: String, _ text: String, age: Double) -> ClipItem {
+            ClipItem(id: id, text: text, source: nil, createdAt: base, lastUsedAt: base.addingTimeInterval(-age), pinboardID: nil)
+        }
+        let items = [item("fuzzy", "reunion notes every Monday", age: 0), item("exact", "the words reunion notes", age: 1), item("none", "unrelated", age: 2)]
+        #expect(ClipboardSearch.filter(items, query: "reunion").map(\.id) == ["fuzzy", "exact"])
+        #expect(ClipboardSearch.filter(items, query: "rnn").map(\.id) == ["fuzzy", "exact"])
+        #expect(ClipboardSearch.filter(items, query: "words").map(\.id) == ["exact"])
+        #expect(ClipboardSearch.filter(items, query: "rlt").map(\.id) == ["none"])
+        #expect(ClipboardSearch.filter(items, query: "rn").map(\.id).isEmpty)
+        #expect(ClipboardSearch.isSubsequence("rnn", of: "reunion notes") && !ClipboardSearch.isSubsequence("zz", of: "reunion"))
+        #expect(!ClipboardSearch.isSubsequence("long needle", of: "short"))
+    }
+
     @Test func settingsValidation() throws {
         var settings = ClipboardSettings()
         try settings.validate()

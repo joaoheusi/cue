@@ -440,7 +440,27 @@ public enum ClipboardSearch {
     static let fuzzyMinimum = 3
 
     public static func fold(_ text: String) -> String {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        var folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        folded.makeContiguousUTF8()
+        return folded
+    }
+
+    static func contains(_ haystack: String, _ needle: String) -> Bool {
+        guard !haystack.isEmpty, !needle.isEmpty else { return false }
+        let found = haystack.utf8.withContiguousStorageIfAvailable { field in
+            needle.utf8.withContiguousStorageIfAvailable { memmem(field.baseAddress, field.count, $0.baseAddress, $0.count) != nil }
+        }
+        return (found ?? nil) ?? haystack.contains(needle)
+    }
+
+    static func isSubsequence(_ needle: String, of field: String) -> Bool {
+        var pending = needle.unicodeScalars.makeIterator()
+        var next = pending.next()
+        for scalar in field.unicodeScalars where scalar == next {
+            next = pending.next()
+            if next == nil { return true }
+        }
+        return next == nil
     }
 
     public static func preview(_ text: String) -> String {
@@ -453,12 +473,16 @@ public enum ClipboardSearch {
         let needle = fold(query.trimmingCharacters(in: .whitespacesAndNewlines))
         let sorted = items.filter { pinboard == nil || $0.pinboardID == pinboard }.sorted { $0.lastUsedAt > $1.lastUsedAt }
         guard !needle.isEmpty else { return sorted }
-        let exact = sorted.filter { $0.folded.contains(needle) }
-        guard needle.count >= fuzzyMinimum else { return exact }
-        let tokens = needle.split(whereSeparator: \.isWhitespace).map(String.init)
-        return exact + sorted.filter { item in
-            !item.folded.contains(needle) && tokens.allSatisfy { ActionSearch.match($0, item.foldedPreview) != nil }
+        let tokens = needle.count >= fuzzyMinimum ? needle.split(whereSeparator: \.isWhitespace).map(String.init) : []
+        var exact: [ClipItem] = [], fuzzy: [ClipItem] = []
+        for item in sorted {
+            if contains(item.folded, needle) {
+                exact.append(item)
+            } else if !tokens.isEmpty, tokens.allSatisfy({ isSubsequence($0, of: item.foldedPreview) }) {
+                fuzzy.append(item)
+            }
         }
+        return exact + fuzzy
     }
 }
 

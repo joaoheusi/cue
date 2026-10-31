@@ -17,7 +17,8 @@ struct ClipboardStatus: Equatable {
     }
 
     private(set) var phase = Phase.loading
-    private(set) var items: [ClipItem] = []
+    private(set) var items: [ClipItem] = [] { didSet { itemsRevision += 1 } }
+    private(set) var itemsRevision = 0
     private(set) var pinboards: [Pinboard] = []
     private(set) var settings = ClipboardSettings()
     private(set) var captureEnabled = false
