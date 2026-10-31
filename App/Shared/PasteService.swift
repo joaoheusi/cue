@@ -109,9 +109,8 @@ enum PasteContent {
             guard Date() < released, !Task.isCancelled else { return (nil, false) }
             try? await Task.sleep(for: .milliseconds(20))
         }
-        guard canPostPaste, !Self.isTerminal(app), !isSecure(element(application, kAXFocusedUIElementAttribute)),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
-        else { return (nil, false) }
+        func isFront() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier }
+        guard canPostPaste, !Self.isTerminal(app), !isSecure(element(application, kAXFocusedUIElementAttribute)), isFront() else { return (nil, false) }
         let before = changeCount
         guard generation == nil || before == generation, post(kVK_ANSI_C, to: app) else { return (nil, false) }
         let deadline = Date().addingTimeInterval(0.3)
@@ -119,6 +118,7 @@ enum PasteContent {
         while Date() < deadline, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(20))
             copied = changeCount != before
+            if copied, !isFront() { return (nil, false) }
             if copied, let text = NSPasteboard.general.string(forType: .string) { return (text, true) }
         }
         return (nil, copied)
