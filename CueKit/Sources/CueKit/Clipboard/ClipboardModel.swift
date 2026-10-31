@@ -208,8 +208,10 @@ public enum SensitiveText {
     ]
 
     public static func matches(_ text: String) -> Bool {
-        guard text.utf8.count <= maxLength * 8 else { return false }
-        let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = text.unicodeScalars, blank = CharacterSet.whitespacesAndNewlines
+        guard let first = scalars.firstIndex(where: { !blank.contains($0) }), let last = scalars.lastIndex(where: { !blank.contains($0) }),
+              text.utf8.distance(from: first, to: last) < maxLength * 8 else { return false }
+        let token = String(String.UnicodeScalarView(scalars[first...last]))
         guard token.count <= maxLength, !token.contains(where: \.isWhitespace) else { return false }
         return patterns.contains { token.range(of: "^\($0)$", options: .regularExpression) != nil }
     }

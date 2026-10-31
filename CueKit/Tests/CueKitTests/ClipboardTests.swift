@@ -1009,6 +1009,8 @@ import Testing
     @Test func tokenChecksIgnoreTextTooLongToBeAToken() {
         #expect(!SensitiveText.matches(String(repeating: "a", count: CaptureFilter.maxTextBytes)))
         #expect(SensitiveText.matches(String(repeating: " ", count: 4000) + "sk-ant-usr-abcdefghijklmnopqrstuv3c27"))
+        #expect(SensitiveText.matches("sk-ant-usr-abcdefghijklmnopqrstuv3c27" + String(repeating: " ", count: CaptureFilter.maxTextBytes - 40)))
+        #expect(!SensitiveText.matches(String(repeating: " ", count: 4000)))
     }
 
     @Test func largeTextStaysSealedAndLoadsInFullOnDemand() async throws {
