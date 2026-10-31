@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import CryptoKit
 import Foundation
 import ImageIO
@@ -1258,6 +1259,243 @@ import Testing
         #expect(oneGone.warning == "1 of 2 files is missing: one.pdf.")
         let many = ClipFileCheck(paths: ["/1", "/2", "/3", "/4", "/5"]) { $0 == "/5" }
         #expect(many.warning == "4 of 5 files are missing: 1, 2, 3, and others.")
+    }
+
+    private func rendered(_ lines: [(text: String, x: Int, y: Int)], width: Int, height: Int) throws -> Data {
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        let attributes = [kCTFontAttributeName: CTFontCreateWithName("Helvetica" as CFString, 30, nil), kCTForegroundColorFromContextAttributeName: true] as [CFString: Any] as CFDictionary
+        for line in lines {
+            context.textPosition = CGPoint(x: line.x, y: line.y)
+            CTLineDraw(CTLineCreateWithAttributedString(try #require(CFAttributedStringCreate(nil, line.text as CFString, attributes))), context)
+        }
+        let output = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(output, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return output as Data
+    }
+
+    @Test func maskedLinesCatchTokensWrittenWithLookAlikeLetters() {
+        let readByVision = [
+            "$ export ANTHROPIC_API_KEY=sk-ant-аpi0З-АbCdЕf0123456789GhIjK1Мn0рQrStUvWxYz",
+            "$ git remote set-url origin https://ghp_1a2B3c4D5e6F7g8H910J1k2L3m4N5o6P7q8R9s@T@github.com/acme/repo",
+            "AWS_ACCESS_KEY_ID=AKIAIOSFODNNZEXAMPLE",
+            "slack: " + "xox" + "b-123456789012-abcdefGHIJKLmnop",
+            "Authorization: Bearer eyJhbGci0iJIUzI1NiJ9.eyJzdWIi0iIxMjMØNTY30DkwIn0.dozjgNryP4J3jVmNH10w5N",
+            "stripe: " + "sk_" + "live_51Hx2ab34Cd56Ef78Gh90Ij12Kl34",
+        ]
+        for line in readByVision {
+            #expect(SensitiveText.maskedLines(line) == SensitiveText.maskedLine, "\(line)")
+        }
+        let mixed = "keep this line\n\(readByVision[0])\nand this one"
+        #expect(SensitiveText.maskedLines(mixed) == "keep this line\n\(SensitiveText.maskedLine)\nand this one")
+    }
+
+    @Test func maskedLinesLeaveOrdinaryTextAlone() {
+        let ordinary = """
+        func handleRequest0(_ request: URLRequest, retries: Int = 0) async throws -> Response { return try await client.send(request) }
+        Relatório trimestral de operações número 12: a reunião foi adiada para quinta-feira às 14h30.
+        Quarterly operations report number 3: the invoice total was $1311.50 today.
+        Отчёт за квартал готов к отправке
+        請求書の合計は十二万円です
+        https://example.com/path/to/page?id=12345678
+        version 26.4.1 build 25E253
+        password = hunter2
+        handleRequestWithRetryPolicy(timeout: 30)
+
+        """
+        #expect(SensitiveText.maskedLines(ordinary) == ordinary)
+        #expect(SensitiveText.maskedLines("").isEmpty)
+    }
+
+    @Test func tilesCoverTheImageAndGiveEveryPointOneOwner() {
+        #expect(ClipboardOCR.spans(1000) == [ClipboardOCR.Span(lower: 0, upper: 1000, coreLower: 0, coreUpper: 1000)])
+        #expect(ClipboardOCR.spans(ClipboardOCR.tileSize).count == 1)
+        for total in [2561, 2760, 3840, 5120, 6000, 9000, 14143] {
+            let spans = ClipboardOCR.spans(total)
+            #expect(spans.count > 1, "\(total)")
+            #expect(spans.first?.lower == 0 && spans.last?.upper == total && spans.first?.coreLower == 0 && spans.last?.coreUpper == total)
+            for (span, next) in zip(spans, spans.dropFirst()) {
+                #expect(span.upper - span.lower == ClipboardOCR.tileSize)
+                #expect(next.lower <= span.upper - ClipboardOCR.tileOverlap || next.upper == total, "tiles overlap at \(total)")
+                #expect(span.coreUpper == next.coreLower, "cores meet at \(total)")
+                #expect(span.coreUpper > next.lower && span.coreUpper < span.upper, "the boundary sits inside the overlap at \(total)")
+            }
+        }
+    }
+
+    @Test func ocrReadsSparseTextOnALargeImageAndEachLineOnce() throws {
+        let image = try rendered([("Quarterly invoice approved", 100, 1900), ("Sitting inside the overlap band", 1300, 1100), ("Final note near the corner", 3300, 100)], width: 3840, height: 2160)
+        let text = try #require(ClipboardOCR.recognize(image))
+        #expect(text.components(separatedBy: "invoice").count == 2, "\(text)")
+        #expect(text.components(separatedBy: "overlap").count == 2, "\(text)")
+        #expect(text.components(separatedBy: "corner").count == 2, "\(text)")
+        #expect(text.hasPrefix("Quarterly"), "Reading starts at the top.")
+        #expect(text.split(separator: "\n").count == 3, "\(text)")
+    }
+
+    @Test func ocrReturnsNothingForDataThatIsNotAnImage() throws {
+        #expect(ClipboardOCR.recognize(Data("not an image".utf8)) == nil)
+        #expect(ClipboardOCR.recognize(Data()) == nil)
+        #expect(ClipboardOCR.recognize(try rendered([], width: 200, height: 100))?.isEmpty == true)
+    }
+
+    @Test func ocrFeedsTheChildOverStdin() async throws {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        let reply = try encoder.encode(ClipboardOCR.Reply(text: "found 🌍"))
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("cat"), image: reply) == .text("found 🌍"))
+    }
+
+    @Test func aDeadOCRChildCannotHurtTheParent() async {
+        let large = Data(count: 64 * 1024 * 1024)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("exit 0"), image: large) == .failed)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("head -c 1000 >/dev/null; kill -9 $$"), image: large) == .failed)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("exit 3"), image: Data([1])) == .failed)
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("printf garbage"), image: Data([1])) == .failed)
+        #expect(await ClipboardOCR.run(executable: URL(fileURLWithPath: "/nonexistent/Cue"), image: Data([1])) == .failed)
+        #expect(await ClipboardOCR.run(executable: nil, image: Data([1])) == .failed)
+    }
+
+    @Test func ocrTimesOutAndCancelsWithoutWaitingForTheChild() async throws {
+        let start = ContinuousClock.now
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("sleep 20"), image: Data(count: 1024 * 1024), timeout: 0.2) == .failed)
+        let task = Task { await ClipboardOCR.run(executable: sh, arguments: shell("sleep 20"), image: Data([1])) }
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+        #expect(await task.value == .cancelled)
+        #expect(start.duration(to: .now) < .seconds(5))
+    }
+
+    @Test func ocrDiagnosticsHoldCountsOnly() {
+        var state = ClipboardOCRState()
+        func row(_ name: String) -> String? { state.diagnostics(pending: 7).first { $0.0 == name }?.1 }
+        #expect(row("OCR pending") == "7" && row("OCR average") == "no runs yet")
+        let secret = "very private text from a screenshot"
+        state.record(.text(secret), milliseconds: 100)
+        state.record(.failed, milliseconds: 300)
+        state.record(.cancelled, milliseconds: 9000)
+        #expect(row("OCR runs") == "2" && row("OCR failed") == "1" && row("OCR average") == "200 ms" && row("OCR slowest") == "300 ms")
+        #expect(!state.diagnostics(pending: nil).contains { $0.1.contains(secret) })
+        #expect(state.diagnostics(pending: nil).first?.1 == "unknown")
+    }
+
+    @Test func pendingOCRSurvivesAQuitAndFinishesOncePerImage() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let t0 = Date(timeIntervalSince1970: 1_792_670_100)
+        let older = try await store.capture(image(1), source: nil, now: t0)
+        let newer = try await store.capture(image(2), source: nil, now: t0.addingTimeInterval(1))
+        try await store.capture("plain text is never queued", source: nil, now: t0.addingTimeInterval(2))
+        #expect(try await store.pendingOCRCount() == 2)
+        #expect(try await store.nextOCR() == newer)
+
+        let reopened = try ClipboardStore(url: url)
+        #expect(try await reopened.pendingOCRCount() == 2)
+        try await reopened.unlock(key)
+        #expect(try await reopened.nextOCR() == newer)
+        try await reopened.saveOCR(newer, text: "Quarterly invoice")
+        #expect(try await reopened.nextOCR() == older)
+        try await reopened.saveOCR(older, text: "")
+        #expect(try await reopened.nextOCR() == nil)
+        #expect(try await reopened.pendingOCRCount() == 0)
+
+        try await reopened.saveOCR(newer, text: "a second answer changes nothing")
+        #expect(try await reopened.ocrText(newer) == "Quarterly invoice")
+        let last = try ClipboardStore(url: url)
+        try await last.unlock(key)
+        let hits = ClipboardSearch.filter(await last.items(), query: "INVOICE")
+        #expect(hits.map(\.id) == [newer] && hits.first?.hasOCRText == true)
+        #expect(await last.items().first { $0.id == older }?.hasOCRText == false)
+        #expect(try await last.nextOCR() == nil)
+    }
+
+    @Test func ocrTextStaysSealedAndIsNeverShown() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        let before = try #require(await store.items().first)
+        try await store.saveOCR(id, text: "Confidential merger notes")
+
+        let item = try #require(await store.items().first)
+        #expect(item.byteSize > before.byteSize)
+        #expect(item.preview == before.preview && item.display == before.display && item.text.isEmpty && item.summary.hasPrefix("PNG"))
+        #expect(!diskBytes(url).contains(Data("merger".utf8)))
+        let exported = try await store.exportData(now: Date()).data
+        #expect(!String(decoding: exported, as: UTF8.self).contains("merger"))
+        try await store.delete(id)
+        #expect(try await store.ocrText(id) == nil)
+    }
+
+    @Test func ocrMasksTokensBeforeTheyReachDiskOrSearch() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        var settings = await store.settings
+        settings.sensitive = .keep
+        try await store.save(settings)
+        let id = try await store.capture(image(), source: nil, now: Date())
+        try await store.saveOCR(id, text: "deploy notes\nexport KEY=sk-ant-аpi0З-АbCdЕf0123456789GhIjK1Мn0рQrStUvWxYz\nall done")
+
+        #expect(try await store.ocrText(id) == "deploy notes\n\(SensitiveText.maskedLine)\nall done")
+        let item = try #require(await store.items().first)
+        #expect(!item.sensitive && item.expiresAt == nil && item.content == image().content)
+        #expect(!item.folded.contains("sk-ant") && !item.folded.contains("0123456789"))
+        #expect(ClipboardSearch.filter([item], query: "deploy").count == 1)
+        #expect(try await store.payload(id) == image().data)
+    }
+
+    @Test func ocrOnImagesThatChangedMeanwhileIsHarmless() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let gone = try await store.capture(image(1), source: nil, now: Date())
+        try await store.delete(gone)
+        try await store.saveOCR(gone, text: "too late")
+        #expect(try await store.itemCount() == 0)
+
+        let text = try await store.capture("a text row", source: nil, now: Date())
+        try await store.saveOCR(text, text: "never applied")
+        #expect(try await store.ocrText(text) == nil)
+        #expect(await store.items().first?.hasOCRText == false)
+    }
+
+    @Test func recopyingAnImageKeepsItsOCRText() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        try await store.saveOCR(id, text: "Quarterly invoice")
+        #expect(try await store.capture(image(), source: nil, now: Date()) == id)
+        #expect(ClipboardSearch.filter(await store.items(), query: "invoice").map(\.id) == [id])
+        #expect(await store.items().first?.hasOCRText == true)
+        #expect(try await store.nextOCR() == nil)
+    }
+
+    @Test func ocrTextIsCappedOnDiskAndInMemory() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        try await store.saveOCR(id, text: String(repeating: "words on a very dense screen\n", count: 20_000))
+        let stored = try #require(try await store.ocrText(id))
+        #expect(stored.utf8.count <= ClipboardOCR.maxTextBytes && stored.utf8.count > ClipboardOCR.maxTextBytes - 64)
+        let item = try #require(await store.items().first)
+        #expect(item.folded.utf8.count <= ClipItem.inlineBytes + 64)
+        #expect(item.byteSize > ClipboardOCR.maxTextBytes)
     }
 
     @Test func tokensAreRecognizedAndMasked() {

@@ -139,7 +139,7 @@ public actor ClipboardStore {
                 }
             }
             cache[id] = ClipItem(id: id, text: clip.text, source: old?.source, createdAt: old?.createdAt ?? date, lastUsedAt: date,
-                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept, content: content, byteSize: try storedBytes(id))
+                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept, content: content, byteSize: try storedBytes(id), ocrText: try ocrText(id))
             return id
         }
         let id = Self.newID()
@@ -162,6 +162,28 @@ public actor ClipboardStore {
         cache[id] = ClipItem(id: id, text: clip.text, source: source, createdAt: date, lastUsedAt: date, pinboardID: nil, sensitive: sensitive,
                              expiresAt: expiry, content: clip.content, byteSize: try storedBytes(id))
         return id
+    }
+
+    public func nextOCR() throws -> String? {
+        try db.scalar("SELECT id FROM items WHERE format='image' AND ocr_text IS NULL ORDER BY last_used_at DESC LIMIT 1")?.string
+    }
+
+    public func pendingOCRCount() throws -> Int {
+        try db.scalar("SELECT COUNT(*) FROM items WHERE format='image' AND ocr_text IS NULL")?.int ?? 0
+    }
+
+    public func saveOCR(_ id: String, text: String) throws {
+        let crypto = try requireCrypto()
+        let masked = SensitiveText.maskedLines(ClipItem.prefix(text, bytes: ClipboardOCR.maxTextBytes))
+        try db.execute("UPDATE items SET ocr_text=?1 WHERE id=?2 AND format='image' AND ocr_text IS NULL", [.blob(try crypto.seal(masked, context: "\(id).ocr")), .text(id)])
+        guard db.changes > 0 else { return }
+        cache[id] = try cache[id]?.withOCRText(masked, byteSize: storedBytes(id))
+    }
+
+    public func ocrText(_ id: String) throws -> String? {
+        let crypto = try requireCrypto()
+        guard let sealed = try db.scalar("SELECT ocr_text FROM items WHERE id=?1", [.text(id)])?.data else { return nil }
+        return try? crypto.open(sealed, context: "\(id).ocr")
     }
 
     public func fullText(_ id: String) throws -> String {
@@ -442,15 +464,16 @@ public actor ClipboardStore {
 
     private func load(_ crypto: ClipboardCrypto) throws {
         var cache: [String: ClipItem] = [:]
-        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL), file_bytes FROM items") {
+        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL), file_bytes, ocr_text FROM items") {
             guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
                   let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse),
                   let content = Self.content(format: row[8].string, meta: row[9].data, id: id, crypto: crypto)
             else { continue }
             let source = row[2].data.flatMap { try? crypto.open($0, context: "\(id).source") }
+            let ocrText = row[12].data.flatMap { try? crypto.open($0, context: "\(id).ocr") }
             cache[id] = ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string,
                                  sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse), content: content, byteSize: row[10].int ?? 0,
-                                 truncated: row[11].int ?? 0 > 0)
+                                 truncated: row[11].int ?? 0 > 0, ocrText: ocrText)
         }
         self.crypto = crypto
         self.cache = cache

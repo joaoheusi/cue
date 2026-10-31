@@ -15,13 +15,14 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public let content: ClipContent
     public let byteSize: Int
     public let isTruncated: Bool
+    public let hasOCRText: Bool
     public let kind: ClipKind
     public let folded: String
     public let preview: String
     public let foldedPreview: String
 
     public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?,
-                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0, truncated: Bool = false) {
+                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0, truncated: Bool = false, ocrText: String? = nil) {
         let inline = Self.prefix(text, bytes: Self.inlineBytes)
         self.id = id
         self.text = inline
@@ -34,6 +35,7 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         self.content = content
         self.byteSize = byteSize
         isTruncated = content.isText && (truncated || inline.utf8.count < text.utf8.count)
+        hasOCRText = !content.isText && ocrText?.isEmpty == false
         switch content {
         case .plain, .rich:
             kind = sensitive ? .text : ClipKind.of(inline)
@@ -42,7 +44,7 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         case .image(let type, let width, let height):
             kind = .image
             preview = "\(ClipContent.imageName(type)) image · \(width) × \(height)"
-            folded = ClipboardSearch.fold(preview)
+            folded = ClipboardSearch.fold(preview + "\n" + Self.prefix(ocrText ?? "", bytes: Self.inlineBytes))
         case .files(let paths):
             let names = paths.map(ClipContent.fileName)
             kind = .file
@@ -50,6 +52,11 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
             folded = ClipboardSearch.fold(String(names.joined(separator: " ").prefix(4096)))
         }
         foldedPreview = ClipboardSearch.fold(preview)
+    }
+
+    func withOCRText(_ ocrText: String, byteSize: Int) -> ClipItem {
+        ClipItem(id: id, text: text, source: source, createdAt: createdAt, lastUsedAt: lastUsedAt, pinboardID: pinboardID, sensitive: sensitive,
+                 expiresAt: expiresAt, content: content, byteSize: byteSize, truncated: isTruncated, ocrText: ocrText)
     }
 
     public var isPinned: Bool { pinboardID != nil }
@@ -205,6 +212,26 @@ public enum SensitiveText {
         let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard token.count <= maxLength, !token.contains(where: \.isWhitespace) else { return false }
         return patterns.contains { token.range(of: "^\($0)$", options: .regularExpression) != nil }
+    }
+
+    static let maskedLine = "••••••••"
+    private static let lookAlikes = Dictionary(uniqueKeysWithValues: zip(
+        "аеорсухіјѕһАВЕКМНОРСТХЗЅІЈØøοΟαΑΒΕΖΗΙΚΜΝΡΤΥΧ–—‐ßб", "aeopcyxijshABEKMHOPCTX3SIJ00oOaABEZHIKMNPTYX---B6"))
+
+    public static func maskedLines(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { hasSecret($0) ? maskedLine : String($0) }.joined(separator: "\n")
+    }
+
+    private static func hasSecret(_ line: Substring) -> Bool {
+        let plain = String(line.map { lookAlikes[$0] ?? $0 })
+        if patterns.contains(where: { plain.range(of: $0, options: .regularExpression) != nil }) { return true }
+        var start = plain.startIndex
+        while let range = plain.range(of: #"[\p{L}\p{N}_-]{16,}"#, options: .regularExpression, range: start..<plain.endIndex) {
+            let word = plain[range], digits = word.filter(\.isNumber).count
+            if digits >= 2, word.contains(where: \.isLetter), digits >= 6 || word.contains(where: \.isUppercase) { return true }
+            start = range.upperBound
+        }
+        return false
     }
 
     public static func mask(_ text: String) -> String {
