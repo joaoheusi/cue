@@ -235,6 +235,7 @@ struct ClipboardCommandView: View {
             Button("Paste") { Task { await module.use(item, paste: true) } }
             Button("Copy") { Task { await module.use(item, paste: false) } }
             if item.content == .rich { Button("Paste as Text") { Task { await module.use(item, paste: true, plain: true) } } }
+            if item.hasOCRText { Button("Copy Text") { Task { await module.copyText(item) } } }
             if item.linkURL != nil { Button("Go to Link") { module.goToLink(item) } }
             Menu("Pin To") {
                 ForEach(module.pinboards) { board in
@@ -259,7 +260,7 @@ struct ClipboardCommandView: View {
             KeyHint(label: "Copy", keys: "⌘↵")
             KeyHint(label: current?.isPinned == true ? "Unpin" : "Pin", keys: "⌘P")
             KeyHint(label: "Delete", keys: "⌘⌫")
-            if let current { ActionsHint(target: current.id) { showMenu(current) } }
+            if let current { ActionsHint(target: current.id) { showMenu(self.current ?? current) } }
         }
     }
 
@@ -286,6 +287,7 @@ struct ClipboardCommandView: View {
             menu.add(pasteLabel) { Task { await module.use(item, paste: true) } }
             menu.add("Copy") { Task { await module.use(item, paste: false) } }
             if item.content == .rich { menu.add("Paste as Text", key: "V") { Task { await module.use(item, paste: true, plain: true) } } }
+            if item.hasOCRText { menu.add("Copy Text") { Task { await module.copyText(item) } } }
             if item.linkURL != nil { menu.add("Go to Link", key: "o") { module.goToLink(item) } }
             menu.addItem(.separator())
             for board in module.pinboards where board.id != item.pinboardID {

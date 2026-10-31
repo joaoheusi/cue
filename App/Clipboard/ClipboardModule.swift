@@ -33,6 +33,9 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var store: ClipboardStore?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
+    @ObservationIgnored private var ocrTask: Task<Void, Never>?
+    @ObservationIgnored private var ocrRequested = false
+    @ObservationIgnored private var ocr = ClipboardOCRState()
     @ObservationIgnored private var purgeTask: Task<Void, Never>?
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var lastChangeCount = 0
@@ -113,6 +116,7 @@ struct ClipboardStatus: Equatable {
             ("Captured this session", "\(capturedCount)"),
         ]
         rows += reader.diagnostics
+        rows += ocr.diagnostics(pending: try? await store?.pendingOCRCount())
         rows += SkipReason.allCases.map { ("Skipped: \($0.rawValue)", "\(skipCounts[$0, default: 0])") }
         return rows
     }
@@ -233,6 +237,7 @@ struct ClipboardStatus: Equatable {
                 if !Task.isCancelled { self?.poll() }
             }
         }
+        startOCR()
     }
 
     private func stopCapture() {
@@ -244,6 +249,53 @@ struct ClipboardStatus: Equatable {
     private func cancelRead() {
         readTask?.cancel()
         readTask = nil
+        ocrRequested = false
+        ocrTask?.cancel()
+    }
+
+    private func startOCR() {
+        ocrRequested = true
+        guard ocrTask == nil, captureEnabled, let store else { return }
+        ocrTask = Task {
+            while ocrRequested, !Task.isCancelled {
+                ocrRequested = false
+                await runOCR(store)
+            }
+            ocrTask = nil
+            if ocrRequested { startOCR() }
+        }
+    }
+
+    private func runOCR(_ store: ClipboardStore) async {
+        var changed = false
+        var refreshed = ContinuousClock.now
+        while !Task.isCancelled, !ProcessInfo.processInfo.isLowPowerModeEnabled, let id = try? await store.nextOCR() {
+            let start = ContinuousClock.now
+            let outcome: ClipboardOCROutcome
+            do {
+                guard let image = try await store.payload(id).values.first else { throw ClipboardStore.dataMissing }
+                outcome = await ClipboardOCR.run(executable: Bundle.main.executableURL, image: image)
+            } catch let error as CueError where error == ClipboardStore.dataMissing {
+                outcome = .failed
+            } catch {
+                break
+            }
+            ocr.record(outcome, milliseconds: start.duration(to: .now) / .milliseconds(1))
+            let text: String
+            switch outcome {
+            case .cancelled: return
+            case .failed: text = ""
+            case .text(let found): text = found
+            }
+            guard (try? await store.saveOCR(id, text: text)) != nil else { break }
+            changed = true
+            if refreshed.duration(to: .now) > .seconds(5) {
+                await refresh()
+                refreshed = .now
+                changed = false
+            }
+        }
+        if changed { await refresh() }
     }
 
     func recheckAccess() {
@@ -316,6 +368,7 @@ struct ClipboardStatus: Equatable {
             capturedCount += 1
             try await store.purge(now: Date())
             await refresh()
+            if !clip.content.isText { startOCR() }
         } catch {
             report(error, .command)
         }
@@ -421,6 +474,18 @@ struct ClipboardStatus: Equatable {
         }
     }
 
+    func copyText(_ item: ClipItem) async {
+        commandStatus = nil
+        guard let store else { return }
+        do {
+            guard let text = try await store.ocrText(item.id), !text.isEmpty else { throw ClipboardStore.dataMissing }
+            let delivery = await context.paste.deliver(text, paste: false, target: nil, generation: nil, isCancelled: { false }, hide: context.closeCommand)
+            commandStatus = ClipboardStatus(text: delivery.message, success: delivery.succeeded)
+        } catch {
+            report(error, .command)
+        }
+    }
+
     func togglePin(_ item: ClipItem) async {
         await run(.command) { store in
             try await store.setPinboard(item.id, item.isPinned ? nil : store.defaultPinboard().id)
@@ -474,6 +539,7 @@ struct ClipboardStatus: Equatable {
     private func historyDeleted() {
         capturedChangeCount = nil
         clearSystemClipboard()
+        startOCR()
     }
 
     private func clearSystemClipboard() {

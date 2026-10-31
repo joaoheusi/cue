@@ -415,4 +415,49 @@ final class CueUITests: XCTestCase {
         XCTAssertEqual(board.string(forType: .string), copied)
         XCTAssertNil(board.data(forType: .rtf), "Paste as Text should leave the formatting behind.")
     }
+
+    func testTextInsideACopiedImageCanBeSearchedAndCopied() throws {
+        let app = try launchWithCapture()
+        let search = app.textFields["command.search"]
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1200, pixelsHigh: 240, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 1200, height: 240).fill()
+        NSAttributedString(string: "Quarterly invoice approved", attributes: [.font: NSFont.systemFont(ofSize: 72), .foregroundColor: NSColor.black]).draw(at: NSPoint(x: 40, y: 70))
+        NSGraphicsContext.restoreGraphicsState()
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(png, forType: .png)
+
+        let row = app.staticTexts["PNG image · 1200 × 240"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 40), "A copied image should appear as a row in clipboard history.")
+        search.typeText("invoice")
+        XCTAssertTrue(row.waitForExistence(timeout: 90), "Search should find text inside the image once OCR finishes.")
+        search.typeKey("k", modifierFlags: .command)
+        let copyText = app.menuItems["Copy Text"]
+        XCTAssertTrue(copyText.waitForExistence(timeout: 5), "⌘K should offer Copy Text on an image with text.")
+        copyText.click()
+        XCTAssertTrue(waitForClipboard { $0.contains("invoice") }, "Copy Text should put the image's text on the clipboard.")
+    }
+
+    func testLargeCopiesCopyBackInFull() throws {
+        let app = try launchWithCapture()
+        let board = NSPasteboard.general
+        let first = "large copy \(UUID().uuidString)"
+        let large = first + "\n" + String(repeating: "a line of text that repeats\n", count: 30_000)
+        board.clearContents()
+        board.setString(large, forType: .string)
+        XCTAssertTrue(app.staticTexts[first].firstMatch.waitForExistence(timeout: 40), "A copy over 256 KB should appear as a row in clipboard history.")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value == %@ OR label == %@", "First 8 KB", "First 8 KB")).firstMatch.waitForExistence(timeout: 5),
+                      "The detail pane should say how much search covers.")
+
+        let before = board.changeCount
+        app.typeKey(.return, modifierFlags: .command)
+        let deadline = Date().addingTimeInterval(10)
+        while board.changeCount == before, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        XCTAssertNotEqual(board.changeCount, before, "⌘↵ should write to the clipboard.")
+        XCTAssertEqual(board.string(forType: .string), large, "Copy should deliver the full text, not the prefix kept in memory.")
+    }
 }
