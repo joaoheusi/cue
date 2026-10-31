@@ -406,6 +406,7 @@ public enum ActionSearch {
         let q = normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
         if q.isEmpty { return (0, 0) }
         if normalize(name) == q { return (-1, 0) }
+        if fields.contains(where: { $0.1 == 1 && normalize($0.0) == q }) { return (-1, 1) }
         var tier = 0, weight = 0
         for token in q.split(whereSeparator: \.isWhitespace).map(String.init) {
             let best = ([(name, 0)] + fields).compactMap { field, w in match(token, normalize(field)).map { $0 * 10 + w } }.min()

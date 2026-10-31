@@ -242,6 +242,17 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(waitForClipboard { $0 == "script says hello" }, "Return should copy the script's output.")
     }
 
+    func testStrongAppMatchSitsAboveWeakActionMatch() throws {
+        let app = try launch { data in
+            try Data(#"[{"keyword": "cxaxlxcx", "expansion": "weak"}]"#.utf8).write(to: data.appendingPathComponent("snippets.json"))
+        }
+        app.textFields["command.search"].typeText("calc")
+        let strong = app.staticTexts["Calculator"].firstMatch, weak = app.staticTexts["cxaxlxcx"].firstMatch
+        XCTAssertTrue(strong.waitForExistence(timeout: 5))
+        XCTAssertTrue(weak.waitForExistence(timeout: 5))
+        XCTAssertLessThan(strong.frame.minY, weak.frame.minY, "A strong app match should sit above a weak action match.")
+    }
+
     func testSnippetFillsPlaceholders() throws {
         let saved = NSPasteboard.general.string(forType: .string)
         addTeardownBlock {

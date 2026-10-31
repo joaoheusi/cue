@@ -91,6 +91,16 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         #expect(ActionSearch.search([a("Resolve complicated issue", favorite: true), exact], query: "resolve ci").first?.id == exact.id)
     }
 
+    @Test func exactKeywordTiesExactNameAndBeatsWeakerMatches() throws {
+        #expect(ActionSearch.score("dia", name: "Dia")?.tier == -1)
+        #expect(ActionSearch.score("dia", name: "Fix Text", fields: [("dia", 1)])?.tier == -1)
+        #expect(ActionSearch.score("dia", name: "Fix Text", fields: [("dia", 2)])?.tier == 0)
+        let exact = a("Fix Text", aliases: ["dia"]), fuzzy = a("Next Display")
+        #expect(ActionSearch.search([fuzzy, exact], query: "dia") == [exact, fuzzy])
+        let fuzzyTier = try #require(ActionSearch.score("dia", name: "Next Display")?.tier)
+        #expect(try #require(ActionSearch.score("movit", name: "Movitera Link")?.tier) < fuzzyTier)
+    }
+
     @Test func accentsAliasesTokensAndTypos() {
         let action = a("Revisão", aliases: ["resolve CI"], tags: ["git"], category: "Coding")
         #expect(ActionSearch.search([action], query: "revisao") == [action])
