@@ -87,11 +87,20 @@ final class CueUITests: XCTestCase {
         search.typeText("review current")
         XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
         search.typeKey("e", modifierFlags: .command)
-        Thread.sleep(forTimeInterval: 3)
-        let log = app.launchEnvironment["CUE_DATA_DIR"].map { URL(fileURLWithPath: $0).appendingPathComponent("edit.log") }
-        print("CUEDBG-LOG-START\n\(log.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "no log")\nCUEDBG-LOG-END")
         let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
         XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘E should show the selected action in the Library editor.")
+    }
+
+    func testActionsMenuActsOnTheSelectedRow() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review current")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        search.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.menuItems["Edit in Library"].waitForExistence(timeout: 5))
+        app.menuItems["Edit in Library"].click()
+        let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘K should act on the selected row, not an earlier one.")
     }
 
     func testCopyPathShortcutCopiesTheSelectedFile() throws {

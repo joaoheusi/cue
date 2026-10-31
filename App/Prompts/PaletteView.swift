@@ -349,7 +349,7 @@ struct PaletteView: View {
                 Text("\(count) \(searching ? "results" : "actions")")
             } trailing: {
                 hints(current)
-                if let current { ActionsHint { showMenu(current) } }
+                if let current { ActionsHint(target: current.id) { showMenu(current) } }
             }
         }
     }
@@ -366,7 +366,7 @@ struct PaletteView: View {
             } else {
                 KeyHint(label: "Copy", keys: "↵", primary: true)
             }
-            ShortcutHint(label: "Edit", keys: "⌘E", key: "e") { model.context.openLibrary(action.id) }
+            ShortcutHint(label: "Edit", keys: "⌘E", key: "e", target: action.id) { model.context.openLibrary(action.id) }
         case .snippet:
             if model.willPasteByDefault {
                 KeyHint(label: "Paste", keys: "↵", primary: true)
@@ -383,7 +383,7 @@ struct PaletteView: View {
         case .file(let hit):
             KeyHint(label: "Open", keys: "↵", primary: true)
             KeyHint(label: "Show in Finder", keys: "⌘↵")
-            ShortcutHint(label: "Copy Path", keys: "⌘⇧C", key: "c", modifiers: [.command, .shift]) { commands.copyPath(hit) }
+            ShortcutHint(label: "Copy Path", keys: "⌘⇧C", key: "c", modifiers: [.command, .shift], target: hit.id) { commands.copyPath(hit) }
         case .command:
             KeyHint(label: "Open", keys: "↵", primary: true)
         case .showAll:
