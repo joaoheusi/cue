@@ -225,19 +225,6 @@ struct PaletteView: View {
             footer(current, count: trimmed.isEmpty ? snapshot.actions.filter(\.enabled).count + commands.scripts.count : found.count(filter), searching: !trimmed.isEmpty)
         }
         .background { shortcuts(current) }
-        .overlay {
-            Button("ProbeOverlay") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
-                .keyboardShortcut("g", modifiers: .command)
-                .opacity(0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
-        .background {
-            Button("ProbeHit") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
-                .keyboardShortcut("u", modifiers: .command)
-                .opacity(0)
-                .accessibilityHidden(true)
-        }
         .onAppear(perform: takePendingAsk)
         .onChange(of: model.pendingAsk?.id) { takePendingAsk() }
         .onChange(of: query) {
@@ -409,10 +396,9 @@ struct PaletteView: View {
 
     private func shortcuts(_ current: PaletteItem?) -> some View {
         ZStack {
-            Button("Probe") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
+            Button("ProbeRaw") { model.context.openLibrary("new") }
                 .keyboardShortcut("j", modifiers: .command)
-            Button("ProbePlain") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
-                .buttonStyle(.plain)
+            Button("ProbeCurrent") { if current != nil { model.context.openLibrary("new") } }
                 .keyboardShortcut("l", modifiers: .command)
         }
         .opacity(0)

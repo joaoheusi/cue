@@ -112,11 +112,34 @@ final class CueUITests: XCTestCase {
         print("CUEDBG key=\(key) fired=\(!search.exists) library=\(app.windows["Cue"].exists)")
     }
 
-    func testProbeHiddenBackground() throws { try probe("j") }
-    func testProbeHiddenPlainStyle() throws { try probe("l") }
-    func testProbeHiddenOverlay() throws { try probe("g") }
-    func testProbeHiddenWithHitTesting() throws { try probe("u") }
-    func testProbeRootShortcutWithResults() throws { try probe("n") }
+    func testProbeHiddenRaw() throws { try probe("j") }
+    func testProbeHiddenCurrent() throws { try probe("l") }
+
+    func testProbeVisibleEditState() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review current")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        print("CUEDBG FOOTER edit=\(app.staticTexts["Edit"].exists) buttons=\(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Edit'")).count)")
+        search.typeKey("e", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 3)
+        print("CUEDBG VIS fired=\(!search.exists) library=\(app.windows["Cue"].exists)")
+        print("CUEDBG-TREE-START\n\(app.windows["Cue"].exists ? app.windows["Cue"].debugDescription : app.debugDescription)\nCUEDBG-TREE-END")
+    }
+
+    func testProbeMenuEditState() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review current")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        search.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.menuItems["Edit in Library"].waitForExistence(timeout: 5))
+        app.menuItems["Edit in Library"].click()
+        Thread.sleep(forTimeInterval: 3)
+        print("CUEDBG MENU fired=\(!search.exists) library=\(app.windows["Cue"].exists)")
+        print("CUEDBG-MENU-START\n\(app.windows["Cue"].exists ? app.windows["Cue"].debugDescription : "none")\nCUEDBG-MENU-END")
+    }
 
     func testNewActionRowOpensTheLibraryOnANewAction() throws {
         let app = try launch()
