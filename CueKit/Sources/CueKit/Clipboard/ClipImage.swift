@@ -14,15 +14,21 @@ public enum ClipImage {
               let height = properties[kCGImagePropertyPixelHeight] as? Int else { return .skip(.unreadable) }
         let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
         guard !overflow, pixels <= maxPixels else { return .skip(.tooLarge) }
+        guard let thumbnail = downsampled(source, to: thumbnailSize), let encoded = png(thumbnail) else { return .skip(.unreadable) }
+        return .capture(ClipCapture(content: .image(type: type, width: width, height: height), data: [type: data], thumbnail: encoded))
+    }
+
+    public static func preview(_ data: Data, maxPixelSize: Int) -> CGImage? {
+        CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary).flatMap { downsampled($0, to: maxPixelSize) }
+    }
+
+    private static func downsampled(_ source: CGImageSource, to size: Int) -> CGImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: thumbnailSize,
+            kCGImageSourceThumbnailMaxPixelSize: size,
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
-        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary), let encoded = png(thumbnail) else {
-            return .skip(.unreadable)
-        }
-        return .capture(ClipCapture(content: .image(type: type, width: width, height: height), data: [type: data], thumbnail: encoded))
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     private static func png(_ image: CGImage) -> Data? {

@@ -984,6 +984,51 @@ import Testing
             == "3 images, 1 file entry and the formatting of 2 rich text entries will be lost.")
     }
 
+    @Test func detailSummariesDescribeEachTypeWithoutCountingWords() {
+        func item(_ text: String = "", sensitive: Bool = false, content: ClipContent = .plain, bytes: Int = 0) -> ClipItem {
+            ClipItem(id: "1", text: text, source: nil, createdAt: .distantPast, lastUsedAt: .distantPast, pinboardID: nil, sensitive: sensitive, content: content, byteSize: bytes)
+        }
+        #expect(item("one two").summary == "7 characters · 2 words")
+        #expect(item("x").summary == "1 character · 1 word")
+        #expect(item("styled text here", content: .rich).summary == "16 characters · 3 words")
+        #expect(item("sk-ant-usr-abcdefghijklmnopqrstuv3c27", sensitive: true).summary == "Hidden API key or token")
+
+        let image = item(content: .image(type: "public.png", width: 1024, height: 768), bytes: 2_400_000).summary
+        #expect(image.hasPrefix("PNG · 1024 × 768 · ") && image.contains("MB") && !image.contains("character"))
+
+        #expect(item(content: .files(["/a.pdf"])).summary == "1 file")
+        #expect(item(content: .files(["/a.pdf", "/b.pdf", "/c.pdf"])).summary == "3 files")
+        #expect(item(content: .files(["/Folder/"])).summary == "1 folder")
+        #expect(item(content: .files(["/a.pdf", "/b.pdf", "/Folder/"])).summary == "2 files, 1 folder")
+    }
+
+    @Test func copiedTimesAreAbsolute() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Sao_Paulo")!
+        let locale = Locale(identifier: "en_GB")
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 16, minute: 0))!
+        func at(year: Int = 2026, month: Int = 10, day: Int, hour: Int, minute: Int) -> String {
+            ShortAge.stamp(calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!, now: now, calendar: calendar, locale: locale)
+        }
+        #expect(at(day: 31, hour: 15, minute: 8) == "Today, 15:08")
+        #expect(at(day: 31, hour: 0, minute: 5) == "Today, 00:05")
+        #expect(at(day: 30, hour: 9, minute: 41) == "Yesterday, 09:41")
+        #expect(at(day: 28, hour: 15, minute: 8) == "28 Oct, 15:08")
+        #expect(at(year: 2025, month: 12, day: 2, hour: 7, minute: 30) == "2 Dec 2025, 07:30")
+    }
+
+    @Test func storageChoicesHaveReadableTitles() {
+        #expect(ClipboardSettings.maxStorageChoices.map(ClipboardSettings.storageTitle) == ["256 MB", "512 MB", "1 GB", "2 GB", "5 GB"])
+        #expect(ClipboardSettings.storageTitle(ClipboardSettings.defaultMaxStorage) == "1 GB")
+    }
+
+    @Test func previewsDownsampleAndRejectBadData() throws {
+        let image = try encoded("public.png", width: 3000, height: 1500)
+        let preview = try #require(ClipImage.preview(image, maxPixelSize: 1024))
+        #expect(preview.width == 1024 && preview.height == 512)
+        #expect(ClipImage.preview(Data("not an image".utf8), maxPixelSize: 1024) == nil)
+    }
+
     @Test func missingFilesAreReportedByName() {
         let all = ClipFileCheck(paths: ["/a/one.pdf", "/b/two.pdf"]) { _ in true }
         #expect(all.present.count == 2 && all.missing.isEmpty && all.error == nil && all.warning == nil)

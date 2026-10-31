@@ -42,6 +42,7 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var keychainKind: ClipboardKeychain.Kind?
     @ObservationIgnored private var appNames: [String: String] = [:]
     @ObservationIgnored private var launchClearDone = false
+    @ObservationIgnored private let thumbnails = NSCache<NSString, NSImage>()
 
     private static let owner = "clipboard"
     static let accessDeniedError = CueError(
@@ -332,7 +333,7 @@ struct ClipboardStatus: Equatable {
         case .image:
             return (.data(text: nil, try await payload(item)), nil)
         case .files(let paths):
-            let check = await Task.detached { ClipFileCheck(paths: paths) { FileManager.default.fileExists(atPath: $0) } }.value
+            let check = await checkFiles(paths)
             if let error = check.error { throw error }
             return (.files(check.present), check.warning)
         }
@@ -341,6 +342,24 @@ struct ClipboardStatus: Equatable {
     private func payload(_ item: ClipItem) async throws -> [String: Data] {
         guard let store else { throw ClipboardStore.dataMissing }
         return try await store.payload(item.id)
+    }
+
+    func checkFiles(_ paths: [String]) async -> ClipFileCheck {
+        await Task.detached { ClipFileCheck(paths: paths) { FileManager.default.fileExists(atPath: $0) } }.value
+    }
+
+    func thumbnail(of item: ClipItem) async -> NSImage? {
+        let key = item.id as NSString
+        if let cached = thumbnails.object(forKey: key) { return cached }
+        guard let data = try? await store?.thumbnail(item.id), let image = NSImage(data: data) else { return nil }
+        thumbnails.setObject(image, forKey: key)
+        return image
+    }
+
+    func preview(of item: ClipItem, maxPixelSize: Int) async -> NSImage? {
+        guard let data = try? await payload(item).values.first else { return nil }
+        let image = await Task.detached { ClipImage.preview(data, maxPixelSize: maxPixelSize) }.value
+        return image.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
     }
 
     func use(_ item: ClipItem, paste: Bool, plain: Bool = false) async {

@@ -51,6 +51,21 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public var display: String { sensitive || !content.isText ? preview : text }
     public var isExportable: Bool { content.isText && !sensitive }
 
+    public var summary: String {
+        if sensitive { return "Hidden API key or token" }
+        switch content {
+        case .plain, .rich:
+            let words = text.split(whereSeparator: \.isWhitespace).count
+            return "\(text.count) character\(text.count == 1 ? "" : "s") · \(words) word\(words == 1 ? "" : "s")"
+        case .image(let type, let width, let height):
+            return "\(ClipContent.imageName(type)) · \(width) × \(height) · \(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file))"
+        case .files(let paths):
+            let folders = paths.filter { $0.hasSuffix("/") }.count
+            let parts = [(paths.count - folders, "file"), (folders, "folder")].filter { $0.0 > 0 }
+            return parts.map { "\($0.0) \($0.1)\($0.0 == 1 ? "" : "s")" }.joined(separator: ", ")
+        }
+    }
+
     public var linkURL: URL? {
         guard kind == .link else { return nil }
         let link = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -264,6 +279,12 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
     public static let maxItemChoices = [50, 100, 250, 500, 1000, 2000, 5000]
     public static let defaultMaxStorage = 1024 * 1024 * 1024
     public static let maxStorageChoices = [256, 512, 1024, 2048, 5120].map { $0 * 1024 * 1024 }
+
+    public static func storageTitle(_ bytes: Int) -> String {
+        let megabytes = bytes / (1024 * 1024)
+        return megabytes >= 1024 ? "\(megabytes / 1024) GB" : "\(megabytes) MB"
+    }
+
     public static let maxExcludedApps = 200
 
     public static let defaultExcludedApps = [
