@@ -99,6 +99,28 @@ public struct ClipCapture: Codable, Equatable, Sendable {
     public static func plain(_ text: String) -> ClipCapture { ClipCapture(content: .plain, text: text) }
 }
 
+public struct ClipFileCheck: Equatable, Sendable {
+    public let present: [String]
+    public let missing: [String]
+
+    public init(paths: [String], exists: (String) -> Bool) {
+        present = paths.filter(exists)
+        missing = paths.filter { !exists($0) }
+    }
+
+    public var error: CueError? {
+        guard present.isEmpty, let first = missing.first else { return nil }
+        let message = missing.count == 1 ? "“\(ClipContent.fileName(first))” is no longer at its saved location." : "These \(missing.count) files are no longer at their saved locations."
+        return CueError("CLIPBOARD_FILES_MISSING", message)
+    }
+
+    public var warning: String? {
+        guard !present.isEmpty, !missing.isEmpty else { return nil }
+        let names = missing.prefix(3).map(ClipContent.fileName).joined(separator: ", ")
+        return "\(missing.count) of \(present.count + missing.count) files \(missing.count == 1 ? "is" : "are") missing: \(names)\(missing.count > 3 ? ", and others" : "")."
+    }
+}
+
 public enum ClipKind: String, Sendable, CaseIterable {
     case text, link, code, image, file
 

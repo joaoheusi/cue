@@ -958,6 +958,25 @@ import Testing
         #expect(payloadNames(dir).isEmpty)
     }
 
+    @Test func missingFilesAreReportedByName() {
+        let all = ClipFileCheck(paths: ["/a/one.pdf", "/b/two.pdf"]) { _ in true }
+        #expect(all.present.count == 2 && all.missing.isEmpty && all.error == nil && all.warning == nil)
+
+        let single = ClipFileCheck(paths: ["/a/one.pdf"]) { _ in false }
+        #expect(single.present.isEmpty && single.warning == nil)
+        #expect(single.error?.code == "CLIPBOARD_FILES_MISSING")
+        #expect(single.error?.message == "“one.pdf” is no longer at its saved location.")
+        #expect(ClipFileCheck(paths: ["/a", "/b"]) { _ in false }.error?.message == "These 2 files are no longer at their saved locations.")
+
+        let some = ClipFileCheck(paths: ["/a/one.pdf", "/b/Folder/", "/c/three.txt"]) { $0 == "/c/three.txt" }
+        #expect(some.present == ["/c/three.txt"] && some.error == nil)
+        #expect(some.warning == "2 of 3 files are missing: one.pdf, Folder.")
+        let oneGone = ClipFileCheck(paths: ["/a/one.pdf", "/c/three.txt"]) { $0 == "/c/three.txt" }
+        #expect(oneGone.warning == "1 of 2 files is missing: one.pdf.")
+        let many = ClipFileCheck(paths: ["/1", "/2", "/3", "/4", "/5"]) { $0 == "/5" }
+        #expect(many.warning == "4 of 5 files are missing: 1, 2, 3, and others.")
+    }
+
     @Test func tokensAreRecognizedAndMasked() {
         #expect(SensitiveText.matches("sk-ant-usr-abcdefghijklmnopqrstuv3c27\n"))
         #expect(SensitiveText.matches("ghp_" + String(repeating: "a", count: 36)))

@@ -78,7 +78,8 @@ struct ClipboardStatus: Equatable {
     func openSettings() { context.openSettings(.clipboard) }
 
     var latest: ClipItem? {
-        capturedChangeCount == NSPasteboard.general.changeCount ? items.max { $0.lastUsedAt < $1.lastUsedAt } : nil
+        guard capturedChangeCount == NSPasteboard.general.changeCount, let item = items.max(by: { $0.lastUsedAt < $1.lastUsedAt }), item.content.isText else { return nil }
+        return item
     }
 
     func commandView() -> AnyView { AnyView(ClipboardCommandView(module: self)) }
@@ -318,7 +319,29 @@ struct ClipboardStatus: Equatable {
 
     private static var pasteboardDenied: Bool { ClipboardReader.access == .alwaysDeny }
 
-    func use(_ item: ClipItem, paste: Bool) async {
+    private func pasteContent(_ item: ClipItem, plain: Bool) async throws -> (content: PasteContent, warning: String?) {
+        switch item.content {
+        case .plain:
+            return (.text(item.text), nil)
+        case .rich where plain:
+            return (.text(item.text), nil)
+        case .rich:
+            return (.data(text: item.text, try await payload(item)), nil)
+        case .image:
+            return (.data(text: nil, try await payload(item)), nil)
+        case .files(let paths):
+            let check = await Task.detached { ClipFileCheck(paths: paths) { FileManager.default.fileExists(atPath: $0) } }.value
+            if let error = check.error { throw error }
+            return (.files(check.present), check.warning)
+        }
+    }
+
+    private func payload(_ item: ClipItem) async throws -> [String: Data] {
+        guard let store else { throw ClipboardStore.dataMissing }
+        return try await store.payload(item.id)
+    }
+
+    func use(_ item: ClipItem, paste: Bool, plain: Bool = false) async {
         commandStatus = nil
         let invocation = context.invocation
         var target: PasteTarget?
@@ -336,19 +359,31 @@ struct ClipboardStatus: Equatable {
                 reason = PasteFailure.targetUnavailable.error.message
             }
         }
+        let generation = context.paste.changeCount
+        let loaded: (content: PasteContent, warning: String?)
+        do {
+            loaded = try await pasteContent(item, plain: plain)
+        } catch {
+            return report(error, .command)
+        }
+        if case .text = loaded.content {} else if invocation?.cancelled == true { return }
+        if let warning = loaded.warning {
+            reason = warning
+            target = nil
+        }
         let fallback = paste && target == nil
         let delivery = await context.paste.deliver(
-            item.text, paste: target != nil, target: target, generation: context.paste.changeCount,
+            loaded.content, paste: target != nil, target: target, generation: generation,
             isCancelled: { invocation?.cancelled ?? false }, hide: context.closeCommand)
         switch delivery {
         case .pasted, .copied:
-            commandStatus = fallback ? ClipboardStatus(text: "Copied, not pasted. \(reason ?? "") Press ⌘V to paste.", success: false)
-                                     : ClipboardStatus(text: delivery.message, success: true)
-            if fallback { context.showCommandPassively() }
+            let note = fallback ? "Copied, not pasted. \(reason ?? "") Press ⌘V to paste." : loaded.warning.map { "Copied. \($0)" }
+            commandStatus = note.map { ClipboardStatus(text: $0, success: false) } ?? ClipboardStatus(text: delivery.message, success: true)
+            if note != nil { context.showCommandPassively() }
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .copiedNotPasted(let error):
             context.log.record(error, "clipboard")
-            commandStatus = ClipboardStatus(text: delivery.message, success: false)
+            commandStatus = ClipboardStatus(text: item.content.isText ? delivery.message : "Copied, but not pasted. \(error.message)", success: false)
             context.showCommandPassively()
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .failedBeforeCopy(let error):

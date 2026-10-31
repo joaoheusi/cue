@@ -37,6 +37,12 @@ enum Delivery: Equatable {
     var succeeded: Bool { self == .pasted || self == .copied }
 }
 
+enum PasteContent {
+    case text(String)
+    case data(text: String?, [String: Data])
+    case files([String])
+}
+
 @MainActor final class PasteService {
     static let originType = NSPasteboard.PasteboardType("app.cue.launcher.origin")
 
@@ -146,15 +152,34 @@ enum Delivery: Equatable {
 
     @discardableResult
     func write(_ text: String, expected: Int? = nil) throws(CueError) -> Int {
+        try write(.text(text), expected: expected)
+    }
+
+    @discardableResult
+    func write(_ content: PasteContent, expected: Int? = nil) throws(CueError) -> Int {
         let board = NSPasteboard.general
         if let expected, board.changeCount != expected { throw PasteFailure.clipboardChanged.error }
-        board.declareTypes([.string, Self.originType], owner: nil)
-        guard board.setString(text, forType: .string) else {
-            throw CueError("CLIPBOARD_UNAVAILABLE", "Could not write text to the clipboard.")
+        switch content {
+        case .text(let text):
+            board.declareTypes([.string, Self.originType], owner: nil)
+            guard board.setString(text, forType: .string) else {
+                throw CueError("CLIPBOARD_UNAVAILABLE", "Could not write text to the clipboard.")
+            }
+        case .data(let text, let data):
+            let types = data.keys.sorted().map { NSPasteboard.PasteboardType($0) }
+            board.declareTypes(types + (text == nil ? [] : [.string]) + [Self.originType], owner: nil)
+            let written = types.allSatisfy { board.setData(data[$0.rawValue], forType: $0) }
+            guard written, text.map({ board.setString($0, forType: .string) }) ?? true else { throw Self.writeFailed }
+        case .files(let paths):
+            board.clearContents()
+            guard board.writeObjects(paths.map { URL(fileURLWithPath: $0) as NSURL }) else { throw Self.writeFailed }
+            board.addTypes([Self.originType], owner: nil)
         }
         board.setData(Data(), forType: Self.originType)
         return board.changeCount
     }
+
+    private static let writeFailed = CueError("CLIPBOARD_UNAVAILABLE", "Could not write to the clipboard.")
 
     func clear() -> Int { NSPasteboard.general.clearContents() }
 
@@ -166,9 +191,13 @@ enum Delivery: Equatable {
     }
 
     func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
+        await deliver(.text(text), paste: paste, target: target, generation: generation, isCancelled: isCancelled, hide: hide)
+    }
+
+    func deliver(_ content: PasteContent, paste: Bool, target: PasteTarget?, generation: Int?, isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
         let written: Int
         do {
-            written = try write(text, expected: generation)
+            written = try write(content, expected: generation)
         } catch {
             return .failedBeforeCopy(error)
         }
