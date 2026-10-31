@@ -1,4 +1,7 @@
 import AppKit
+import CueKit
+
+if CommandLine.arguments.dropFirst().first == ClipboardChild.argument { ClipboardReader.runChild() }
 
 MainActor.assumeIsolated {
     let delegate = AppDelegate()

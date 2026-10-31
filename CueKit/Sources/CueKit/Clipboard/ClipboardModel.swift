@@ -229,11 +229,11 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
     }
 }
 
-public enum SkipReason: String, CaseIterable, Sendable {
-    case concealed, ownWrite, secureInput, excludedApp, notText, unreadable, blank, tooLarge, sensitive
+public enum SkipReason: String, CaseIterable, Codable, Sendable {
+    case concealed, ownWrite, secureInput, excludedApp, notText, unreadable, blank, tooLarge, sensitive, stale, timedOut
 }
 
-public enum CaptureDecision: Equatable, Sendable {
+public enum CaptureDecision: Codable, Equatable, Sendable {
     case capture(String)
     case skip(SkipReason)
 }
@@ -246,19 +246,26 @@ public enum CaptureFilter {
         "com.agilebits.onepassword",
     ]
 
-    public static func decide(types: [String], ownType: String, secureInput: Bool, frontmostApp: String?,
-                              excludedApps: [String], sensitive: SensitiveHandling = .maskAndExpire, readText: () -> String?) -> CaptureDecision {
-        if types.contains(ownType) { return .skip(.ownWrite) }
-        if types.contains(where: sensitiveTypes.contains) { return .skip(.concealed) }
-        if secureInput { return .skip(.secureInput) }
+    public static func screen(types: [String], ownType: String, secureInput: Bool, frontmostApp: String?, excludedApps: [String]) -> SkipReason? {
+        if types.contains(ownType) { return .ownWrite }
+        if types.contains(where: sensitiveTypes.contains) { return .concealed }
+        if secureInput { return .secureInput }
         if let app = frontmostApp?.lowercased(), excludedApps.contains(where: { $0.lowercased() == app }) {
-            return .skip(.excludedApp)
+            return .excludedApp
         }
+        return nil
+    }
+
+    public static func read(types: [String], readText: () -> String?) -> CaptureDecision {
         guard types.contains(plainTextType) else { return .skip(.notText) }
         guard let text = readText() else { return .skip(.unreadable) }
         if let reason = textProblem(text) { return .skip(reason) }
-        if sensitive == .skip, SensitiveText.matches(text) { return .skip(.sensitive) }
         return .capture(text)
+    }
+
+    public static func review(_ decision: CaptureDecision, sensitive: SensitiveHandling) -> CaptureDecision {
+        if sensitive == .skip, case .capture(let text) = decision, SensitiveText.matches(text) { return .skip(.sensitive) }
+        return decision
     }
 
     static func textProblem(_ text: String) -> SkipReason? {
