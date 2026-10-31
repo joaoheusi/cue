@@ -399,7 +399,7 @@ struct PaletteView: View {
             case .action(let action):
                 menu.add(action.ai == true ? "Run" : "Use") { submit(item, alternate: false) }
                 menu.add(action.ai == true ? "Copy Result" : "Copy") { submit(item, alternate: true) }
-                menu.add("Edit in Library") { model.context.openLibrary(action.id) }
+                menu.add("Edit in Library", key: "e") { model.context.openLibrary(action.id) }
                 menu.addItem(.separator())
                 menu.add(action.favorite ? "Remove from Favorites" : "Add to Favorites") { Task { await model.setFavorite(action, !action.favorite) } }
                 menu.add("Disable") { Task { await model.setEnabled(action, false) } }
@@ -422,8 +422,8 @@ struct PaletteView: View {
                 break
             }
             menu.addItem(.separator())
-            menu.add("New Action") { model.context.openLibrary("new") }
-            menu.add("Settings…") { model.context.openSettings(.palette) }
+            menu.add("New Action", key: "n") { model.context.openLibrary("new") }
+            menu.add("Settings…", key: ",") { model.context.openSettings(.palette) }
         }
     }
 

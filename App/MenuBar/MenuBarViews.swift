@@ -172,8 +172,10 @@ struct MenuBarCommandView: View {
                 }
             }
             menu.addItem(.separator())
+            menu.add("Show Hidden", key: "h") { module.toggle() }
+            menu.add("Show All", key: "H") { module.show(all: true, cause: .user) }
             menu.add("Apply Rules Now") { Task { await module.applyRules() } }
-            menu.add("Settings…") { module.openSettings() }
+            menu.add("Settings…", key: ",") { module.openSettings() }
         }
     }
 

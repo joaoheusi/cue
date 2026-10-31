@@ -311,6 +311,7 @@ struct LibraryView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
                 TextField("Filter", text: $nav.query, prompt: Text(filterPrompt)).textFieldStyle(.plain).font(.system(size: 13)).focused($focus, equals: .filter)
+                Key(text: "⌘F", compact: true)
             }
             .padding(.horizontal, 9)
             .frame(height: 28)
@@ -322,6 +323,7 @@ struct LibraryView: View {
                 Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28)
             }
             .keyboardShortcut("n")
+            .help("New action (⌘N)")
             .accessibilityLabel("New action")
         }
         .padding(.leading, 12)
