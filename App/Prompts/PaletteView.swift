@@ -318,7 +318,7 @@ struct PaletteView: View {
             } accessory: { EmptyView() }
         case .showAll(let kind, let count):
             HStack {
-                Text("Show all \(count) \(kind.rawValue)").font(.system(size: 13, weight: .medium)).foregroundStyle(Color.accentColor)
+                Text("Show all \(count) \(kind.rawValue)").font(.system(size: 13, weight: .medium)).foregroundStyle(Cue.link)
                 Spacer()
             }
             .padding(.leading, 46)

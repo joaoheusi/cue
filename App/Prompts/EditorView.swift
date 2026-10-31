@@ -2,25 +2,44 @@ import AppKit
 import CueKit
 import SwiftUI
 
-private struct HeaderButton<Label: View>: View {
+struct HeaderButton<Label: View>: View {
     var action: () -> Void
     @ViewBuilder var label: () -> Label
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button(action: action) {
             label()
-                .font(.system(size: 12.5, weight: .medium))
-                .padding(.horizontal, 9)
+                .font(.system(size: 12.5))
+                .foregroundStyle(enabled ? Cue.ink : Color(nsColor: .tertiaryLabelColor))
                 .frame(minWidth: 28, minHeight: 28)
-                .background(Cue.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.primary.opacity(0.12)) }
+                .bordered(Cue.control)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-private struct PropertyRow<Content: View>: View {
+private struct TestButton: View {
+    var ready: Bool
+    var action: () -> Void
+
+    var body: some View {
+        HeaderButton(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "play").font(.system(size: 10))
+                Text("Test")
+                if ready { Key(text: "⌘↵", compact: true) }
+            }
+            .fixedSize()
+            .padding(.horizontal, 10)
+        }
+        .keyboardShortcut(.return, modifiers: .command)
+        .accessibilityLabel("Test")
+    }
+}
+
+private struct Property<Content: View>: View {
     var title: String
     @ViewBuilder var content: () -> Content
 
@@ -30,14 +49,11 @@ private struct PropertyRow<Content: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text(title).frame(width: 120, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel(text: title)
             content()
-            Spacer(minLength: 0)
         }
-        .font(.system(size: 13))
-        .padding(.horizontal, 14)
-        .frame(minHeight: 43)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
 
@@ -47,6 +63,7 @@ struct EditorView: View {
     let snapshot: LibrarySnapshot
     @State private var editor = TemplateEditorController()
     @State private var confirmDelete = false
+    @FocusState private var nameFocused: Bool
 
     private static let variables: [(String, String)] = [
         ("clipboard", "{{clipboard}}"), ("selection", "{{selection}}"), ("date", "{{date}}"), ("time", "{{time}}"), ("ask…", "{{ask:Question}}"),
@@ -69,17 +86,19 @@ struct EditorView: View {
     }
 
     private func form(_ draft: Action) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header(draft)
-                if nav.isDirty, let validation { ErrorBanner(error: validation) }
-                promptCard(draft)
-                properties(draft)
-            }
-            .padding(.horizontal, 26)
-            .padding(.vertical, 20)
+        VStack(alignment: .leading, spacing: 14) {
+            header(draft)
+            if nav.isDirty, let validation { ErrorBanner(error: validation) }
+            promptCard(draft)
+            if let run = model.libraryRun { TestPanel(run: run, model: model) }
+            properties(draft)
         }
-        .background(Color.primary.opacity(0.012))
+        .padding(.top, 18)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 22)
+        .task(id: draft.id) {
+            if draft.revision == 0 { nameFocused = true }
+        }
         .task(id: nav.draft) {
             guard nav.isDirty, nav.canSave, !nav.saving else { return }
             try? await Task.sleep(for: .milliseconds(600))
@@ -110,29 +129,28 @@ struct EditorView: View {
 
     private func header(_ draft: Action) -> some View {
         let isNew = draft.revision == 0
-        return HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                TextField("Name", text: binding(\.name), prompt: Text("Action name"))
+        return HStack(spacing: 12) {
+            Tile(draft.runsAs, size: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("Name", text: binding(\.name), prompt: Text("Untitled"))
                     .textFieldStyle(.plain)
-                    .font(.system(size: 22, weight: .bold))
-                TextField("Description", text: binding(\.description), prompt: Text("What does this action do?"))
+                    .font(.system(size: 21, weight: .bold))
+                    .focused($nameFocused)
+                TextField("Description", text: binding(\.description), prompt: Text("Description"))
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
-            Text(saveState).font(.system(size: 11.5)).foregroundStyle(.secondary).padding(.top, 8)
-            HeaderButton(action: test) {
-                HStack(spacing: 6) {
-                    Image(systemName: "play").font(.system(size: 10))
-                    Text("Test")
-                    Key(text: "⌘↵")
-                }
-                .fixedSize()
+            Segmented(options: [
+                .init(value: RunsAs.text, title: "Text"), .init(value: RunsAs.claude, title: "Claude", dot: Cue.claude),
+            ], selection: draft.runsAs, selectedFill: Cue.segmentQuiet) { kind in
+                nav.update { $0.ai = kind == .claude ? true : nil }
             }
-            .keyboardShortcut(.return, modifiers: .command)
-            .disabled(validation != nil)
+            .fixedSize()
+            TestButton(ready: validation == nil, action: test).disabled(validation != nil)
             HeaderButton(action: { nav.update { $0.favorite.toggle() } }) {
-                Image(systemName: draft.favorite ? "star.fill" : "star").foregroundStyle(draft.favorite ? AnyShapeStyle(.yellow) : AnyShapeStyle(.primary))
+                Image(systemName: draft.favorite ? "star.fill" : "star").font(.system(size: 13))
+                    .foregroundStyle(draft.favorite ? Cue.favorite : Cue.ink)
             }
             .accessibilityLabel("Favorite")
             Menu {
@@ -144,40 +162,56 @@ struct EditorView: View {
                 Divider()
                 Button("Delete…", role: .destructive) { confirmDelete = true }.disabled(isNew)
             } label: {
-                Image(systemName: "ellipsis").frame(width: 28, height: 28)
-                    .background(Cue.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.primary.opacity(0.12)) }
+                Image(systemName: "ellipsis").font(.system(size: 13)).frame(width: 28, height: 28).bordered(Cue.control)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
             .accessibilityLabel("More")
         }
+        .frame(height: 52)
     }
 
     private func promptCard(_ draft: Action) -> some View {
         VStack(spacing: 0) {
+            TemplateEditor(text: binding(\.template), controller: editor)
+                .overlay(alignment: .topLeading) {
+                    if draft.template.isEmpty {
+                        Text("Text").font(.system(size: 13, design: .monospaced)).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 18).padding(.vertical, 16).allowsHitTesting(false)
+                    }
+                }
+            CardDivider()
             HStack(spacing: 6) {
-                Text("Prompt").font(.system(size: 12, weight: .semibold)).foregroundStyle(.primary.opacity(0.8)).padding(.trailing, 6)
-                Text("Insert").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text("{ }").font(.system(size: 12, design: .monospaced))
+                    Text("Insert")
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 4)
                 ForEach(Self.variables, id: \.0) { name, token in
                     Button { editor.insert(token) } label: {
-                        Chip(text: name, style: name == "clipboard" ? .claude : .neutral)
+                        Text(name)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Cue.keyText)
+                            .padding(.horizontal, 8)
+                            .frame(height: 22)
+                            .background(Cue.subtle, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Insert \(name)")
                 }
-                Spacer()
-                Text(ByteCountFormatter.string(fromByteCount: Int64(draft.template.utf8.count), countStyle: .memory))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(saveState).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             .padding(.horizontal, 10)
             .frame(height: 38)
-            .background(Color.primary.opacity(0.02))
-            CardDivider()
-            TemplateEditor(text: binding(\.template), controller: editor).frame(minHeight: 170)
+            .background(Cue.wellBar)
         }
-        .background(Cue.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(minHeight: 120, maxHeight: .infinity)
+        .background(Cue.well, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
@@ -187,59 +221,51 @@ struct EditorView: View {
         return snapshot.categories + [current]
     }
 
+    private func deliveryTitle(_ mode: DeliveryMode) -> String {
+        switch mode {
+        case .inherit: snapshot.settings.defaultDelivery == .paste ? "Default (Paste)" : "Default (Copy)"
+        case .paste: "Paste into front app"
+        case .copy: "Copy"
+        }
+    }
+
     private func properties(_ draft: Action) -> some View {
-        CardList {
-            PropertyRow("Runs as") {
-                Segmented(options: [
-                    .init(value: RunsAs.text, title: "Text"), .init(value: RunsAs.claude, title: "Claude"),
-                    .init(value: RunsAs.script, title: "Script", enabled: false),
-                ], selection: draft.runsAs) { kind in
-                    nav.update { $0.ai = kind == .claude ? true : nil }
+        Grid(alignment: .topLeading, horizontalSpacing: 16, verticalSpacing: 14) {
+            GridRow {
+                Property("Result") {
+                    PopMenu(title: deliveryTitle(draft.deliveryMode), selection: binding(\.deliveryMode),
+                            options: [DeliveryMode.inherit, .paste, .copy].map { ($0, deliveryTitle($0)) })
                 }
-            }
-            CardDivider()
-            PropertyRow("Result") {
-                Picker("", selection: binding(\.deliveryMode)) {
-                    Text("Default").tag(DeliveryMode.inherit)
-                    Text("Paste into front app").tag(DeliveryMode.paste)
-                    Text("Copy").tag(DeliveryMode.copy)
+                Property("Category") {
+                    PopMenu(title: draft.category ?? "None", dimmed: draft.category == nil, selection: binding(\.category),
+                            options: [(String?.none, "None")] + categories.map { (Optional($0), $0) })
                 }
-                .labelsHidden()
-                .fixedSize()
-                if draft.deliveryMode == .inherit {
-                    Text(snapshot.settings.defaultDelivery == .paste ? "Paste into front app" : "Copy").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 10)
-                }
-            }
-            CardDivider()
-            PropertyRow("Category") {
-                Picker("", selection: binding(\.category)) {
-                    Text("None").tag(String?.none)
-                    ForEach(categories, id: \.self) { Text($0).tag(Optional($0)) }
-                }
-                .labelsHidden()
-                .fixedSize()
-            }
-            CardDivider()
-            PropertyRow("Keywords") {
-                TagField(tags: draft.aliases) { tags in nav.update { $0.aliases = tags } }.padding(.vertical, 8)
-            }
-            CardDivider()
-            PropertyRow("Shortcut") {
-                if draft.revision == 0 {
-                    Text("Add a name and text first.").foregroundStyle(.secondary)
-                } else {
-                    let owner = PromptsModel.owner(draft)
-                    ShortcutRecorder(value: snapshot.bindings[owner].flatMap(Shortcut.init)) { shortcut in
-                        Task { await model.setShortcut(shortcut, for: draft) }
-                    }
-                    if let error = model.context.hotKeys.statuses[owner]?.error {
-                        Text(error).font(.caption).foregroundStyle(.orange).padding(.leading, 10)
+                Property("Shortcut") {
+                    if draft.revision == 0 {
+                        ShortcutRecorder(value: nil, width: nil, height: 28) { _ in }.disabled(true)
+                    } else {
+                        let owner = PromptsModel.owner(draft)
+                        ShortcutRecorder(value: snapshot.bindings[owner].flatMap(Shortcut.init), width: nil, height: 28) { shortcut in
+                            Task { await model.setShortcut(shortcut, for: draft) }
+                        }
+                        if let error = model.context.hotKeys.statuses[owner]?.error {
+                            Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2)
+                        }
                     }
                 }
             }
-            CardDivider()
-            PropertyRow("Enabled") {
-                SwitchToggle(isOn: binding(\.enabled), label: "Enabled")
+            GridRow {
+                Property("Keywords") {
+                    TagField(tags: draft.aliases, placeholder: "Add", compact: true) { tags in nav.update { $0.aliases = tags } }
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                        .bordered(Cue.input)
+                }
+                .gridCellColumns(2)
+                Property("Enabled") {
+                    SwitchToggle(isOn: binding(\.enabled), label: "Enabled").frame(height: 28)
+                }
             }
         }
     }
@@ -261,66 +287,59 @@ struct ScriptEditorView: View {
     @State private var running = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(script.name).font(.system(size: 22, weight: .bold))
-                        Text(script.url.lastPathComponent).font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if running { ProgressView().controlSize(.small).padding(.top, 6) }
-                    HeaderButton(action: test) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "play").font(.system(size: 10))
-                            Text("Test")
-                            Key(text: "⌘↵")
-                        }
-                        .fixedSize()
-                    }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(running)
-                    HeaderButton(action: { NSWorkspace.shared.activateFileViewerSelecting([script.url]) }) { Text("Reveal") }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Tile(.script, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(script.name).font(.system(size: 21, weight: .bold)).lineLimit(1)
+                    Text(script.url.lastPathComponent).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Script").font(.system(size: 12, weight: .semibold)).foregroundStyle(.primary.opacity(0.8))
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                        .background(Color.primary.opacity(0.02))
-                    CardDivider()
-                    Text(source)
-                        .font(.system(size: 12, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, minHeight: 170, alignment: .topLeading)
-                        .padding(12)
+                Spacer()
+                if running { ProgressView().controlSize(.small) }
+                TestButton(ready: !running, action: test).disabled(running)
+                HeaderButton(action: { NSWorkspace.shared.activateFileViewerSelecting([script.url]) }) {
+                    Text("Reveal").padding(.horizontal, 10)
                 }
-                .background(Cue.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
-                CardList {
-                    PropertyRow("Runs as") {
-                        Segmented(options: [
-                            .init(value: RunsAs.text, title: "Text", enabled: false), .init(value: RunsAs.claude, title: "Claude", enabled: false),
-                            .init(value: RunsAs.script, title: "Script"),
-                        ], selection: RunsAs.script) { _ in }
+            }
+            .frame(height: 52)
+            ScrollView {
+                Text(source)
+                    .font(.system(size: 13, design: .monospaced))
+                    .lineSpacing(6)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 16)
+            }
+            .frame(maxHeight: .infinity)
+            .background(Cue.well, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
+            if let run = model.libraryRun { TestPanel(run: run, model: model) }
+            Grid(alignment: .topLeading, horizontalSpacing: 16, verticalSpacing: 14) {
+                GridRow {
+                    Property("Result") {
+                        Text(model.snapshot?.settings.scriptOutput == .show ? "Show output" : "Copy output")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                            .bordered(Cue.input)
                     }
-                    CardDivider()
-                    PropertyRow("Result") {
-                        Text(model.snapshot?.settings.scriptOutput == .show ? "Show output" : "Copy output").foregroundStyle(.secondary)
-                    }
-                    CardDivider()
-                    PropertyRow("Shortcut") {
-                        ShortcutRecorder(value: commands.shortcut(for: script)) { shortcut in
+                    Property("Shortcut") {
+                        ShortcutRecorder(value: commands.shortcut(for: script), width: nil, height: 28) { shortcut in
                             Task { await commands.setShortcut(shortcut, for: script) }
                         }
                         if let error = commands.shortcutError(for: script) {
-                            Text(error).font(.caption).foregroundStyle(.orange).padding(.leading, 10)
+                            Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2)
                         }
                     }
+                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
                 }
             }
-            .padding(.horizontal, 26)
-            .padding(.vertical, 20)
         }
+        .padding(.top, 18)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 22)
         .task {
             let url = script.url
             let text = await Task.detached { (try? BoundedFile.read(url, maxBytes: 64 * 1024)).map { String(decoding: $0, as: UTF8.self) } }.value
@@ -356,6 +375,11 @@ struct TemplateEditor: NSViewRepresentable {
     let controller: TemplateEditorController
 
     private static let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private static let paragraph = {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 6
+        return style
+    }()
     private static let token = try? NSRegularExpression(pattern: #"(\{\{)(clipboard|selection|date|time|ask(?::[^}]*)?)(\}\})"#)
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -368,7 +392,7 @@ struct TemplateEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.textContainerInset = NSSize(width: 13, height: 16)
         textView.drawsBackground = false
         textView.string = text
         textView.delegate = context.coordinator
@@ -376,6 +400,7 @@ struct TemplateEditor: NSViewRepresentable {
         controller.textView = textView
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
+        scroll.autohidesScrollers = true
         Self.style(textView)
         return scroll
     }
@@ -391,7 +416,7 @@ struct TemplateEditor: NSViewRepresentable {
         guard let storage = textView.textStorage, !textView.hasMarkedText() else { return }
         let whole = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
-        storage.setAttributes([.font: font, .foregroundColor: NSColor.labelColor], range: whole)
+        storage.setAttributes([.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph], range: whole)
         for match in token?.matches(in: storage.string, range: whole) ?? [] {
             storage.addAttributes([.backgroundColor: NSColor(Cue.tokenFill), .foregroundColor: NSColor(Cue.token)], range: match.range)
             for brace in [match.range(at: 1), match.range(at: 3)] {
@@ -399,7 +424,7 @@ struct TemplateEditor: NSViewRepresentable {
             }
         }
         storage.endEditing()
-        textView.typingAttributes = [.font: font, .foregroundColor: NSColor.labelColor]
+        textView.typingAttributes = [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }

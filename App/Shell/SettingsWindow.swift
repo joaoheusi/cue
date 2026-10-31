@@ -108,7 +108,7 @@ struct PrivacySettingsView: View {
                         Text("Login item, LaunchAgent, Keychain keys, data folder, app").font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Uninstall…", role: .destructive) { Uninstaller.run(context: context) }.foregroundStyle(.red)
+                    Button("Uninstall…", role: .destructive) { Uninstaller.run(context: context) }.foregroundStyle(Cue.danger)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)

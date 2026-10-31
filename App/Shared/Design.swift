@@ -4,21 +4,57 @@ import SwiftUI
 
 enum Cue {
     static let claude = Color(red: 0.784, green: 0.392, blue: 0.247)
+    static let claudeAccent = adaptive(light: hex(0xC8643F), dark: hex(0xF0A585))
     static let script = Color(red: 0.180, green: 0.545, blue: 0.341)
-    static let text = Color(red: 0.557, green: 0.557, blue: 0.576)
-    static let success = script
-    static let warning = adaptive(light: NSColor(red: 0.541, green: 0.310, blue: 0, alpha: 1), dark: NSColor(red: 0.98, green: 0.72, blue: 0.36, alpha: 1))
-    static let warningFill = adaptive(light: NSColor(red: 1, green: 0.965, blue: 0.898, alpha: 1), dark: NSColor(red: 0.98, green: 0.72, blue: 0.36, alpha: 0.16))
-    static let token = adaptive(light: NSColor(red: 0.541, green: 0.239, blue: 0.122, alpha: 1), dark: NSColor(red: 0.96, green: 0.68, blue: 0.56, alpha: 1))
-    static let tokenFill = adaptive(light: NSColor(red: 0.965, green: 0.906, blue: 0.878, alpha: 1), dark: NSColor(red: 0.784, green: 0.392, blue: 0.247, alpha: 0.28))
-    static let added = adaptive(light: NSColor(red: 0.18, green: 0.545, blue: 0.341, alpha: 0.16), dark: NSColor(red: 0.3, green: 0.75, blue: 0.5, alpha: 0.26))
+    static let text = adaptive(light: hex(0x8E8E93), dark: hex(0x636366))
+    static let success = adaptive(light: hex(0x2E8B57), dark: hex(0x30D158))
+    static let toggle = adaptive(light: hex(0x2E8B57), dark: hex(0x30A46C))
+    static let danger = adaptive(light: hex(0xC0362C), dark: hex(0xFF6961))
+    static let favorite = adaptive(light: hex(0xD9A400), dark: hex(0xFFD60A))
+    static let accent = adaptive(light: hex(0x0A60D0), dark: hex(0x4DA3FF))
+    static let link = adaptive(light: hex(0x0060CC), dark: hex(0x4DA3FF))
+    static let warning = adaptive(light: hex(0x8A4F00), dark: hex(0xFFB340))
+    static let warningFill = adaptive(light: hex(0xFFF6E5), dark: hex(0xFF9F0A, 0.12))
+    static let token = adaptive(light: hex(0x8A3D1F), dark: hex(0xF0A585))
+    static let tokenFill = adaptive(light: hex(0xF6E7E0), dark: hex(0xC8643F, 0.22))
+    static let added = adaptive(light: hex(0xDDF3E4), dark: hex(0x30D158, 0.2))
+    static let addedText = adaptive(light: hex(0x14602F), dark: hex(0x7EE2A8))
     static let hairline = Color.primary.opacity(0.08)
-    static let card = Color(nsColor: .controlBackgroundColor)
-    static let fill = Color.primary.opacity(0.06)
-    static let selection = Color.primary.opacity(0.09)
+    static let card = adaptive(light: hex(0xFFFFFF), dark: hex(0x1C1C1E))
+    static let group = adaptive(light: hex(0xFFFFFF), dark: hex(0x2A2A2D))
+    static let page = adaptive(light: hex(0xF5F5F7), dark: hex(0x1E1E20))
+    static let sidebar = adaptive(light: hex(0xF2F2F5), dark: hex(0x2A2A2D))
+    static let well = adaptive(light: hex(0xFAFAFB), dark: hex(0x141416))
+    static let wellBar = adaptive(light: hex(0xFFFFFF), dark: hex(0xFFFFFF, 0))
+    static let panel = adaptive(light: hex(0xF5F5F7), dark: hex(0x232326))
+    static let detail = adaptive(light: hex(0, 0.012), dark: hex(0, 0.12))
+    static let fill = adaptive(light: hex(0, 0.06), dark: hex(0xFFFFFF, 0.08))
+    static let subtle = adaptive(light: hex(0, 0.05), dark: hex(0xFFFFFF, 0.07))
+    static let quiet = adaptive(light: hex(0, 0.04), dark: hex(0xFFFFFF, 0.06))
+    static let selection = adaptive(light: hex(0, 0.07), dark: hex(0xFFFFFF, 0.1))
+    static let rowSelected = adaptive(light: hex(0x0A60D0), dark: hex(0x0A5FCC))
+    static let keyFill = adaptive(light: hex(0, 0.065), dark: hex(0xFFFFFF, 0.1))
+    static let keyText = adaptive(light: hex(0x3A3A3C), dark: hex(0xD1D1D6))
+    static let input = adaptive(light: hex(0xFFFFFF), dark: hex(0xFFFFFF, 0.07))
+    static let control = adaptive(light: hex(0xFFFFFF), dark: hex(0xFFFFFF, 0.04))
+    static let controlBorder = adaptive(light: hex(0, 0.12), dark: hex(0xFFFFFF, 0.1))
+    static let segment = adaptive(light: hex(0xFFFFFF), dark: hex(0x5A5A5E))
+    static let segmentQuiet = adaptive(light: hex(0xFFFFFF), dark: hex(0x48484A))
+    static let ink = adaptive(light: hex(0x1D1D1F), dark: hex(0xF2F2F7))
 
     private static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light })
+    }
+
+    private static func hex(_ value: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat(value >> 16 & 0xFF) / 255, green: CGFloat(value >> 8 & 0xFF) / 255, blue: CGFloat(value & 0xFF) / 255, alpha: alpha)
+    }
+}
+
+extension View {
+    func bordered(_ fill: Color, radius: CGFloat = 7) -> some View {
+        background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Cue.controlBorder) }
     }
 }
 
@@ -98,7 +134,7 @@ struct Tile: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: size * 0.5, weight: .semibold))
+            .font(.system(size: max(10, size * 0.5), weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(color, in: RoundedRectangle(cornerRadius: size * 0.27, style: .continuous))
@@ -117,14 +153,16 @@ struct FileIcon: View {
 struct Key: View {
     var text: String
     var dimmed = false
+    var onAccent = false
+    var compact = false
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(dimmed ? .tertiary : .secondary)
-            .frame(minWidth: 18, minHeight: 18)
+            .font(.system(size: compact ? 10 : 11, weight: .medium))
+            .foregroundStyle(onAccent ? AnyShapeStyle(.white) : dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Cue.keyText))
+            .frame(minWidth: 18, minHeight: compact ? 16 : 18)
             .padding(.horizontal, 5)
-            .background(Color.primary.opacity(0.065), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .background(onAccent ? Color.white.opacity(0.2) : Cue.keyFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 
@@ -165,10 +203,10 @@ struct FilterChip: View {
                 if let count { Text("\(count)").opacity(0.7) }
             }
             .font(.system(size: 12, weight: selected ? .semibold : .medium))
-            .foregroundStyle(selected ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor)) : AnyShapeStyle(.primary.opacity(0.8)))
+            .foregroundStyle(selected ? AnyShapeStyle(Cue.card) : AnyShapeStyle(.primary.opacity(0.8)))
             .padding(.horizontal, 10)
             .frame(height: 24)
-            .background(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(Color.primary.opacity(0.05)), in: Capsule())
+            .background(selected ? Cue.ink : Cue.subtle, in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -184,11 +222,13 @@ struct Segmented<Value: Hashable>: View {
         var key: String?
         var identifier: String?
         var enabled = true
+        var dot: Color?
     }
 
     var options: [Option]
     var selection: Value
     var height: CGFloat = 26
+    var selectedFill = Cue.segment
     var onSelect: (Value) -> Void
 
     var body: some View {
@@ -198,6 +238,7 @@ struct Segmented<Value: Hashable>: View {
                 Button { onSelect(option.value) } label: {
                     HStack(spacing: 6) {
                         if let symbol = option.symbol { Image(systemName: symbol).font(.system(size: 11)) }
+                        if let dot = option.dot { StatusDot(color: dot) }
                         Text(option.title)
                         if let key = option.key { Text(key).foregroundStyle(.tertiary).fontWeight(.medium) }
                     }
@@ -208,7 +249,7 @@ struct Segmented<Value: Hashable>: View {
                     .background {
                         if selected {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(Color(nsColor: .controlColor))
+                                .fill(selectedFill)
                                 .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
                         }
                     }
@@ -236,7 +277,38 @@ struct SwitchToggle: View {
     var label = ""
 
     var body: some View {
-        Toggle(label, isOn: $isOn).toggleStyle(.switch).tint(Cue.success).labelsHidden().controlSize(.small)
+        Toggle(label, isOn: $isOn).toggleStyle(.switch).tint(Cue.toggle).labelsHidden().controlSize(.small)
+    }
+}
+
+struct PopMenu<Value: Hashable>: View {
+    var title: String
+    var dimmed = false
+    @Binding var selection: Value
+    var options: [(value: Value, title: String)]
+
+    var body: some View {
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(options, id: \.value) { Text($0.title).tag($0.value) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 6) {
+                Text(title).lineLimit(1).foregroundStyle(dimmed ? .secondary : .primary)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+            }
+            .font(.system(size: 12.5))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .bordered(Cue.input)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
     }
 }
 
@@ -277,6 +349,7 @@ struct TagField: View {
     var tags: [String]
     var placeholder = "Add…"
     var monospaced = false
+    var compact = false
     var onChange: ([String]) -> Void
     @State private var draft = ""
 
@@ -284,21 +357,21 @@ struct TagField: View {
         FlowLayout {
             ForEach(tags, id: \.self) { tag in
                 HStack(spacing: 5) {
-                    Text(tag).font(monospaced ? .system(size: 12, design: .monospaced) : .system(size: 12.5))
+                    Text(tag).font(monospaced ? .system(size: 12, design: .monospaced) : .system(size: compact ? 11.5 : 12.5))
                     Button { onChange(tags.filter { $0 != tag }) } label: {
                         Image(systemName: "xmark").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Remove \(tag)")
                 }
-                .padding(.horizontal, 9)
-                .frame(height: 24)
-                .background(Cue.fill, in: RoundedRectangle(cornerRadius: monospaced ? 6 : 12, style: .continuous))
+                .padding(.horizontal, compact ? 7 : 9)
+                .frame(height: compact ? 20 : 24)
+                .background(compact ? Cue.keyFill : Cue.fill, in: RoundedRectangle(cornerRadius: compact ? 5 : monospaced ? 6 : 12, style: .continuous))
             }
             TextField(placeholder, text: $draft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
-                .frame(width: 90, height: 24)
+                .frame(width: 90, height: compact ? 20 : 24)
                 .onSubmit(commit)
         }
     }
@@ -316,7 +389,7 @@ struct CardList<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) { content() }
             .frame(maxWidth: .infinity)
-            .background(Cue.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Cue.group, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
@@ -338,6 +411,7 @@ struct SettingsPage<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 13))
+        .background(Cue.page)
     }
 }
 

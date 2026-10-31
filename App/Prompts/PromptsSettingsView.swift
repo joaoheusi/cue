@@ -283,7 +283,7 @@ struct PaletteSettingsView: View {
                 .foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.primary.opacity(0.75)))
                 .padding(.horizontal, 11)
                 .frame(height: 24)
-                .background(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Cue.fill), in: Capsule())
+                .background(on ? AnyShapeStyle(Cue.accent) : AnyShapeStyle(Cue.fill), in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -446,7 +446,7 @@ struct ActionsSettingsView: View {
         if module.testingKey {
             ProgressView().controlSize(.small)
         } else if let test = module.keyTest {
-            StatusDot(color: test.valid ? Cue.success : .red)
+            StatusDot(color: test.valid ? Cue.success : Cue.danger)
             Text(test.valid ? "Valid" : test.message ?? "Invalid").lineLimit(1)
             TimelineView(.periodic(from: .now, by: 30)) { _ in
                 Text("· tested \(test.at.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary)
