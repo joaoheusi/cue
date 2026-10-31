@@ -89,7 +89,8 @@
             "enum": [
               "inherit",
               "copy",
-              "paste"
+              "paste",
+              "replace"
             ]
           },
           "favorite": {

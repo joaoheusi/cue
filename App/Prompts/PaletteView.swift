@@ -364,7 +364,10 @@ struct PaletteView: View {
     @ViewBuilder private func hints(_ item: PaletteItem?) -> some View {
         switch item {
         case .action(let action):
-            if action.ai == true {
+            if action.deliveryMode == .replace {
+                KeyHint(label: "Replace", keys: "↵", primary: true)
+                KeyHint(label: action.ai == true ? "Copy result" : "Copy", keys: "⌘↵")
+            } else if action.ai == true {
                 KeyHint(label: "Run", keys: "↵", primary: true)
                 KeyHint(label: "Copy result", keys: "⌘↵")
             } else if model.willPaste(action, copyOnly: false) {
@@ -524,11 +527,15 @@ struct PaletteView: View {
             defer { busy = false }
             switch await work() {
             case .success(.copiedNotPasted(let failure)):
-                error = CueError(failure.code, "Text copied, but not pasted. \(failure.message)")
+                error = CueError(failure.code, Delivery.copiedNotPasted(failure).message)
                 recovering = true
                 model.context.showCommandPassively()
             case .success(.failedBeforeCopy(let failure)):
                 error = failure
+                if !model.context.commandVisible() {
+                    recovering = true
+                    model.context.showCommandPassively()
+                }
             case .success:
                 break
             case .failure(let failure):

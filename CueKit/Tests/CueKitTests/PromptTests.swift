@@ -76,6 +76,31 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         bad.id = "not-a-uuid"
         #expect(throws: CueError.self) { try ActionRules.validate(&bad) }
     }
+
+    @Test func replaceRequiresTheSelectionToken() throws {
+        var missing = sample(template: "Fix {{clipboard}}")
+        missing.deliveryMode = .replace
+        #expect(throws: CueError.validation("Add {{selection}} to the text to use Replace selection.")) { try ActionRules.validate(&missing) }
+        var escaped = sample(template: #"Fix \{{selection}}"#)
+        escaped.deliveryMode = .replace
+        #expect(throws: CueError.self) { try ActionRules.validate(&escaped) }
+        var ok = sample(template: "Fix {{selection}}")
+        ok.deliveryMode = .replace
+        try ActionRules.validate(&ok)
+        ok.deliveryMode = .copy
+        ok.template = "Fix {{clipboard}}"
+        try ActionRules.validate(&ok)
+    }
+
+    @Test func replaceSurvivesEncoding() throws {
+        var action = sample(template: "Fix {{selection}}")
+        action.deliveryMode = .replace
+        let decoded = try JSONDecoder().decode(Action.self, from: JSONEncoder().encode(action))
+        #expect(decoded.deliveryMode == .replace)
+        let exported = try JSONDecoder().decode(ExportAction.self, from: JSONEncoder().encode(action.export))
+        #expect(exported.deliveryMode == .replace)
+        #expect(String(decoding: try JSONEncoder().encode(DeliveryMode.replace), as: UTF8.self) == #""replace""#)
+    }
 }
 
 @Suite struct SearchTests {
@@ -205,6 +230,19 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         let second = try await store.preview(data)
         try await store.save(sample("Other"))
         await #expect(throws: CueError.self) { try await store.commitImport(token: second.token, update: true) }
+    }
+
+    @Test func importedReplaceBecomesCopy() async throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try PromptStore(directory: dir)
+        var action = sample(template: "Fix {{selection}}")
+        action.deliveryMode = .replace
+        let saved = try await store.save(action)
+        #expect(try await store.get(saved.id).deliveryMode == .replace)
+        let preview = try await store.preview(try JSONEncoder().encode(ExportFile(actions: [saved.export])))
+        try await store.commitImport(token: preview.token, update: true)
+        #expect(try await store.get(saved.id).deliveryMode == .copy)
     }
 
     @Test func invalidImportChangesNothing() async throws {

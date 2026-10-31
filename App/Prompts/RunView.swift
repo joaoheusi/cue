@@ -139,7 +139,7 @@ struct RunView: View {
         CommandFooter {
             if run.kind == .claude {
                 Menu {
-                    ForEach(ActionRun.Finish.allCases.filter { $0 != .paste || run.target != nil }) { option in
+                    ForEach(run.finishes) { option in
                         Button(run.finishTitle(option)) { run.finish = option }
                     }
                 } label: {
@@ -155,7 +155,7 @@ struct RunView: View {
                     .buttonStyle(.plain)
             }
             if run.target != nil {
-                command("Paste now", keys: "↵", primary: !run.isRunning, enabled: run.hasResult, shortcut: .return, modifiers: []) {
+                command(run.replacing == nil ? "Paste now" : "Replace now", keys: "↵", primary: !run.isRunning, enabled: run.hasResult, shortcut: .return, modifiers: []) {
                     Task { await model.deliver(run, paste: true) }
                 }
                 command("Copy", keys: "⌘↵", enabled: run.hasResult, shortcut: .return, modifiers: .command) { copy() }

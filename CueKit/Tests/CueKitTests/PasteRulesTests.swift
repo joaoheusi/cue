@@ -44,4 +44,20 @@ import Testing
         #expect(PasteRules.isRetryable(.modifiersHeld) && PasteRules.isRetryable(.focusTimeout))
         #expect(!PasteRules.isRetryable(.clipboardChanged) && !PasteRules.isRetryable(.targetChanged))
     }
+
+    @Test func replaceNeedsTheExactOriginalSelection() {
+        #expect(PasteRules.replace(original: "hello", current: "hello") == nil)
+        #expect(PasteRules.replace(original: "hello", current: "hello world") == .selectionChanged)
+        #expect(PasteRules.replace(original: "hello", current: "") == .selectionChanged)
+        #expect(PasteRules.replace(original: "hello", current: nil) == .selectionChanged)
+        #expect(!PasteRules.isRetryable(.selectionChanged))
+    }
+
+    @Test func replaceDoesNotNormalizeTheSelection() {
+        #expect(PasteRules.replace(original: "a\nb", current: "a\r\nb") == .selectionChanged)
+        #expect(PasteRules.replace(original: "a\r\nb", current: "a\nb") == .selectionChanged)
+        #expect(PasteRules.replace(original: "a\r\nb", current: "a\r\nb") == nil)
+        #expect(PasteRules.replace(original: "hello", current: "hello ") == .selectionChanged)
+        #expect(PasteRules.replace(original: "Hello", current: "hello") == .selectionChanged)
+    }
 }

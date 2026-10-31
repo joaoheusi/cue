@@ -39,7 +39,8 @@ struct ActionDetail: View {
 
     private var delivery: String {
         guard model.willPaste(action, copyOnly: false) else { return "Copy" }
-        return model.context.invocation?.front?.localizedName.map { "Paste → \($0)" } ?? "Paste"
+        let verb = action.deliveryMode == .replace ? "Replace" : "Paste"
+        return model.context.invocation?.front?.localizedName.map { "\(verb) → \($0)" } ?? verb
     }
 
     var body: some View {

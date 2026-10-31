@@ -9,7 +9,7 @@ import SwiftUI
     }
 
     enum Finish: String, CaseIterable, Identifiable {
-        case paste, copy, keep
+        case paste, replace, copy, keep
         var id: String { rawValue }
     }
 
@@ -27,6 +27,7 @@ import SwiftUI
     let target: PasteTarget?
     let targetName: String?
     var generation: Int?
+    let replacing: String?
     var output = ""
     var phase = Phase.running
     var finish: Finish
@@ -37,7 +38,7 @@ import SwiftUI
     @ObservationIgnored var task: Task<Void, Never>?
 
     init(title: String, kind: RunsAs, surface: Surface, prompt: String = "", input: String? = nil, inputName: String = "clipboard", action: Action? = nil,
-         invocation: Invocation, target: PasteTarget? = nil, targetName: String? = nil, generation: Int? = nil, finish: Finish) {
+         invocation: Invocation, target: PasteTarget? = nil, targetName: String? = nil, generation: Int? = nil, replacing: String? = nil, finish: Finish) {
         self.title = title
         self.kind = kind
         self.surface = surface
@@ -49,6 +50,7 @@ import SwiftUI
         self.target = target
         self.targetName = targetName
         self.generation = generation
+        self.replacing = replacing
         self.finish = finish
     }
 
@@ -57,9 +59,20 @@ import SwiftUI
     var canCompare: Bool { kind == .claude && input != nil }
     var elapsed: Double { (ended ?? Date()).timeIntervalSince(started) }
 
+    var finishes: [Finish] {
+        Finish.allCases.filter { option in
+            switch option {
+            case .paste: target != nil && replacing == nil
+            case .replace: replacing != nil
+            case .copy, .keep: true
+            }
+        }
+    }
+
     func finishTitle(_ finish: Finish) -> String {
         switch finish {
         case .paste: "Paste into \(targetName ?? "front app")"
+        case .replace: "Replace selection in \(targetName ?? "front app")"
         case .copy: "Copy"
         case .keep: "Keep open"
         }

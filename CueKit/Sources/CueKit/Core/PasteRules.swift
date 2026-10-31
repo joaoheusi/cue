@@ -2,7 +2,7 @@ import Foundation
 
 public enum PasteFailure: Int, Sendable {
     case permission = 1, targetUnavailable, targetChanged, protectedInput, terminal, clipboardChanged, modifiersHeld,
-         unsupported, focusTimeout, cancelled, postPermission
+         unsupported, focusTimeout, cancelled, postPermission, selectionChanged
 
     public var error: CueError {
         switch self {
@@ -17,6 +17,7 @@ public enum PasteFailure: Int, Sendable {
         case .focusTimeout: CueError("FOCUS_TIMEOUT", "Could not return to the target window. Paste manually.")
         case .cancelled: CueError("CANCELLED", "Paste cancelled.")
         case .postPermission: CueError("PASTE_PERMISSION_REQUIRED", "macOS allows Cue to read the target but is blocking the paste shortcut. Refresh Cue’s Accessibility access, then quit and reopen Cue.")
+        case .selectionChanged: CueError("SELECTION_CHANGED", "Your selection changed, so Cue did not replace it. The result is on the clipboard.")
         }
     }
 }
@@ -64,6 +65,10 @@ public enum PasteRules {
         if !clipboardUnchanged { return .clipboardChanged }
         if modifiersHeld { return .modifiersHeld }
         return nil
+    }
+
+    public static func replace(original: String, current: String?) -> PasteFailure? {
+        current == original ? nil : .selectionChanged
     }
 
     public static func isRetryable(_ failure: PasteFailure) -> Bool {

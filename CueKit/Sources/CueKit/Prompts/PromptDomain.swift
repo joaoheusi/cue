@@ -1,7 +1,7 @@
 import Foundation
 
 public enum DeliveryMode: String, Codable, Sendable, CaseIterable {
-    case inherit, copy, paste
+    case inherit, copy, paste, replace
 }
 
 public struct Action: Codable, Sendable, Identifiable, Equatable {
@@ -357,6 +357,9 @@ public enum ActionRules {
         }
         try Template.validateText(a.template, maxBytes: Template.templateLimit)
         _ = try Template.renderLocal(a.template, clipboard: "sample clipboard")
+        if a.deliveryMode == .replace, try !Template.uses(a.template).selection {
+            throw CueError.validation("Add {{selection}} to the text to use Replace selection.")
+        }
         a.aliases = try normalizeList(a.aliases, max: 50, field: "Alias")
         a.tags = try normalizeList(a.tags, max: 30, field: "Tag")
         if let category = a.category {

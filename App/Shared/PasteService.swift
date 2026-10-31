@@ -29,6 +29,7 @@ enum Delivery: Equatable {
         case .pasted: "Paste sent."
         case .copied: "Copied."
         case .cancelled: "Cancelled."
+        case .copiedNotPasted(let e) where e == PasteFailure.selectionChanged.error: e.message
         case .copiedNotPasted(let e): "Text copied, but not pasted. \(e.message)"
         case .failedBeforeCopy(let e): e.message
         }
@@ -92,12 +93,35 @@ enum PasteContent {
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
     }
 
-    func selectedText(in app: NSRunningApplication?) -> String? {
-        guard canReadTarget, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+    func selectedText(in app: NSRunningApplication?, unchanged generation: Int? = nil) async -> (text: String?, copied: Bool) {
+        guard canReadTarget, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return (nil, false) }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
-        guard let field = element(application, kAXFocusedUIElementAttribute), !isSecure(field) else { return nil }
-        return attribute(field, kAXSelectedTextAttribute) as? String
+        let field = element(application, kAXFocusedUIElementAttribute)
+        if isSecure(field) { return (nil, false) }
+        if let text = field.flatMap({ attribute($0, kAXSelectedTextAttribute) as? String }), !text.isEmpty { return (text, false) }
+        return await copySelection(from: app, application: application, unchanged: generation)
+    }
+
+    private func copySelection(from app: NSRunningApplication, application: AXUIElement, unchanged generation: Int?) async -> (text: String?, copied: Bool) {
+        let released = Date().addingTimeInterval(0.8)
+        while modifiersHeld {
+            guard Date() < released, !Task.isCancelled else { return (nil, false) }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        func isFront() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier }
+        guard canPostPaste, !Self.isTerminal(app), !isSecure(element(application, kAXFocusedUIElementAttribute)), isFront() else { return (nil, false) }
+        let before = changeCount
+        guard generation == nil || before == generation, post(kVK_ANSI_C, to: app) else { return (nil, false) }
+        let deadline = Date().addingTimeInterval(0.3)
+        var copied = false
+        while Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(20))
+            copied = changeCount != before
+            if copied, !isFront() { return (nil, false) }
+            if copied, let text = NSPasteboard.general.string(forType: .string) { return (text, true) }
+        }
+        return (nil, copied)
     }
 
     func check(_ target: PasteTarget) -> CueError? {
@@ -190,8 +214,31 @@ enum PasteContent {
         return text
     }
 
-    func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
-        await deliver(.text(text), paste: paste, target: target, generation: generation, isCancelled: isCancelled, hide: hide)
+    func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, replacing original: String? = nil,
+                 isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
+        guard paste, let target, let original else {
+            return await deliver(.text(text), paste: paste, target: target, generation: generation, isCancelled: isCancelled, hide: hide)
+        }
+        if let generation, changeCount != generation { return .failedBeforeCopy(PasteFailure.clipboardChanged.error) }
+        hide()
+        if let failure = await focus(target, isCancelled: isCancelled) { return copyInstead(text, expected: generation, failure) }
+        if let failure = await retry(target, isCancelled: isCancelled, { check(target, foreground: true) ?? (modifiersHeld ? .modifiersHeld : nil) }) {
+            return copyInstead(text, expected: generation, failure)
+        }
+        let selection = await selectedText(in: target.app, unchanged: generation)
+        let expected = selection.copied && generation != nil ? changeCount : generation
+        if isCancelled() { return copyInstead(text, expected: expected, .cancelled) }
+        if let failure = PasteRules.replace(original: original, current: selection.text) {
+            return copyInstead(text, expected: expected, failure)
+        }
+        let written: Int
+        do {
+            written = try write(text, expected: expected)
+        } catch {
+            return .failedBeforeCopy(error)
+        }
+        if let failure = send(target, generation: written) { return .copiedNotPasted(failure.error) }
+        return .pasted
     }
 
     func deliver(_ content: PasteContent, paste: Bool, target: PasteTarget?, generation: Int?, isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
@@ -203,40 +250,66 @@ enum PasteContent {
         }
         hide()
         guard paste, let target else { return .copied }
-        if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
-        if let failure = activate(target) { return .copiedNotPasted(failure.error) }
+        if let failure = await focus(target, isCancelled: isCancelled) { return .copiedNotPasted(failure.error) }
+        if let failure = await retry(target, isCancelled: isCancelled, { send(target, generation: written) }) { return .copiedNotPasted(failure.error) }
+        return .pasted
+    }
+
+    private func copyInstead(_ text: String, expected: Int?, _ failure: PasteFailure) -> Delivery {
+        do {
+            try write(text, expected: expected)
+            return .copiedNotPasted(failure.error)
+        } catch {
+            return .failedBeforeCopy(error)
+        }
+    }
+
+    private func focus(_ target: PasteTarget, isCancelled: () -> Bool) async -> PasteFailure? {
+        if isCancelled() { return .cancelled }
+        if let failure = activate(target) { return failure }
         try? await Task.sleep(for: .milliseconds(80))
+        return nil
+    }
+
+    private func retry(_ target: PasteTarget, isCancelled: () -> Bool, _ step: () -> PasteFailure?) async -> PasteFailure? {
         let start = Date()
         let deadline = start.addingTimeInterval(0.8)
         var tries = 0
         while true {
-            if isCancelled() { return .copiedNotPasted(PasteFailure.cancelled.error) }
+            if isCancelled() { return .cancelled }
             tries += 1
-            guard let failure = send(target, generation: written) else { return .pasted }
+            guard let failure = step() else { return nil }
             guard PasteRules.isRetryable(failure), Date() < deadline else {
                 let elapsed = Int(Date().timeIntervalSince(start) * 1000)
                 log.record("\(failure.error.code) app=\(target.app.bundleIdentifier ?? "?") tries=\(tries) elapsed=\(elapsed)ms \(lastObservation)", "paste.detail")
-                return .copiedNotPasted(failure.error)
+                return failure
             }
             try? await Task.sleep(for: .milliseconds(20))
         }
     }
 
-    private func send(_ target: PasteTarget, generation: Int) -> PasteFailure? {
+    private var modifiersHeld: Bool {
         let held: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
-        if let failure = PasteRules.send(observe(target), clipboardUnchanged: NSPasteboard.general.changeCount == generation,
-                                         modifiersHeld: !CGEventSource.flagsState(.combinedSessionState).intersection(held).isEmpty) {
+        return !CGEventSource.flagsState(.combinedSessionState).intersection(held).isEmpty
+    }
+
+    private func send(_ target: PasteTarget, generation: Int) -> PasteFailure? {
+        if let failure = PasteRules.send(observe(target), clipboardUnchanged: NSPasteboard.general.changeCount == generation, modifiersHeld: modifiersHeld) {
             return failure
         }
+        return post(kVK_ANSI_V, to: target.app) ? nil : .unsupported
+    }
+
+    private func post(_ key: Int, to app: NSRunningApplication) -> Bool {
         guard let source = CGEventSource(stateID: .privateState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false)
-        else { return .unsupported }
+              let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key), keyDown: false)
+        else { return false }
         down.flags = .maskCommand
         up.flags = .maskCommand
-        down.postToPid(target.app.processIdentifier)
-        up.postToPid(target.app.processIdentifier)
-        return nil
+        down.postToPid(app.processIdentifier)
+        up.postToPid(app.processIdentifier)
+        return true
     }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -257,8 +330,8 @@ enum PasteContent {
         return ((value as! AXUIElement), "ok")
     }
 
-    private func isSecure(_ field: AXUIElement) -> Bool {
-        (attribute(field, kAXSubroleAttribute) as? String) == kAXSecureTextFieldSubrole || IsSecureEventInputEnabled()
+    private func isSecure(_ field: AXUIElement?) -> Bool {
+        field.flatMap { attribute($0, kAXSubroleAttribute) as? String } == kAXSecureTextFieldSubrole || IsSecureEventInputEnabled()
     }
 
     static func isTerminal(_ app: NSRunningApplication) -> Bool {
