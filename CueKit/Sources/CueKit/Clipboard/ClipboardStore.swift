@@ -124,7 +124,9 @@ public actor ClipboardStore {
             let replaces = sensitive || clip.content == .rich
             let content = replaces ? clip.content : old?.content ?? clip.content
             let rich = try Self.sealedRich(clip, id: id, crypto: crypto)
+            let restored = FileManager.default.fileExists(atPath: payloadFile(id).path) ? 0 : try writePayload(clip, id: id, crypto: crypto)
             try db.transaction {
+                if restored > 0 { try db.execute("UPDATE items SET file_bytes=?1 WHERE id=?2", [SQLValue(restored), .text(id)]) }
                 try db.execute("UPDATE items SET last_used_at=?1, sensitive=?2, expires_at=?3 WHERE id=?4",
                                [.text(stamp), SQLValue(sensitive), kept.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
                 if replaces {

@@ -783,6 +783,22 @@ import Testing
         #expect(try await reopened.itemCount() == 1)
     }
 
+    @Test func recopyingAnImageRestoresAMissingFile() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let clip = image()
+        let id = try await store.capture(clip, source: nil, now: Date())
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(ClipboardStore.payloadFolder).appendingPathComponent(id))
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload(id) }
+
+        #expect(try await store.capture(clip, source: nil, now: Date()) == id)
+        #expect(try await store.payload(id) == clip.data)
+        #expect(try await store.itemCount() == 1)
+        #expect(payloadNames(dir) == [id])
+    }
+
     @Test func aFailedInsertLeavesNoFileBehind() async throws {
         let (dir, url) = temporaryDatabase()
         defer { try? FileManager.default.removeItem(at: dir) }
