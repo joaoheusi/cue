@@ -10,13 +10,14 @@ import Testing
     private func decide(_ types: [String], secure: Bool = false, app: String? = "com.apple.Safari",
                         content: String? = "hello", read: inout Bool) -> CaptureDecision {
         var didRead = false
-        let result = CaptureFilter.decide(types: types, ownType: own, secureInput: secure, frontmostApp: app,
-                                          excludedApps: ClipboardSettings.defaultExcludedApps) {
+        defer { read = didRead }
+        if let reason = CaptureFilter.screen(types: types, ownType: own, secureInput: secure, frontmostApp: app,
+                                             excludedApps: ClipboardSettings.defaultExcludedApps) { return .skip(reason) }
+        let decision = CaptureFilter.read(types: types) {
             didRead = true
             return content
         }
-        read = didRead
-        return result
+        return CaptureFilter.review(decision, sensitive: .maskAndExpire)
     }
 
     @Test func skipFilterNeverReadsSensitiveContent() {
@@ -409,9 +410,7 @@ import Testing
         try await store.save(settings)
         let id = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: Date())
         #expect(await store.items().first { $0.id == id }?.sensitive == false)
-        let decision = CaptureFilter.decide(types: [CaptureFilter.plainTextType], ownType: "own", secureInput: false, frontmostApp: nil,
-                                            excludedApps: [], sensitive: .skip) { "sk-ant-usr-abcdefghijklmnopqrstuv3c27" }
-        #expect(decision == .skip(.sensitive))
+        #expect(CaptureFilter.review(.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27"), sensitive: .skip) == .skip(.sensitive))
     }
 
     @Test func versionOneHistoryMigrates() throws {
@@ -453,5 +452,247 @@ import Testing
         try await store.deletePinboard(board.id)
         #expect(await store.items().first { $0.id == id }?.expiresAt != nil)
         #expect(try await store.purge(now: Date().addingTimeInterval(SensitiveText.lifetime + 5)) == 1)
+    }
+
+    @Test func reviewDropsOnlyTokensAndOnlyWhenSettingsSaySo() {
+        let token = "sk-ant-usr-abcdefghijklmnopqrstuv3c27"
+        #expect(CaptureFilter.review(.capture(token), sensitive: .skip) == .skip(.sensitive))
+        #expect(CaptureFilter.review(.capture("hello"), sensitive: .skip) == .capture("hello"))
+        for handling in [SensitiveHandling.maskAndExpire, .mask, .keep] {
+            #expect(CaptureFilter.review(.capture(token), sensitive: handling) == .capture(token))
+        }
+        #expect(CaptureFilter.review(.skip(.blank), sensitive: .skip) == .skip(.blank))
+    }
+
+    @Test func childRepliesSurviveEncoding() throws {
+        let text = String(repeating: "Olá 🌍 a\u{0}b\n", count: 20_000)
+        let replies: [ClipboardChildReply] = [
+            .decision(.capture(text), access: .alwaysAllow),
+            .decision(.capture(String(repeating: "é", count: CaptureFilter.maxBytes / 2)), access: .ask),
+            .decision(.skip(.stale), access: .standard),
+            .decision(.skip(.tooLarge), access: .unavailable),
+            .denied(child: .alwaysDeny, parent: .alwaysAllow),
+        ]
+        for reply in replies {
+            let data = try reply.encoded()
+            #expect(data.count <= ClipboardChild.maxReplyBytes)
+            #expect(ClipboardChildReply.decode(data) == reply)
+        }
+        #expect(ClipboardChildReply.decode(Data("garbage".utf8)) == nil)
+        #expect(ClipboardChildReply.decode(Data()) == nil)
+    }
+
+    @Test func requestsCarryOnlyTheChangeCountAndAccess() {
+        let request = ClipboardChild.Request(changeCount: 42, access: .alwaysAllow)
+        #expect(request.arguments == ["--clipboard-read", "42", "alwaysAllow"])
+        #expect(ClipboardChild.Request(arguments: request.arguments) == request)
+        #expect(ClipboardChild.Request(arguments: [ClipboardChild.argument, "-1", "default"])?.access == .standard)
+        for bad in [[], [ClipboardChild.argument], [ClipboardChild.argument, "x", "ask"], [ClipboardChild.argument, "1", "nope"], ["--other", "1", "ask"]] {
+            #expect(ClipboardChild.Request(arguments: bad) == nil)
+        }
+    }
+
+    private final class FakeBoard: @unchecked Sendable {
+        var counts: [Int]
+        var accesses: [ClipboardAccess]
+        var types = [CaptureFilter.plainTextType]
+        var text: String? = "hello"
+        var reads = 0
+
+        init(counts: [Int] = [7], accesses: [ClipboardAccess] = [.alwaysAllow]) {
+            self.counts = counts
+            self.accesses = accesses
+        }
+
+        private func next<Value>(_ values: inout [Value]) -> Value { values.count > 1 ? values.removeFirst() : values[0] }
+
+        var source: ClipboardChild.Source {
+            ClipboardChild.Source(changeCount: { self.next(&self.counts) }, access: { self.next(&self.accesses) }, types: { self.types }, text: {
+                self.reads += 1
+                return self.text
+            })
+        }
+    }
+
+    @Test func childChecksTheChangeCountAroundTheRead() {
+        let request = ClipboardChild.Request(changeCount: 7, access: .alwaysAllow)
+        let steady = FakeBoard()
+        #expect(ClipboardChild.reply(to: request, source: steady.source) == .decision(.capture("hello"), access: .alwaysAllow))
+
+        let changedBefore = FakeBoard(counts: [8])
+        #expect(ClipboardChild.reply(to: request, source: changedBefore.source) == .decision(.skip(.stale), access: .alwaysAllow))
+        #expect(changedBefore.reads == 0)
+
+        let changedDuring = FakeBoard(counts: [7, 8])
+        #expect(ClipboardChild.reply(to: request, source: changedDuring.source) == .decision(.skip(.stale), access: .alwaysAllow))
+        #expect(changedDuring.reads == 1)
+    }
+
+    @Test func childReportsDenialExplicitlyAndNeverFromAnEmptyRead() {
+        let request = ClipboardChild.Request(changeCount: 7, access: .alwaysAllow)
+        let denied = FakeBoard(accesses: [.alwaysDeny])
+        #expect(ClipboardChild.reply(to: request, source: denied.source) == .denied(child: .alwaysDeny, parent: .alwaysAllow))
+        #expect(denied.reads == 0)
+
+        let differs = FakeBoard(accesses: [.ask])
+        #expect(ClipboardChild.reply(to: request, source: differs.source) == .denied(child: .ask, parent: .alwaysAllow))
+        #expect(differs.reads == 0)
+
+        let deniedDuringRead = FakeBoard(accesses: [.alwaysAllow, .alwaysDeny])
+        #expect(ClipboardChild.reply(to: request, source: deniedDuringRead.source) == .denied(child: .alwaysDeny, parent: .alwaysAllow))
+
+        let empty = FakeBoard()
+        empty.text = nil
+        #expect(ClipboardChild.reply(to: request, source: empty.source) == .decision(.skip(.unreadable), access: .alwaysAllow))
+
+        let same = ClipboardChild.Request(changeCount: 7, access: .standard)
+        #expect(ClipboardChild.reply(to: same, source: FakeBoard(accesses: [.standard]).source) == .decision(.capture("hello"), access: .standard))
+    }
+
+    @Test func onlyStartFailureAndDenialSwitchToTheMainThread() {
+        var denied = ClipboardReaderState()
+        #expect(denied.usesChild)
+        #expect(denied.record(.reply(.denied(child: .ask, parent: .alwaysAllow)), milliseconds: 40) == .readOnMainThread)
+        #expect(!denied.usesChild)
+        #expect(denied.fallbackReason?.contains("ask") == true && denied.fallbackReason?.contains("alwaysAllow") == true)
+
+        var cannotStart = ClipboardReaderState()
+        #expect(cannotStart.record(.failedToStart("missing"), milliseconds: 0) == .readOnMainThread)
+        #expect(cannotStart.fallbackReason?.contains("missing") == true)
+        #expect(cannotStart.reads == 0)
+
+        var state = ClipboardReaderState()
+        for _ in 0..<50 {
+            #expect(state.record(.timedOut, milliseconds: 30_000) == .finish(.skip(.timedOut)))
+            #expect(state.record(.crashed, milliseconds: 10) == .finish(.skip(.unreadable)))
+            #expect(state.record(.cancelled, milliseconds: 10) == .finish(.skip(.stale)))
+            #expect(state.record(.reply(.decision(.skip(.unreadable), access: .alwaysAllow)), milliseconds: 10) == .finish(.skip(.unreadable)))
+        }
+        #expect(state.usesChild && state.fallbackReason == nil)
+    }
+
+    @Test func fallbackLastsForTheSession() {
+        var state = ClipboardReaderState()
+        _ = state.record(.failedToStart("missing"), milliseconds: 0)
+        _ = state.record(.reply(.decision(.capture("hello"), access: .alwaysAllow)), milliseconds: 10)
+        #expect(!state.usesChild)
+    }
+
+    @Test func repeatedFailuresRaiseAnAlarmThatASuccessClears() {
+        func unreadable() -> ClipboardReadOutcome { .reply(.decision(.skip(.unreadable), access: .alwaysAllow)) }
+        var state = ClipboardReaderState()
+        _ = state.record(.timedOut, milliseconds: 30_000)
+        _ = state.record(.crashed, milliseconds: 5)
+        #expect(!state.failing)
+        _ = state.record(.reply(.decision(.skip(.stale), access: .alwaysAllow)), milliseconds: 5)
+        _ = state.record(.cancelled, milliseconds: 5)
+        #expect(state.failuresInARow == 2)
+        _ = state.record(unreadable(), milliseconds: 5)
+        #expect(state.failing)
+        _ = state.record(.reply(.decision(.capture("back"), access: .alwaysAllow)), milliseconds: 5)
+        #expect(!state.failing && state.failuresInARow == 0)
+
+        var skipped = state
+        for _ in 0..<ClipboardReaderState.failureLimit { _ = skipped.record(.crashed, milliseconds: 5) }
+        #expect(skipped.failing)
+        _ = skipped.record(.reply(.decision(.skip(.blank), access: .alwaysAllow)), milliseconds: 5)
+        #expect(!skipped.failing)
+
+        var fallback = ClipboardReaderState()
+        for _ in 0..<ClipboardReaderState.failureLimit { _ = fallback.record(.crashed, milliseconds: 5) }
+        _ = fallback.record(.failedToStart("missing"), milliseconds: 0)
+        #expect(!fallback.failing)
+    }
+
+    @Test func readerDiagnosticsAreReadableAndHoldNoContent() {
+        var state = ClipboardReaderState()
+        func row(_ name: String) -> String? { state.diagnostics.first { $0.0 == name }?.1 }
+        #expect(row("Reader mode") == "child")
+        #expect(row("Reader fallback reason") == "none")
+        #expect(row("Child read average") == "no reads yet")
+        let secret = "very private clipboard text"
+        _ = state.record(.reply(.decision(.capture(secret), access: .alwaysAllow)), milliseconds: 80)
+        _ = state.record(.reply(.decision(.skip(.blank), access: .alwaysAllow)), milliseconds: 121)
+        _ = state.record(.timedOut, milliseconds: 30_000)
+        #expect(row("Child reads") == "2")
+        #expect(row("Child read average") == "101 ms")
+        #expect(row("Child read slowest") == "121 ms")
+        #expect(row("Child reads timed out") == "1")
+        #expect(row("Reader pasteboard access") == "alwaysAllow")
+        _ = state.record(.reply(.denied(child: .alwaysDeny, parent: .alwaysAllow)), milliseconds: 90)
+        #expect(row("Reader mode") == "fallback")
+        #expect(row("Reader fallback reason") == "The reader has alwaysDeny pasteboard access, and Cue has alwaysAllow.")
+        #expect(!state.diagnostics.contains { $0.1.contains(secret) })
+    }
+
+    private func shell(_ script: String) -> [String] { ["-c", script] }
+    private let sh = URL(fileURLWithPath: "/bin/sh")
+
+    @Test func childRunReadsARepliedDecision() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let reply = ClipboardChildReply.decision(.capture(String(repeating: "x", count: CaptureFilter.maxBytes)), access: .alwaysAllow)
+        let file = dir.appendingPathComponent("reply")
+        try reply.encoded().write(to: file)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 0.1; cat '\(file.path)'; sleep 0.1")) == .reply(reply))
+    }
+
+    @Test func childRunDrainsAWriteLargerThanThePipeBuffer() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let reply = ClipboardChildReply.decision(.capture(String(repeating: "🌍", count: 150_000)), access: .alwaysAllow)
+        let data = try reply.encoded()
+        #expect(data.count > 256 * 1024 && data.count <= ClipboardChild.maxReplyBytes)
+        let file = dir.appendingPathComponent("reply")
+        try data.write(to: file)
+        let start = ContinuousClock.now
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 5) == .reply(reply))
+        #expect(start.duration(to: .now) < .seconds(4))
+    }
+
+    @Test func childRunTimesOutAndStopsTheProcess() async {
+        let start = ContinuousClock.now
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 20"), timeout: 0.2) == .timedOut)
+        #expect(start.duration(to: .now) < .seconds(4))
+    }
+
+    @Test func cancellingARunKillsItAtOnce() async throws {
+        let start = ContinuousClock.now
+        let task = Task { await ClipboardChild.read(executable: sh, arguments: shell("sleep 20")) }
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+        #expect(await task.value == .cancelled)
+        #expect(start.duration(to: .now) < .seconds(4))
+    }
+
+    @Test func cancellingBeforeTheRunStartsSpawnsNothing() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("ran")
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await ClipboardChild.read(executable: sh, arguments: shell("touch '\(marker.path)'"))
+        }
+        #expect(await task.value == .cancelled)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    @Test func childRunTreatsBadRepliesAsCrashesNotStartFailures() async {
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("exit 3")) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("printf garbage")) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("true")) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("kill -9 $$")) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("yes"), timeout: 5) == .crashed)
+    }
+
+    @Test func childRunReportsWhenItCannotStart() async {
+        #expect(await ClipboardChild.read(executable: nil, arguments: []) == .failedToStart("Cue could not find its own executable."))
+        let outcome = await ClipboardChild.read(executable: URL(fileURLWithPath: "/nonexistent/Cue"), arguments: [])
+        if case .failedToStart = outcome { return }
+        Issue.record("Expected a start failure, got \(outcome)")
     }
 }

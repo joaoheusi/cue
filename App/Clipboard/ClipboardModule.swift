@@ -24,12 +24,14 @@ struct ClipboardStatus: Equatable {
     private(set) var capturePaused = false
     private(set) var accessDenied = false
     private(set) var hotKeyError: String?
+    private(set) var reader = ClipboardReaderState()
     var commandStatus: ClipboardStatus?
     var settingsStatus: ClipboardStatus?
 
     @ObservationIgnored private let context: AppContext
     @ObservationIgnored private var store: ClipboardStore?
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var readTask: Task<Void, Never>?
     @ObservationIgnored private var purgeTask: Task<Void, Never>?
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var lastChangeCount = 0
@@ -45,6 +47,9 @@ struct ClipboardStatus: Equatable {
     static let accessDeniedError = CueError(
         "CLIPBOARD_ACCESS_DENIED",
         "macOS is blocking Cue from reading the clipboard, so new copies are not saved. Allow Cue in System Settings → Privacy & Security → Paste.")
+    static let readerFailedError = CueError(
+        "CLIPBOARD_READ_FAILED",
+        "Cue could not read your last few copies, so they were not saved. Copy again to try once more. If this keeps happening, quit and reopen Cue.")
 
     init(context: AppContext) { self.context = context }
 
@@ -61,12 +66,14 @@ struct ClipboardStatus: Equatable {
     }
 
     func stop() {
-        pollTask?.cancel()
+        stopCapture()
         purgeTask?.cancel()
         expiryTask?.cancel()
     }
 
     var frontName: String? { context.invocation?.front?.localizedName }
+
+    var readerError: CueError? { captureEnabled && reader.failing ? Self.readerFailedError : nil }
 
     func openSettings() { context.openSettings(.clipboard) }
 
@@ -92,7 +99,7 @@ struct ClipboardStatus: Equatable {
         rows += [
             ("Pinboards", "\(pinboards.count)"),
             ("Capture", captureEnabled ? (pollTask != nil ? "on" : "on, paused") : "off"),
-            ("Pasteboard access behavior", Self.accessBehaviorDescription),
+            ("Pasteboard access behavior", ClipboardReader.access.rawValue),
             ("Keychain", keychainKind?.rawValue ?? "not used"),
             ("Retention", settings.retention.rawValue),
             ("Max unpinned items", "\(settings.maxItems)"),
@@ -100,6 +107,7 @@ struct ClipboardStatus: Equatable {
             ("Shortcut", settings.shortcut ?? "none"),
             ("Captured this session", "\(capturedCount)"),
         ]
+        rows += reader.diagnostics
         rows += SkipReason.allCases.map { ("Skipped: \($0.rawValue)", "\(skipCounts[$0, default: 0])") }
         return rows
     }
@@ -225,6 +233,8 @@ struct ClipboardStatus: Equatable {
     private func stopCapture() {
         pollTask?.cancel()
         pollTask = nil
+        readTask?.cancel()
+        readTask = nil
     }
 
     func recheckAccess() {
@@ -238,22 +248,55 @@ struct ClipboardStatus: Equatable {
         let count = board.changeCount
         guard count != lastChangeCount else { return }
         lastChangeCount = count
+        readTask?.cancel()
         if Self.pasteboardDenied {
             stopCapture()
             accessDenied = true
             return
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let decision = CaptureFilter.decide(
-            types: board.types?.map(\.rawValue) ?? [], ownType: PasteService.originType.rawValue,
-            secureInput: IsSecureEventInputEnabled(), frontmostApp: frontmost, excludedApps: settings.excludedApps, sensitive: settings.sensitive
-        ) { board.string(forType: .string) }
-        switch decision {
+        let types = board.types?.map(\.rawValue) ?? []
+        if let reason = CaptureFilter.screen(types: types, ownType: PasteService.originType.rawValue, secureInput: IsSecureEventInputEnabled(),
+                                             frontmostApp: frontmost, excludedApps: settings.excludedApps) {
+            skipCounts[reason, default: 0] += 1
+            return
+        }
+        guard reader.usesChild else { return finish(readOnMainThread(types), count: count, source: frontmost) }
+        let request = ClipboardChild.Request(changeCount: count, access: ClipboardReader.access)
+        readTask = Task { [weak self] in
+            let start = ContinuousClock.now
+            let outcome = await ClipboardChild.read(executable: Bundle.main.executableURL, arguments: request.arguments)
+            let elapsed = start.duration(to: .now) / .milliseconds(1)
+            self?.finishRead(Task.isCancelled ? .cancelled : outcome, milliseconds: elapsed, types: types, count: count, source: frontmost)
+        }
+    }
+
+    private func finishRead(_ outcome: ClipboardReadOutcome, milliseconds: Double, types: [String], count: Int, source: String?) {
+        let wasFailing = reader.failing
+        let step = reader.record(outcome, milliseconds: milliseconds)
+        if reader.failing, !wasFailing {
+            context.log.record(Self.readerFailedError, "clipboard")
+            context.notifier.post("Clipboard History", Self.readerFailedError.message)
+        }
+        switch step {
+        case .finish(let decision):
+            finish(decision, count: count, source: source)
+        case .readOnMainThread:
+            finish(NSPasteboard.general.changeCount == count ? readOnMainThread(types) : .skip(.stale), count: count, source: source)
+        }
+    }
+
+    private func readOnMainThread(_ types: [String]) -> CaptureDecision {
+        CaptureFilter.read(types: types) { NSPasteboard.general.string(forType: .string) }
+    }
+
+    private func finish(_ decision: CaptureDecision, count: Int, source: String?) {
+        switch CaptureFilter.review(decision, sensitive: settings.sensitive) {
         case .skip(let reason):
             skipCounts[reason, default: 0] += 1
         case .capture(let text):
             capturedChangeCount = count
-            Task { await save(text, source: frontmost) }
+            Task { await save(text, source: source) }
         }
     }
 
@@ -269,15 +312,7 @@ struct ClipboardStatus: Equatable {
         }
     }
 
-    private static var pasteboardDenied: Bool {
-        if #available(macOS 15.4, *) { return NSPasteboard.general.accessBehavior == .alwaysDeny }
-        return false
-    }
-
-    private static var accessBehaviorDescription: String {
-        if #available(macOS 15.4, *) { return "\(NSPasteboard.general.accessBehavior.rawValue)" }
-        return "unavailable"
-    }
+    private static var pasteboardDenied: Bool { ClipboardReader.access == .alwaysDeny }
 
     func use(_ item: ClipItem, paste: Bool) async {
         commandStatus = nil
