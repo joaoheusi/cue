@@ -87,6 +87,9 @@ final class CueUITests: XCTestCase {
         search.typeText("review")
         XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
         search.typeKey("e", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 3)
+        print("CUEDBG palette=\(search.exists) library=\(app.windows["Cue"].exists) windows=\(app.windows.count)")
+        print("CUEDBG-TREE-START\n\(app.debugDescription)\nCUEDBG-TREE-END")
         let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
         XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘E should show the selected action in the Library editor.")
     }
