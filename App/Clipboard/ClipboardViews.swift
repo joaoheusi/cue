@@ -165,9 +165,9 @@ struct ClipboardCommandView: View {
 
     private func symbol(_ item: ClipItem) -> (String, Color) {
         if item.sensitive { return ("lock", Cue.warning) }
-        if item.isPinned { return ("pin", Cue.claude) }
+        if item.isPinned { return ("pin", Cue.claudeAccent) }
         switch item.kind {
-        case .link: return ("link", .accentColor)
+        case .link: return ("link", Cue.link)
         case .code: return ("chevron.left.forwardslash.chevron.right", .secondary)
         case .text: return ("text.alignleft", .secondary)
         }
@@ -323,7 +323,7 @@ struct ClipboardSettingsView: View {
                         }
                     }
                     .fixedSize()
-                    Button("Clear History…", role: .destructive, action: module.clearHistory).foregroundStyle(.red)
+                    Button("Clear History…", role: .destructive, action: module.clearHistory).foregroundStyle(Cue.danger)
                 }
                 CardDivider()
                 SettingsRow("Clear history on quit", note: "Deletes unpinned items. Pinned items stay.") {

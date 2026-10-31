@@ -61,7 +61,7 @@ struct StatusLine: View {
     var body: some View {
         Label(text, systemImage: success ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
             .font(.callout)
-            .foregroundStyle(success ? .green : .orange)
+            .foregroundStyle(success ? Cue.success : Cue.warning)
             .accessibilityIdentifier("command.status")
     }
 }
@@ -69,6 +69,8 @@ struct StatusLine: View {
 struct ShortcutRecorder: View {
     var value: Shortcut?
     var dimmed = false
+    var width: CGFloat? = 118
+    var height: CGFloat = 26
     var onChange: (Shortcut?) -> Void
     @State private var recording = false
     @State private var monitor: Any?
@@ -79,11 +81,11 @@ struct ShortcutRecorder: View {
                 recording ? stop() : start()
             } label: {
                 Text(recording ? "Press keys…" : (value?.display ?? "Record"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: width == nil && value == nil ? .center : .leading)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .font(.system(size: 13, weight: value == nil ? .regular : .medium))
+            .font(.system(size: width == nil ? 12.5 : 13, weight: value == nil ? .regular : width == nil ? .semibold : .medium))
             .foregroundStyle(value == nil || recording || dimmed ? .secondary : .primary)
             if value != nil && !recording {
                 Button { onChange(nil) } label: {
@@ -96,11 +98,11 @@ struct ShortcutRecorder: View {
         }
         .padding(.leading, 10)
         .padding(.trailing, 4)
-        .frame(width: 118, height: 26)
-        .background(value == nil ? Color.clear : Cue.card, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .frame(width: width, height: height)
+        .background(value == nil ? Color.clear : Cue.input, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(recording ? Color.accentColor : Color.primary.opacity(0.14), style: StrokeStyle(lineWidth: 1, dash: value == nil && !recording ? [3, 3] : []))
+                .strokeBorder(recording ? Cue.accent : Cue.controlBorder, style: StrokeStyle(lineWidth: 1, dash: value == nil && !recording ? [3, 3] : []))
         }
         .onDisappear(perform: stop)
     }
@@ -173,7 +175,7 @@ struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View
                 if showsDetail {
                     Rectangle().fill(Cue.hairline).frame(width: 1)
                     detail().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .background(Color.primary.opacity(0.012))
+                        .background(Cue.detail)
                 }
             }
             .frame(maxHeight: .infinity)

@@ -33,9 +33,8 @@ struct RunView: View {
 
     private func cancel() {
         if run.isRunning { return model.stopRun() }
-        let closesPanel = run.surface == .palette
         model.closeRun()
-        if closesPanel { model.context.closeCommand() }
+        model.context.closeCommand()
     }
 
     private var header: some View {
@@ -52,28 +51,11 @@ struct RunView: View {
             Tile(run.kind)
             Text(run.title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
             Spacer()
-            if run.kind == .claude { status }
+            if run.kind == .claude { RunStatus(run: run, label: "Claude") }
         }
         .padding(.leading, 14)
         .padding(.trailing, 16)
         .frame(height: CommandMetrics.searchHeight)
-    }
-
-    @ViewBuilder private var status: some View {
-        HStack(spacing: 8) {
-            switch run.phase {
-            case .running: Spinner()
-            case .finished: StatusDot(color: Cue.success)
-            case .stopped: StatusDot(color: Cue.warning)
-            case .failed: StatusDot(color: .red)
-            }
-            Text("Claude")
-            TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-                Text(String(format: "%.1fs", run.elapsed)).foregroundStyle(.tertiary).monospacedDigit()
-            }
-        }
-        .font(.system(size: 12))
-        .foregroundStyle(.secondary)
     }
 
     private func inputRow(_ input: String) -> some View {
@@ -99,7 +81,7 @@ struct RunView: View {
         .font(.system(size: 12))
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Cue.quiet, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var output: some View {
@@ -147,15 +129,7 @@ struct RunView: View {
     }
 
     private var outputText: some View {
-        var text = run.attributedOutput
-        if run.isRunning {
-            var caret = AttributedString("▍")
-            caret.foregroundColor = Cue.claude
-            text += caret
-        } else if run.output.isEmpty, run.phase == .finished {
-            text = AttributedString("No output.")
-        }
-        return Text(text)
+        Text(run.displayOutput)
             .font(run.kind == .script ? .system(size: 12.5, design: .monospaced) : .system(size: 15))
             .lineSpacing(4)
             .textSelection(.enabled)
@@ -163,7 +137,7 @@ struct RunView: View {
 
     private var footer: some View {
         CommandFooter {
-            if run.kind == .claude, run.surface == .palette {
+            if run.kind == .claude {
                 Menu {
                     ForEach(ActionRun.Finish.allCases.filter { $0 != .paste || run.target != nil }) { option in
                         Button(run.finishTitle(option)) { run.finish = option }
@@ -174,15 +148,13 @@ struct RunView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .disabled(!run.isRunning)
-            } else if run.surface == .library {
-                Text(run.input != nil && run.inputName == "clipboard" ? "Test run. Your real clipboard was used." : "Test run")
             }
         } trailing: {
             if run.isRunning {
                 Button(action: model.stopRun) { KeyHint(label: "Stop", keys: "esc", primary: true) }
                     .buttonStyle(.plain)
             }
-            if run.surface == .palette, run.target != nil {
+            if run.target != nil {
                 command("Paste now", keys: "↵", primary: !run.isRunning, enabled: run.hasResult, shortcut: .return, modifiers: []) {
                     Task { await model.deliver(run, paste: true) }
                 }
@@ -210,12 +182,98 @@ struct RunView: View {
     }
 }
 
+struct TestPanel: View {
+    let run: ActionRun
+    let model: PromptsModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Test").fontWeight(.semibold).foregroundStyle(Cue.keyText)
+                if let input = run.input {
+                    Text("\(run.inputName) · \(input.count) chars").foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if run.kind == .claude { RunStatus(run: run, finishedTint: Cue.addedText) }
+                Button {
+                    if run.isRunning { model.stopRun() } else { model.closeRun() }
+                } label: {
+                    if run.isRunning {
+                        KeyHint(label: "Stop", keys: "esc", primary: true)
+                    } else {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                            .frame(width: 18, height: 18).contentShape(Rectangle())
+                    }
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .accessibilityLabel(run.isRunning ? "Stop test" : "Close test")
+            }
+            .font(.system(size: 11.5))
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            CardDivider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(run.displayOutput)
+                        .font(run.kind == .script ? .system(size: 12.5, design: .monospaced) : .system(size: 13))
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                    if case .failed(let error) = run.phase {
+                        Text(error.message).font(.system(size: 12.5)).foregroundStyle(Cue.warning)
+                    }
+                    if let message = run.message {
+                        Text(message).font(.system(size: 12.5)).foregroundStyle(Cue.warning)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+        }
+        .frame(height: 132)
+        .background(Cue.panel, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityIdentifier("library.test")
+    }
+}
+
+private struct RunStatus: View {
+    let run: ActionRun
+    var label: String?
+    var finishedTint: Color?
+
+    private var elapsedStyle: AnyShapeStyle {
+        if run.phase == .finished, let finishedTint { AnyShapeStyle(finishedTint) } else { AnyShapeStyle(.tertiary) }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch run.phase {
+            case .running: Spinner()
+            case .finished: StatusDot(color: Cue.success)
+            case .stopped: StatusDot(color: Cue.warning)
+            case .failed: StatusDot(color: Cue.danger)
+            }
+            if let label { Text(label) }
+            TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+                Text(String(format: "%.1fs", run.elapsed))
+                    .foregroundStyle(elapsedStyle)
+                    .monospacedDigit()
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+    }
+}
+
 private struct Spinner: View {
     var body: some View {
         TimelineView(.animation) { timeline in
             Circle()
                 .trim(from: 0, to: 0.72)
-                .stroke(Cue.claude, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .stroke(Cue.claudeAccent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 .rotationEffect(.degrees(timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.8) * 450))
                 .frame(width: 12, height: 12)
         }

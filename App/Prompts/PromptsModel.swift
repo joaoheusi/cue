@@ -399,6 +399,8 @@ import UniformTypeIdentifiers
         }
     }
 
+    var libraryRun: ActionRun? { run?.surface == .library ? run : nil }
+
     func stopRun() {
         guard let run, run.isRunning else { return }
         run.task?.cancel()

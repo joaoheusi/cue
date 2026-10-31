@@ -91,6 +91,85 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘E should show the selected action in the Library editor.")
     }
 
+    func testLibraryArrowKeysMoveTheSelectionAndTestRunsInline() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("some text", forType: .string)
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("summarize")
+        XCTAssertTrue(app.staticTexts["Summarize"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let library = app.windows["Cue"]
+        func name(_ value: String) -> XCUIElement { library.textFields.matching(NSPredicate(format: "value == %@", value)).firstMatch }
+        XCTAssertTrue(name("Summarize").waitForExistence(timeout: 5))
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rewrite clearly")).firstMatch.click()
+        XCTAssertTrue(name("Rewrite clearly").waitForExistence(timeout: 5))
+        library.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(name("Create a handoff").waitForExistence(timeout: 5), "The down arrow should select the next row.")
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rewrite clearly")).firstMatch.click()
+        XCTAssertTrue(name("Rewrite clearly").waitForExistence(timeout: 5))
+        library.buttons["Test"].click()
+        XCTAssertTrue(library.buttons["Close test"].waitForExistence(timeout: 5), "Test should show its result inside the editor.")
+        library.buttons["Close test"].click()
+        XCTAssertTrue(library.buttons["Close test"].waitForNonExistence(timeout: 5))
+    }
+
+    private func openHandoffAfterExplain() throws -> (XCUIApplication, XCUIElement) {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        NSPasteboard.general.clearContents()
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("explain this")
+        XCTAssertTrue(app.staticTexts["Explain this PR"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let library = app.windows["Cue"]
+        func name(_ value: String) -> XCUIElement { library.textFields.matching(NSPredicate(format: "value == %@", value)).firstMatch }
+        XCTAssertTrue(name("Explain this PR").waitForExistence(timeout: 5))
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Create a handoff")).firstMatch.click()
+        XCTAssertTrue(name("Create a handoff").waitForExistence(timeout: 5))
+        return (app, library)
+    }
+
+    func testCopyTextShortcutCopiesTheActionNowInTheEditor() throws {
+        let (_, library) = try openHandoffAfterExplain()
+        library.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForClipboard { $0.hasPrefix("Create an implementation handoff") }, "⌘⇧C should copy the action in the editor.")
+    }
+
+    func testCopyTextMenuItemCopiesTheActionNowInTheEditor() throws {
+        let (app, library) = try openHandoffAfterExplain()
+        library.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "More")).firstMatch.click()
+        XCTAssertTrue(app.menuItems["Copy Text"].waitForExistence(timeout: 5))
+        app.menuItems["Copy Text"].click()
+        XCTAssertTrue(waitForClipboard { $0.hasPrefix("Create an implementation handoff") }, "Copy Text should copy the action in the editor.")
+    }
+
+    func testSelectingAScriptWithAnActionOpenClearsTheEditorSafely() throws {
+        let app = try launch { data in
+            let folder = data.appendingPathComponent("commands")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try "#!/bin/sh\necho hello\n".write(to: folder.appendingPathComponent("build-info.sh"), atomically: true, encoding: .utf8)
+        }
+        let search = app.textFields["command.search"]
+        search.typeText("explain this")
+        XCTAssertTrue(app.staticTexts["Explain this PR"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let library = app.windows["Cue"]
+        XCTAssertTrue(library.textFields.matching(NSPredicate(format: "value == %@", "Explain this PR")).firstMatch.waitForExistence(timeout: 5))
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scripts")).firstMatch.click()
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "build-info")).firstMatch.click()
+        XCTAssertTrue(library.buttons["Reveal"].waitForExistence(timeout: 5), "The script should open after the action closes.")
+    }
+
     func testActionsMenuActsOnTheSelectedRow() throws {
         let app = try launch()
         let search = app.textFields["command.search"]
@@ -125,6 +204,7 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["New Action"].waitForExistence(timeout: 5))
         search.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(app.windows["Cue"].staticTexts["Not saved"].waitForExistence(timeout: 5), "Return on New Action should open the Library on a new action.")
+        XCTAssertTrue(app.windows["Cue"].buttons.matching(NSPredicate(format: "label CONTAINS %@", "Draft")).firstMatch.exists, "The new action should appear as a draft row in the list.")
     }
 
     func testUnifiedSearchFindsSnippetsScriptsAndWindowCommands() throws {

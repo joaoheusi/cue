@@ -70,8 +70,23 @@ import SwiftUI
         var text = AttributedString()
         for run in TextDiff.additions(from: input, to: output) {
             var piece = AttributedString(run.text)
-            if run.added { piece.backgroundColor = Cue.added }
+            if run.added {
+                piece.backgroundColor = Cue.added
+                piece.foregroundColor = Cue.addedText
+            }
             text += piece
+        }
+        return text
+    }
+
+    var displayOutput: AttributedString {
+        var text = attributedOutput
+        if isRunning {
+            var caret = AttributedString("▍")
+            caret.foregroundColor = Cue.claudeAccent
+            text += caret
+        } else if output.isEmpty, phase == .finished {
+            text = AttributedString("No output.")
         }
         return text
     }
