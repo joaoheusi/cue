@@ -454,7 +454,7 @@ import Testing
         settings.retention = .day
         settings.shortcut = nil
         try await source.save(settings)
-        let data = try await source.exportData(now: Date())
+        let data = try await source.exportData(now: Date()).data
         let target = try ClipboardStore(url: nil)
         try await target.importData(data)
         #expect(await target.settings == settings)
@@ -483,7 +483,7 @@ import Testing
         settings.clearOnQuit = true
         settings.clearSystemClipboard = true
         try await source.save(settings)
-        let data = try await source.exportData(now: Date())
+        let data = try await source.exportData(now: Date()).data
         #expect(try ClipboardExport.decode(data).settings == settings)
         let target = try ClipboardStore(url: nil)
         try await target.importData(data)
@@ -611,7 +611,7 @@ import Testing
             #expect(!bytes.contains(Data("Meeting".utf8)) && !bytes.contains(Data("purge".utf8)) && !bytes.contains(Data("Notes".utf8)))
         }
 
-        let exported = try await store.exportData(now: t0.addingTimeInterval(4 * 3600))
+        let exported = try await store.exportData(now: t0.addingTimeInterval(4 * 3600)).data
         let other = try ClipboardStore(url: dir.appendingPathComponent("other.sqlite3"))
         try await other.unlock(SymmetricKey(size: .bits256))
         try await other.importData(exported)
@@ -758,7 +758,7 @@ import Testing
         try await reopened.unlock(key)
         #expect(payloadNames(dir) == [kept])
 
-        let exported = try await reopened.exportData(now: Date())
+        let exported = try await reopened.exportData(now: Date()).data
         try await reopened.importData(exported)
         #expect(payloadNames(dir).isEmpty)
         #expect(try await reopened.itemCount() == 0)
@@ -1105,7 +1105,7 @@ import Testing
         let document = try await store.capture(ClipCapture(content: .files(["/tmp/report.pdf"])), source: nil, now: now.addingTimeInterval(3))
         let token = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: now.addingTimeInterval(4))
 
-        let exported = try await store.exportData(now: now)
+        let exported = try await store.exportData(now: now).data
         let file = try ClipboardExport.decode(exported)
         #expect(file.schemaVersion == ClipboardExport.currentVersion)
         #expect(Set(file.items.map(\.id)) == [plain, rich])
@@ -1121,6 +1121,69 @@ import Testing
         #expect(Set(await store.items().map(\.id)) == [plain, rich])
         #expect(await store.items().allSatisfy { $0.content == .plain })
         #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func exportsLeaveOutOnlyWhatImportWouldReject() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let now = Date(timeIntervalSince1970: 1_792_670_100)
+        let fits = String(repeating: "f", count: ClipboardExport.maxItemBytes)
+        let large = String(repeating: "l", count: ClipboardExport.maxItemBytes + 1)
+        let keptID = try await store.capture(fits, source: nil, now: now)
+        try await store.capture(large, source: nil, now: now.addingTimeInterval(1))
+        let small = try await store.capture("small", source: nil, now: now.addingTimeInterval(2))
+
+        let result = try await store.exportData(now: now)
+        #expect(result.exported == 2 && result.leftOut == 1)
+        let file = try ClipboardExport.decode(result.data)
+        #expect(Set(file.items.map(\.id)) == [keptID, small])
+        #expect(file.items.first { $0.id == keptID }?.text == fits)
+
+        try await store.importData(result.data)
+        #expect(try await store.itemCount() == 2)
+        #expect(await store.items().first { $0.id == keptID }?.isTruncated == true)
+        #expect(try await store.fullText(keptID) == fits)
+        #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func exportsStopBeforeTheFileCapEvenWhenEscapingDoublesTheText() async throws {
+        let store = try ClipboardStore(url: nil)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let base = Date(timeIntervalSince1970: 1_792_670_100)
+        var ids: [String] = []
+        for index in 0..<60 {
+            let text = "\(index)" + String(repeating: "\"\n", count: 100_000)
+            ids.append(try await store.capture(text, source: nil, now: base.addingTimeInterval(Double(index))))
+        }
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(ids[0], board.id)
+
+        let result = try await store.exportData(now: base)
+        #expect(result.data.count <= ClipboardExport.maxBytes && result.data.count > ClipboardExport.maxBytes - 500 * 1024)
+        #expect(result.exported + result.leftOut == 60 && result.leftOut > 0)
+        let file = try ClipboardExport.decode(result.data)
+        #expect(file.items.first?.id == ids[0], "Pinned items export first.")
+        #expect(file.items.contains { $0.id == ids[59] } && !file.items.contains { $0.id == ids[1] }, "Newest items come next.")
+
+        let target = try ClipboardStore(url: nil)
+        try await target.unlock(SymmetricKey(size: .bits256))
+        try await target.importData(result.data)
+        #expect(try await target.itemCount() == result.exported)
+    }
+
+    @Test func exportFilesFromOlderVersionsStayAccepted() throws {
+        let id = UUID().uuidString.lowercased()
+        func file(_ text: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1, "exportedAt": "2026-10-22T10:00:00.000Z", "pinboards": [] as [Any],
+                "settings": ["retention": "7d", "maxItems": 500, "excludedApps": [] as [Any], "shortcut": NSNull()],
+                "items": [["id": id, "text": text, "createdAt": "2026-10-22T09:00:00Z", "lastUsedAt": "2026-10-22T09:00:00Z", "pinboardID": NSNull()]],
+            ] as [String: Any])
+        }
+        #expect(try ClipboardExport.decode(try file(String(repeating: "a", count: ClipboardExport.maxItemBytes))).items.count == 1)
+        #expect(throws: CueError.self) { try ClipboardExport.decode(try file(String(repeating: "a", count: ClipboardExport.maxItemBytes + 1))) }
     }
 
     @Test func importWarningNamesWhatWouldBeLost() {
@@ -1224,7 +1287,7 @@ import Testing
         var item = try #require(await store.items().first { $0.id == id })
         #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.text == secret && !item.folded.contains("abcdefg"))
         #expect(item.expiresAt != nil)
-        let exported = String(decoding: try await store.exportData(now: now), as: UTF8.self)
+        let exported = String(decoding: try await store.exportData(now: now).data, as: UTF8.self)
         #expect(!exported.contains(secret))
         #expect(try await store.purge(now: now.addingTimeInterval(299)) == 0)
         #expect(try await store.purge(now: now.addingTimeInterval(301)) == 1)
@@ -1403,14 +1466,14 @@ import Testing
         try await store.save(settings)
         let now = Date()
         let id = try await store.capture(secret, source: "com.example.app", now: now)
-        #expect(String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+        #expect(String(decoding: try await store.exportData(now: now).data, as: UTF8.self).contains(secret))
 
         settings.sensitive = .maskAndExpire
         try await store.save(settings)
         #expect(try await store.capture(secret, source: nil, now: now) == id)
         let item = try #require(await store.items().first { $0.id == id })
         #expect(item.sensitive && item.preview == "sk-ant-usr-••••••••3c27" && item.expiresAt != nil && item.source == "com.example.app")
-        #expect(!String(decoding: try await store.exportData(now: now), as: UTF8.self).contains(secret))
+        #expect(!String(decoding: try await store.exportData(now: now).data, as: UTF8.self).contains(secret))
     }
 
     @Test func deletingAPinboardRearmsTokenExpiry() async throws {

@@ -609,13 +609,14 @@ struct ClipboardStatus: Equatable {
     func exportHistory() {
         guard let store,
               confirm("Export clipboard history as plain text?",
-                      "The file is not encrypted. Anyone who can open it can read every saved item. Images and files are left out, and rich text is saved as plain text. Store it somewhere safe and delete it when you no longer need it.",
+                      "The file is not encrypted. Anyone who can open it can read every saved item. Images, files, and text over 256 KB are left out, rich text is saved as plain text, and the file stops at 20 MB. Store it somewhere safe and delete it when you no longer need it.",
                       "Export…") else { return }
         Task {
             do {
-                let data = try await store.exportData(now: Date())
-                if try FileTransfer.save(data, suggestedName: SafeFilename.make("Cue Clipboard Export", ext: "json", date: Date()), type: .json) {
-                    settingsStatus = ClipboardStatus(text: "Exported \(Self.itemCount(items.filter(\.isExportable).count)).", success: true)
+                let result = try await store.exportData(now: Date())
+                if try FileTransfer.save(result.data, suggestedName: SafeFilename.make("Cue Clipboard Export", ext: "json", date: Date()), type: .json) {
+                    let leftOut = result.leftOut > 0 ? " \(Self.itemCount(result.leftOut)) left out." : ""
+                    settingsStatus = ClipboardStatus(text: "Exported \(Self.itemCount(result.exported)).\(leftOut)", success: true)
                 }
             } catch {
                 report(error, .settings)

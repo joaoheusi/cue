@@ -386,12 +386,30 @@ public actor ClipboardStore {
         capturePaused = !enabled
     }
 
-    public func exportData(now: Date) throws -> Data {
+    public func exportData(now: Date) throws -> ClipboardExport.Result {
         if crypto == nil, try itemCount() > 0 { throw Self.keyUnavailable }
-        let file = ClipboardExport(
-            schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards,
-            items: items().filter(\.isExportable).map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
-        return try file.encoded()
+        var file = ClipboardExport(schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards, items: [])
+        var room = ClipboardExport.maxBytes - (try file.encoded().count)
+        var leftOut = 0
+        let exportable = items().filter(\.isExportable)
+        for item in exportable.filter(\.isPinned) + exportable.filter({ !$0.isPinned }) {
+            guard room > 0, let text = item.isTruncated ? try? fullText(item.id) : item.text, text.utf8.count <= ClipboardExport.maxItemBytes else {
+                leftOut += 1
+                continue
+            }
+            let entry = ClipboardExport.Item(id: item.id, text: text, createdAt: Timestamp.iso(item.createdAt), lastUsedAt: Timestamp.iso(item.lastUsedAt), pinboardID: item.pinboardID)
+            let size = try ClipboardExport.encoder.encode(entry).count + ClipboardExport.itemOverhead
+            guard size <= room else {
+                room = 0
+                leftOut += 1
+                continue
+            }
+            room -= size
+            file.items.append(entry)
+        }
+        let data = try file.encoded()
+        _ = try ClipboardExport.decode(data)
+        return ClipboardExport.Result(data: data, exported: file.items.count, leftOut: leftOut)
     }
 
     public func importData(_ data: Data) throws {
@@ -479,6 +497,13 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
     public static let currentVersion = 1
     public static let maxBytes = 20 * 1024 * 1024
     public static let maxItemBytes = 256 * 1024
+    static let itemOverhead = 64
+
+    public struct Result: Equatable, Sendable {
+        public let data: Data
+        public let exported: Int
+        public let leftOut: Int
+    }
 
     public var schemaVersion: Int
     public var exportedAt: String
@@ -513,11 +538,13 @@ public struct ClipboardExport: Codable, Equatable, Sendable {
         }
     }
 
-    public func encoded() throws -> Data {
+    static var encoder: JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        return encoder
     }
+
+    public func encoded() throws -> Data { try Self.encoder.encode(self) }
 
     public static func decode(_ data: Data) throws(CueError) -> ClipboardExport {
         guard data.count <= maxBytes else { throw .validation("The file is larger than 20 MB.") }
