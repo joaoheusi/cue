@@ -104,6 +104,11 @@ final class CueUITests: XCTestCase {
     }
 
     func testCopyPathShortcutCopiesTheSelectedFile() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
         let app = try launch()
         let search = app.textFields["command.search"]
         NSPasteboard.general.clearContents()
