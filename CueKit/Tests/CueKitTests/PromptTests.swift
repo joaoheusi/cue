@@ -126,6 +126,21 @@ private func sample(_ name: String = "Test", template: String = "Hello {{date}}"
         #expect(try #require(ActionSearch.score("movit", name: "Movitera Link")?.tier) < fuzzyTier)
     }
 
+    @Test func preparedQueryScoresLikeOneShotScore() {
+        let queries = ["dia", "resolve ci", "résumé", "  fix  text ", "zzzz", ""]
+        let names = [("Dia", [(String, Int)]()), ("Fix Text", [("dia", 1), ("write", 2)]), ("Résumé Review", [("cv", 1)]), ("Next Display", [])]
+        for query in queries {
+            let prepared = ActionSearch.prepare(query)
+            for (name, fields) in names {
+                let oneShot = ActionSearch.score(query, name: name, fields: fields)
+                let batched = prepared.score(name: name, fields: fields)
+                #expect(oneShot?.tier == batched?.tier && oneShot?.weight == batched?.weight, "\(query) / \(name)")
+            }
+            let actions = names.map { a($0.0, aliases: $0.1.filter { $0.1 == 1 }.map(\.0)) }
+            #expect(ActionSearch.scored(actions, query: query).map(\.action.id) == ActionSearch.scored(actions, query: prepared).map(\.action.id))
+        }
+    }
+
     @Test func accentsAliasesTokensAndTypos() {
         let action = a("Revisão", aliases: ["resolve CI"], tags: ["git"], category: "Coding")
         #expect(ActionSearch.search([action], query: "revisao") == [action])

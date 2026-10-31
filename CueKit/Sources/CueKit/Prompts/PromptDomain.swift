@@ -405,14 +405,37 @@ public enum ActionSearch {
         return p == q.count ? 4 : nil
     }
 
+    public struct PreparedQuery: Sendable {
+        public let normalized: String
+        public let tokens: [String]
+
+        public init(_ query: String) {
+            normalized = ActionSearch.normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
+            tokens = normalized.split(whereSeparator: \.isWhitespace).map(String.init)
+        }
+
+        public func score(name: String, fields: [(String, Int)] = []) -> (tier: Int, weight: Int)? {
+            ActionSearch.score(normalizedQuery: normalized, tokens: tokens,
+                               name: ActionSearch.normalize(name), fields: fields.map { (ActionSearch.normalize($0.0), $0.1) })
+        }
+    }
+
+    public static func prepare(_ query: String) -> PreparedQuery { PreparedQuery(query) }
+
     public static func score(_ query: String, name: String, fields: [(String, Int)] = []) -> (tier: Int, weight: Int)? {
-        let q = normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        prepare(query).score(name: name, fields: fields)
+    }
+
+    private static func score(normalizedQuery q: String, tokens: [String], name: String, fields: [(String, Int)]) -> (tier: Int, weight: Int)? {
         if q.isEmpty { return (0, 0) }
-        if normalize(name) == q { return (-1, 0) }
-        if fields.contains(where: { $0.1 == 1 && normalize($0.0) == q }) { return (-1, 1) }
+        if name == q { return (-1, 0) }
+        if fields.contains(where: { $0.1 == 1 && $0.0 == q }) { return (-1, 1) }
         var tier = 0, weight = 0
-        for token in q.split(whereSeparator: \.isWhitespace).map(String.init) {
-            let best = ([(name, 0)] + fields).compactMap { field, w in match(token, normalize(field)).map { $0 * 10 + w } }.min()
+        for token in tokens {
+            var best = match(token, name).map { $0 * 10 }
+            for (field, w) in fields {
+                if let value = match(token, field).map({ $0 * 10 + w }), value < (best ?? .max) { best = value }
+            }
             guard let best else { return nil }
             tier = max(tier, best / 10)
             weight += best % 10
@@ -425,10 +448,18 @@ public enum ActionSearch {
     }
 
     public static func scored(_ actions: [Action], query: String, enabledOnly: Bool = true) -> [(action: Action, tier: Int, weight: Int)] {
-        var scored: [(action: Action, tier: Int, weight: Int)] = []
+        scored(actions, query: prepare(query), enabledOnly: enabledOnly)
+    }
+
+    public static func scored(_ actions: [Action], query: PreparedQuery, enabledOnly: Bool = true) -> [(action: Action, tier: Int, weight: Int)] {
+        let q = query.normalized, tokens = query.tokens
+        var scored: [(action: Action, tier: Int, weight: Int, name: String)] = []
         for action in actions where !enabledOnly || action.enabled {
-            let fields = action.aliases.map { ($0, 1) } + action.tags.map { ($0, 2) } + [(action.category ?? "", 3)]
-            if let score = score(query, name: action.name, fields: fields) { scored.append((action, score.tier, score.weight)) }
+            let fields = action.aliases.map { (normalize($0), 1) } + action.tags.map { (normalize($0), 2) } + [(normalize(action.category ?? ""), 3)]
+            let name = normalize(action.name)
+            if let score = score(normalizedQuery: q, tokens: tokens, name: name, fields: fields) {
+                scored.append((action, score.tier, score.weight, name))
+            }
         }
         return scored.sorted { a, b in
             if a.tier != b.tier { return a.tier < b.tier }
@@ -436,10 +467,9 @@ public enum ActionSearch {
             if a.action.favorite != b.action.favorite { return a.action.favorite }
             let au = a.action.lastUsedAt ?? "", bu = b.action.lastUsedAt ?? ""
             if au != bu { return au > bu }
-            let an = normalize(a.action.name), bn = normalize(b.action.name)
-            if an != bn { return an.localizedCompare(bn) == .orderedAscending }
+            if a.name != b.name { return a.name.localizedCompare(b.name) == .orderedAscending }
             return a.action.id < b.action.id
-        }
+        }.map { (action: $0.action, tier: $0.tier, weight: $0.weight) }
     }
 }
 

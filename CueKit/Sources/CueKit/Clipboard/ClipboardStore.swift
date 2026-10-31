@@ -462,18 +462,38 @@ public actor ClipboardStore {
         try checkpoint()
     }
 
+    private final class ChunkResults: @unchecked Sendable {
+        var chunks: [[ClipItem]]
+        init(count: Int) { chunks = [[ClipItem]](repeating: [], count: count) }
+    }
+
+    private static func decode(_ row: [SQLValue], crypto: ClipboardCrypto) -> ClipItem? {
+        guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
+              let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse),
+              let content = Self.content(format: row[8].string, meta: row[9].data, id: id, crypto: crypto)
+        else { return nil }
+        let source = row[2].data.flatMap { try? crypto.open($0, context: "\(id).source") }
+        let ocrText = row[12].data.flatMap { try? crypto.open($0, context: "\(id).ocr") }
+        return ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string,
+                        sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse), content: content, byteSize: row[10].int ?? 0,
+                        truncated: row[11].int ?? 0 > 0, ocrText: ocrText)
+    }
+
     private func load(_ crypto: ClipboardCrypto) throws {
+        let rows = try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL), file_bytes, ocr_text FROM items")
         var cache: [String: ClipItem] = [:]
-        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL), file_bytes, ocr_text FROM items") {
-            guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
-                  let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse),
-                  let content = Self.content(format: row[8].string, meta: row[9].data, id: id, crypto: crypto)
-            else { continue }
-            let source = row[2].data.flatMap { try? crypto.open($0, context: "\(id).source") }
-            let ocrText = row[12].data.flatMap { try? crypto.open($0, context: "\(id).ocr") }
-            cache[id] = ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string,
-                                 sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse), content: content, byteSize: row[10].int ?? 0,
-                                 truncated: row[11].int ?? 0 > 0, ocrText: ocrText)
+        cache.reserveCapacity(rows.count)
+        if rows.count > 64 {
+            let chunks = min(ProcessInfo.processInfo.activeProcessorCount, rows.count)
+            let chunkSize = (rows.count + chunks - 1) / chunks
+            let results = ChunkResults(count: chunks)
+            DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
+                let start = chunk * chunkSize
+                results.chunks[chunk] = rows[start..<min(start + chunkSize, rows.count)].compactMap { Self.decode($0, crypto: crypto) }
+            }
+            for item in results.chunks.joined() { cache[item.id] = item }
+        } else {
+            for row in rows { if let item = Self.decode(row, crypto: crypto) { cache[item.id] = item } }
         }
         self.crypto = crypto
         self.cache = cache

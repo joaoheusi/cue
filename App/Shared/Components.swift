@@ -8,6 +8,19 @@ enum LoadState<Value> {
     case loaded(Value)
 }
 
+@MainActor final class Memo<Key: Equatable, Value> {
+    private var key: Key?
+    private var cached: Value?
+
+    func value(for key: Key, compute: () -> Value) -> Value {
+        if key != self.key || cached == nil {
+            self.key = key
+            cached = compute()
+        }
+        return cached!
+    }
+}
+
 struct EmptyStateView: View {
     var symbol: String
     var title: String

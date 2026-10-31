@@ -29,19 +29,6 @@ private struct ClipResultsKey: Equatable {
     var pinboard: String?
 }
 
-@MainActor private final class ClipResults {
-    private var key: ClipResultsKey?
-    private var items: [ClipItem] = []
-
-    func value(for key: ClipResultsKey, compute: () -> [ClipItem]) -> [ClipItem] {
-        if key != self.key {
-            self.key = key
-            items = compute()
-        }
-        return items
-    }
-}
-
 private struct ClipEntry: Identifiable {
     var item: ClipItem
     var header: String?
@@ -55,18 +42,21 @@ struct ClipboardCommandView: View {
     @State private var filter = ClipFilter.all
     @State private var app: String?
     @State private var pinboard: String?
-    @State private var memo = ClipResults()
+    @State private var found: [ClipItem] = []
+    @State private var foundEntries: [ClipEntry] = []
+    @State private var searchedKey: ClipResultsKey?
+    @State private var sourcesMemo = Memo<Int, [String]>()
 
-    private var results: [ClipItem] {
-        let board = filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil
-        return memo.value(for: ClipResultsKey(revision: module.itemsRevision, query: query, filter: filter, app: app, pinboard: board)) {
-            ClipboardSearch.filter(module.items, query: query, pinboard: board).filter { filter.matches($0) && (app == nil || $0.source == app) }
-        }
+    private var boardSelection: String? {
+        filter == .pinned && module.pinboards.contains { $0.id == pinboard } ? pinboard : nil
     }
 
-    private var entries: [ClipEntry] {
-        let items = results
-        guard query.trimmingCharacters(in: .whitespaces).isEmpty else { return items.map { ClipEntry(item: $0) } }
+    private var searchKey: ClipResultsKey {
+        ClipResultsKey(revision: module.itemsRevision, query: query, filter: filter, app: app, pinboard: boardSelection)
+    }
+
+    private nonisolated static func grouped(_ items: [ClipItem], searching: Bool) -> [ClipEntry] {
+        guard !searching else { return items.map { ClipEntry(item: $0) } }
         let pinned = items.filter(\.isPinned)
         let calendar = Calendar.current
         func title(_ item: ClipItem) -> String {
@@ -83,10 +73,29 @@ struct ClipboardCommandView: View {
         return output
     }
 
-    private var current: ClipItem? { results.first { $0.id == selection } }
+    private func search(_ key: ClipResultsKey) async {
+        let items = module.items
+        let searching = !key.query.trimmingCharacters(in: .whitespaces).isEmpty
+        let compute: @Sendable () -> ([ClipItem], [ClipEntry]) = {
+            let matched = ClipboardSearch.filter(items, query: key.query, pinboard: key.pinboard)
+                .filter { key.filter.matches($0) && (key.app == nil || $0.source == key.app) }
+            return (matched, Self.grouped(matched, searching: searching))
+        }
+        let (matched, entries) = searching ? await Task.detached(priority: .userInitiated, operation: compute).value : compute()
+        guard !Task.isCancelled else { return }
+        let queryChanged = key.query != searchedKey?.query
+        found = matched
+        foundEntries = entries
+        searchedKey = key
+        if queryChanged { selection = entries.first?.id }
+    }
+
+    private var current: ClipItem? { found.first { $0.id == selection } }
 
     private var sources: [String] {
-        Array(Set(module.items.compactMap(\.source))).sorted { module.appName($0).localizedStandardCompare(module.appName($1)) == .orderedAscending }
+        sourcesMemo.value(for: module.itemsRevision) {
+            Array(Set(module.items.compactMap(\.source))).sorted { module.appName($0).localizedStandardCompare(module.appName($1)) == .orderedAscending }
+        }
     }
 
     var body: some View {
@@ -123,7 +132,7 @@ struct ClipboardCommandView: View {
 
     private var list: some View {
         VStack(spacing: 0) {
-            CommandList(query: $query, placeholder: "Search clipboard", items: entries, selection: $selection,
+            CommandList(query: $query, placeholder: "Search clipboard", items: foundEntries, selection: $selection,
                         header: { $0.header }, showsDetail: current != nil,
                         row: { entry, selected in row(entry.item, selected) },
                         bar: { bar },
@@ -145,6 +154,7 @@ struct ClipboardCommandView: View {
             footer
         }
         .background { shortcuts }
+        .task(id: searchKey) { await search(searchKey) }
     }
 
     private var bar: some View {
@@ -178,7 +188,7 @@ struct ClipboardCommandView: View {
     }
 
     @ViewBuilder private var emptyMessage: some View {
-        if results.isEmpty {
+        if searchedKey == searchKey, found.isEmpty {
             if !query.trimmingCharacters(in: .whitespaces).isEmpty || app != nil || (filter != .all && filter != .pinned) {
                 EmptyStateView(symbol: "magnifyingglass", title: "No matches", message: "Try different words, or choose All and Any app.")
             } else if filter == .pinned {
@@ -350,7 +360,7 @@ private struct ClipFileIcon: View {
 
     var body: some View {
         let type = path.hasSuffix("/") ? UTType.folder : UTType(filenameExtension: (path as NSString).pathExtension) ?? .data
-        Image(nsImage: NSWorkspace.shared.icon(for: type)).resizable().frame(width: size, height: size)
+        Image(nsImage: IconCache.type(type)).resizable().frame(width: size, height: size)
     }
 }
 

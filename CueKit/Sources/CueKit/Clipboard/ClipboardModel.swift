@@ -167,21 +167,45 @@ public enum ClipKind: String, Sendable, CaseIterable {
         return looksLikeCode(trimmed) ? .code : .text
     }
 
+    private static func countExceeds(_ text: String, _ limit: Int) -> Bool {
+        var count = 0
+        for _ in text { count += 1; if count > limit { return true } }
+        return false
+    }
+
+    private static let domainPattern = try! NSRegularExpression(pattern: #"^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(/\S*)?$"#)
+    private static let keywords: Set<Substring> = ["func", "def", "class", "struct", "enum", "import", "from", "const", "let", "var",
+                                                    "return", "if", "for", "while", "public", "private", "#include", "SELECT", "INSERT", "UPDATE"]
+
+    private static func matches(_ pattern: NSRegularExpression, _ text: String) -> Bool {
+        pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
     private static func isLink(_ text: String) -> Bool {
-        guard !text.isEmpty, text.count <= 2048, !text.contains(where: \.isWhitespace) else { return false }
+        guard !text.isEmpty, !countExceeds(text, 2048), !text.contains(where: \.isWhitespace) else { return false }
         if let scheme = URLComponents(string: text)?.scheme, ["http", "https", "ftp", "mailto"].contains(scheme.lowercased()) { return true }
-        return text.range(of: #"^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(/\S*)?$"#, options: .regularExpression) != nil && text.contains("/")
+        return matches(domainPattern, text) && text.contains("/")
+    }
+
+    private static func startsWithKeyword(_ line: Substring) -> Bool {
+        let word = line.prefix { $0 == "#" || ($0.isASCII && $0.isLetter) }
+        guard keywords.contains(word) else { return false }
+        guard let next = line.dropFirst(word.count).first else { return true }
+        return !next.isLetter && !next.isNumber && next != "_" && next.unicodeScalars.allSatisfy { $0.properties.generalCategory != .nonspacingMark }
     }
 
     private static func looksLikeCode(_ text: String) -> Bool {
-        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
-        guard !lines.isEmpty else { return false }
-        let structural = lines.filter { line in
-            line.hasSuffix(";") || line.hasSuffix("{") || line == "}" || line.hasSuffix(");")
-                || line.range(of: #"^(func|def|class|struct|enum|import|from|const|let|var|return|if|for|while|public|private|#include|SELECT|INSERT|UPDATE)\b"#,
-                              options: .regularExpression) != nil
+        var lines = 0, structural = 0
+        for raw in text.split(whereSeparator: \.isNewline) {
+            var line = raw.drop(while: \.isWhitespace)
+            while line.last?.isWhitespace == true { line = line.dropLast() }
+            lines += 1
+            if line.hasSuffix(";") || line.hasSuffix("{") || line == "}" || line.hasSuffix(");") || startsWithKeyword(line) {
+                structural += 1
+            }
         }
-        return lines.count == 1 ? structural.count == 1 && text.count < 400 : structural.count * 3 >= lines.count
+        guard lines > 0 else { return false }
+        return lines == 1 ? structural == 1 && !countExceeds(text, 399) : structural * 3 >= lines
     }
 }
 
@@ -206,6 +230,15 @@ public enum SensitiveText {
         #"xox[abprs]-[A-Za-z0-9-]{10,}"#, #"AKIA[0-9A-Z]{16}"#, #"AIza[0-9A-Za-z_-]{30,}"#, #"glpat-[A-Za-z0-9_-]{16,}"#,
         #"npm_[A-Za-z0-9]{30,}"#, #"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"#,
     ]
+    private static let compiled = patterns.map { try! NSRegularExpression(pattern: $0) }
+    private static let compiledAnchored = patterns.map { try! NSRegularExpression(pattern: "^\($0)$") }
+    private static let wordPattern = try! NSRegularExpression(pattern: #"[\p{L}\p{N}_-]{16,}"#)
+
+    private static func firstRange(_ pattern: NSRegularExpression, in text: String, from start: String.Index? = nil) -> Range<String.Index>? {
+        let range = NSRange((start ?? text.startIndex)..<text.endIndex, in: text)
+        guard let match = pattern.firstMatch(in: text, range: range) else { return nil }
+        return Range(match.range, in: text)
+    }
 
     public static func matches(_ text: String) -> Bool {
         let scalars = text.unicodeScalars, blank = CharacterSet.whitespacesAndNewlines
@@ -213,7 +246,7 @@ public enum SensitiveText {
               text.utf8.distance(from: first, to: last) < maxLength * 8 else { return false }
         let token = String(String.UnicodeScalarView(scalars[first...last]))
         guard token.count <= maxLength, !token.contains(where: \.isWhitespace) else { return false }
-        return patterns.contains { token.range(of: "^\($0)$", options: .regularExpression) != nil }
+        return compiledAnchored.contains { firstRange($0, in: token) != nil }
     }
 
     static let maskedLine = "••••••••"
@@ -226,9 +259,9 @@ public enum SensitiveText {
 
     private static func hasSecret(_ line: Substring) -> Bool {
         let plain = String(line.map { lookAlikes[$0] ?? $0 })
-        if patterns.contains(where: { plain.range(of: $0, options: .regularExpression) != nil }) { return true }
+        if compiled.contains(where: { firstRange($0, in: plain) != nil }) { return true }
         var start = plain.startIndex
-        while let range = plain.range(of: #"[\p{L}\p{N}_-]{16,}"#, options: .regularExpression, range: start..<plain.endIndex) {
+        while let range = firstRange(wordPattern, in: plain, from: start) {
             let word = plain[range], digits = word.filter(\.isNumber).count
             if digits >= 2, word.contains(where: \.isLetter), digits >= 6 || word.contains(where: \.isUppercase) { return true }
             start = range.upperBound
@@ -513,9 +546,30 @@ public enum ClipboardSearch {
     }
 
     public static func preview(_ text: String) -> String {
-        let line = text.split(whereSeparator: \.isNewline).first { !$0.allSatisfy(\.isWhitespace) } ?? ""
+        var line: Substring = ""
+        var rest = text[...]
+        while !rest.isEmpty {
+            let end = rest.firstIndex(where: \.isNewline) ?? rest.endIndex
+            let candidate = rest[..<end]
+            if !candidate.allSatisfy(\.isWhitespace) { line = candidate; break }
+            if end == rest.endIndex { break }
+            rest = rest[rest.index(after: end)...]
+        }
         let collapsed = line.prefix(400).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return collapsed.count > 200 ? String(collapsed.prefix(200)) + "…" : collapsed
+    }
+
+    private static let parallelByteThreshold = 4 << 20
+
+    private final class TierBuffer: @unchecked Sendable {
+        let pointer: UnsafeMutableBufferPointer<UInt8>
+        init(count: Int) { pointer = .allocate(capacity: count); pointer.initialize(repeating: 2) }
+        deinit { pointer.deallocate() }
+    }
+
+    private static func tier(_ item: ClipItem, needle: String, tokens: [String]) -> UInt8 {
+        if contains(item.folded, needle) { return 0 }
+        return !tokens.isEmpty && tokens.allSatisfy({ isSubsequence($0, of: item.foldedPreview) }) ? 1 : 2
     }
 
     public static func filter(_ items: [ClipItem], query: String, pinboard: String? = nil) -> [ClipItem] {
@@ -523,13 +577,25 @@ public enum ClipboardSearch {
         let sorted = items.filter { pinboard == nil || $0.pinboardID == pinboard }.sorted { $0.lastUsedAt > $1.lastUsedAt }
         guard !needle.isEmpty else { return sorted }
         let tokens = needle.count >= fuzzyMinimum ? needle.split(whereSeparator: \.isWhitespace).map(String.init) : []
-        var exact: [ClipItem] = [], fuzzy: [ClipItem] = []
-        for item in sorted {
-            if contains(item.folded, needle) {
-                exact.append(item)
-            } else if !tokens.isEmpty, tokens.allSatisfy({ isSubsequence($0, of: item.foldedPreview) }) {
-                fuzzy.append(item)
+        var tiers = [UInt8](repeating: 2, count: sorted.count)
+        let bytes = sorted.reduce(0) { $0 + $1.folded.utf8.count }
+        if bytes > parallelByteThreshold, sorted.count > 32 {
+            let buffer = TierBuffer(count: sorted.count)
+            let chunks = min(ProcessInfo.processInfo.activeProcessorCount, sorted.count)
+            let chunkSize = (sorted.count + chunks - 1) / chunks
+            DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
+                let start = chunk * chunkSize
+                for index in start..<min(start + chunkSize, sorted.count) {
+                    buffer.pointer[index] = tier(sorted[index], needle: needle, tokens: tokens)
+                }
             }
+            tiers = Array(buffer.pointer)
+        } else {
+            for (index, item) in sorted.enumerated() { tiers[index] = tier(item, needle: needle, tokens: tokens) }
+        }
+        var exact: [ClipItem] = [], fuzzy: [ClipItem] = []
+        for (index, item) in sorted.enumerated() {
+            if tiers[index] == 0 { exact.append(item) } else if tiers[index] == 1 { fuzzy.append(item) }
         }
         return exact + fuzzy
     }

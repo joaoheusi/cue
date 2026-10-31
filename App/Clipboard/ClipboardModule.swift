@@ -88,7 +88,7 @@ struct ClipboardStatus: Equatable {
     func openSettings() { context.openSettings(.clipboard) }
 
     var latest: ClipItem? {
-        guard capturedChangeCount == NSPasteboard.general.changeCount, let item = items.max(by: { $0.lastUsedAt < $1.lastUsedAt }), item.content.isText else { return nil }
+        guard capturedChangeCount == NSPasteboard.general.changeCount, let item = items.first, item.content.isText else { return nil }
         return item
     }
 
@@ -174,9 +174,12 @@ struct ClipboardStatus: Equatable {
 
     private func refresh() async {
         guard let store else { return }
-        items = await store.items()
-        pinboards = await store.pinboards
-        settings = await store.settings
+        let fresh = await store.items()
+        if fresh != items { items = fresh }
+        let boards = await store.pinboards
+        if boards != pinboards { pinboards = boards }
+        let saved = await store.settings
+        if saved != settings { settings = saved }
         scheduleExpiry()
     }
 
@@ -416,7 +419,10 @@ struct ClipboardStatus: Equatable {
     func thumbnail(of item: ClipItem) async -> NSImage? {
         let key = item.id as NSString
         if let cached = thumbnails.object(forKey: key) { return cached }
-        guard let data = try? await store?.thumbnail(item.id), let image = NSImage(data: data) else { return nil }
+        guard let data = try? await store?.thumbnail(item.id) else { return nil }
+        let decoded = await Task.detached(priority: .userInitiated) { ClipImage.preview(data, maxPixelSize: 128) }.value
+        guard let decoded else { return nil }
+        let image = NSImage(cgImage: decoded, size: NSSize(width: decoded.width, height: decoded.height))
         thumbnails.setObject(image, forKey: key)
         return image
     }

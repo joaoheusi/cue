@@ -1,6 +1,26 @@
 import AppKit
 import CueKit
 import SwiftUI
+import UniformTypeIdentifiers
+
+enum IconCache {
+    private nonisolated(unsafe) static let files = NSCache<NSString, NSImage>()
+    private nonisolated(unsafe) static let types = NSCache<NSString, NSImage>()
+
+    static func file(_ path: String) -> NSImage {
+        if let cached = files.object(forKey: path as NSString) { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        files.setObject(icon, forKey: path as NSString)
+        return icon
+    }
+
+    static func type(_ type: UTType) -> NSImage {
+        if let cached = types.object(forKey: type.identifier as NSString) { return cached }
+        let icon = NSWorkspace.shared.icon(for: type)
+        types.setObject(icon, forKey: type.identifier as NSString)
+        return icon
+    }
+}
 
 enum Cue {
     static let claude = Color(red: 0.784, green: 0.392, blue: 0.247)
@@ -146,7 +166,7 @@ struct FileIcon: View {
     var size: CGFloat = 26
 
     var body: some View {
-        Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: size, height: size)
+        Image(nsImage: IconCache.file(path)).resizable().frame(width: size, height: size)
     }
 }
 
