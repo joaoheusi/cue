@@ -119,7 +119,7 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(library.buttons["Close test"].waitForNonExistence(timeout: 5))
     }
 
-    func testCopyTextCopiesTheActionNowInTheEditor() throws {
+    private func openHandoffAfterExplain() throws -> (XCUIApplication, XCUIElement) {
         let saved = NSPasteboard.general.string(forType: .string)
         addTeardownBlock {
             NSPasteboard.general.clearContents()
@@ -136,8 +136,21 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(name("Explain this PR").waitForExistence(timeout: 5))
         library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Create a handoff")).firstMatch.click()
         XCTAssertTrue(name("Create a handoff").waitForExistence(timeout: 5))
+        return (app, library)
+    }
+
+    func testCopyTextShortcutCopiesTheActionNowInTheEditor() throws {
+        let (_, library) = try openHandoffAfterExplain()
         library.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue(waitForClipboard { $0.hasPrefix("Create an implementation handoff") }, "⌘⇧C should copy the action in the editor, not the first one opened.")
+        XCTAssertTrue(waitForClipboard { $0.hasPrefix("Create an implementation handoff") }, "⌘⇧C should copy the action in the editor.")
+    }
+
+    func testCopyTextMenuItemCopiesTheActionNowInTheEditor() throws {
+        let (app, library) = try openHandoffAfterExplain()
+        library.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "More")).firstMatch.click()
+        XCTAssertTrue(app.menuItems["Copy Text"].waitForExistence(timeout: 5))
+        app.menuItems["Copy Text"].click()
+        XCTAssertTrue(waitForClipboard { $0.hasPrefix("Create an implementation handoff") }, "Copy Text should copy the action in the editor.")
     }
 
     func testSelectingAScriptWithAnActionOpenClearsTheEditorSafely() throws {

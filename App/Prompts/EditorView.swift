@@ -107,6 +107,8 @@ struct EditorView: View {
         .background {
             Button("Save") { Task { await nav.flush() } }.keyboardShortcut("s").disabled(!nav.isDirty || validation != nil)
                 .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            Button("Copy Text", action: copyText).keyboardShortcut("c", modifiers: [.command, .shift]).disabled(draft.revision == 0 || nav.isDirty)
+                .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
         }
         .confirmationDialog("Delete “\(draft.name)”?", isPresented: $confirmDelete) {
             Button("Delete Action", role: .destructive) {
@@ -155,7 +157,7 @@ struct EditorView: View {
             }
             .accessibilityLabel("Favorite")
             Menu {
-                Button("Copy Text") { if let draft = nav.draft { Task { await model.copy(draft) } } }
+                Button("Copy Text", action: copyText)
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(isNew || nav.isDirty)
                 Button("Duplicate") { if let draft = nav.draft { Task { if let copy = await model.duplicate(draft) { nav.edit(copy) } } } }.disabled(isNew)
@@ -277,6 +279,10 @@ struct EditorView: View {
 
     private func test() {
         if let draft = nav.draft { model.test(draft) }
+    }
+
+    private func copyText() {
+        if let draft = nav.draft { Task { await model.copy(draft) } }
     }
 }
 
