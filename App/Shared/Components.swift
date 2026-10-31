@@ -305,14 +305,26 @@ struct KeyHint: View {
     }
 }
 
+struct ShortcutHint: View {
+    var label: String
+    var keys: String
+    var key: KeyEquivalent
+    var modifiers: EventModifiers = .command
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) { KeyHint(label: label, keys: keys) }
+            .buttonStyle(.plain)
+            .keyboardShortcut(key, modifiers: modifiers)
+    }
+}
+
 struct ActionsHint: View {
     var action: () -> Void
 
     var body: some View {
         Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 16)
-        Button(action: action) { KeyHint(label: "Actions", keys: "⌘K") }
-            .buttonStyle(.plain)
-            .keyboardShortcut("k", modifiers: .command)
+        ShortcutHint(label: "Actions", keys: "⌘K", key: "k", action: action)
     }
 }
 

@@ -84,31 +84,39 @@ final class CueUITests: XCTestCase {
     func testEditShortcutShowsTheSelectedActionInTheLibrary() throws {
         let app = try launch()
         let search = app.textFields["command.search"]
-        search.typeText("review")
+        search.typeText("review current")
         XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
         search.typeKey("e", modifierFlags: .command)
-        Thread.sleep(forTimeInterval: 3)
-        print("CUEDBG E palette=\(search.exists) library=\(app.windows["Cue"].exists) value=\(search.value ?? "nil")")
-        search.typeKey("a", modifierFlags: .command)
-        search.typeText("review")
-        Thread.sleep(forTimeInterval: 1)
-        search.typeKey("j", modifierFlags: .command)
-        Thread.sleep(forTimeInterval: 3)
-        print("CUEDBG J palette=\(search.exists) library=\(app.windows["Cue"].exists)")
-        XCTFail("probe")
+        let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘E should show the selected action in the Library editor.")
     }
 
-    func testProbeCopyPath() throws {
+    func testCopyPathShortcutCopiesTheSelectedFile() throws {
         let app = try launch()
         let search = app.textFields["command.search"]
         NSPasteboard.general.clearContents()
         search.typeText("preview")
         XCTAssertTrue(app.staticTexts["Preview"].waitForExistence(timeout: 5))
-        Thread.sleep(forTimeInterval: 1)
         search.typeKey("c", modifierFlags: [.command, .shift])
-        Thread.sleep(forTimeInterval: 2)
-        print("CUEDBG C clipboard=\(NSPasteboard.general.string(forType: .string) ?? "nil")")
+        XCTAssertTrue(waitForClipboard { $0.hasSuffix("Preview.app") }, "⌘⇧C should copy the selected file's path.")
     }
+
+    private func probe(_ key: String) throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review current")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        search.typeKey(key, modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 2)
+        print("CUEDBG key=\(key) fired=\(!search.exists) library=\(app.windows["Cue"].exists)")
+    }
+
+    func testProbeHiddenBackground() throws { try probe("j") }
+    func testProbeHiddenPlainStyle() throws { try probe("l") }
+    func testProbeHiddenOverlay() throws { try probe("g") }
+    func testProbeHiddenWithHitTesting() throws { try probe("u") }
+    func testProbeRootShortcutWithResults() throws { try probe("n") }
 
     func testNewActionRowOpensTheLibraryOnANewAction() throws {
         let app = try launch()

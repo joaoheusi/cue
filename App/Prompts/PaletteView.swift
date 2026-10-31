@@ -225,6 +225,19 @@ struct PaletteView: View {
             footer(current, count: trimmed.isEmpty ? snapshot.actions.filter(\.enabled).count + commands.scripts.count : found.count(filter), searching: !trimmed.isEmpty)
         }
         .background { shortcuts(current) }
+        .overlay {
+            Button("ProbeOverlay") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
+                .keyboardShortcut("g", modifiers: .command)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .background {
+            Button("ProbeHit") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
+                .keyboardShortcut("u", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
         .onAppear(perform: takePendingAsk)
         .onChange(of: model.pendingAsk?.id) { takePendingAsk() }
         .onChange(of: query) {
@@ -367,7 +380,7 @@ struct PaletteView: View {
             } else {
                 KeyHint(label: "Copy", keys: "↵", primary: true)
             }
-            KeyHint(label: "Edit", keys: "⌘E")
+            ShortcutHint(label: "Edit", keys: "⌘E", key: "e") { model.context.openLibrary(action.id) }
         case .snippet:
             if model.willPasteByDefault {
                 KeyHint(label: "Paste", keys: "↵", primary: true)
@@ -381,10 +394,10 @@ struct PaletteView: View {
             KeyHint(label: shows ? "Copy Output" : "Show Output", keys: "⌘↵")
         case .window:
             KeyHint(label: "Apply", keys: "↵", primary: true)
-        case .file:
+        case .file(let hit):
             KeyHint(label: "Open", keys: "↵", primary: true)
             KeyHint(label: "Show in Finder", keys: "⌘↵")
-            KeyHint(label: "Copy Path", keys: "⌘⇧C")
+            ShortcutHint(label: "Copy Path", keys: "⌘⇧C", key: "c", modifiers: [.command, .shift]) { commands.copyPath(hit) }
         case .command:
             KeyHint(label: "Open", keys: "↵", primary: true)
         case .showAll:
@@ -396,12 +409,11 @@ struct PaletteView: View {
 
     private func shortcuts(_ current: PaletteItem?) -> some View {
         ZStack {
-            Button("Edit") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
-                .keyboardShortcut("e", modifiers: .command)
-            Button("Copy Path") { if case .file(let hit)? = current { commands.copyPath(hit) } }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
             Button("Probe") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
                 .keyboardShortcut("j", modifiers: .command)
+            Button("ProbePlain") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
+                .buttonStyle(.plain)
+                .keyboardShortcut("l", modifiers: .command)
         }
         .opacity(0)
         .allowsHitTesting(false)
@@ -452,10 +464,6 @@ struct PaletteView: View {
     }
 
     private func key(_ press: KeyPress) -> KeyPress.Result {
-        if press.key.character == "e", press.modifiers == .command {
-            query = "ONKEYPRESS"
-            return .handled
-        }
         guard press.key == .tab, !trimmed.isEmpty else { return .ignored }
         let all = PaletteFilter.allCases
         let index = all.firstIndex(of: filter) ?? 0
