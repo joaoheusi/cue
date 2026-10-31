@@ -233,6 +233,10 @@ struct ClipboardStatus: Equatable {
     private func stopCapture() {
         pollTask?.cancel()
         pollTask = nil
+        cancelRead()
+    }
+
+    private func cancelRead() {
         readTask?.cancel()
         readTask = nil
     }
@@ -386,6 +390,7 @@ struct ClipboardStatus: Equatable {
                           "Pinned items stay. This cannot be undone.\(settings.clearSystemClipboard ? " The system clipboard is also cleared." : "")",
                           "Delete") else { return }
             var deleted = 0
+            cancelRead()
             guard await run(surface, { deleted = try await $0.deleteRecent(in: window) }) else { return }
             historyDeleted()
             show(ClipboardStatus(text: "Deleted \(Self.itemCount(deleted)).", success: true), on: surface)
@@ -501,6 +506,7 @@ struct ClipboardStatus: Equatable {
         NSApp.takeFocus()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let keepPinned = alert.suppressionButton?.state == .on
+        cancelRead()
         Task {
             if await run(.settings, { try await $0.clear(keepPinned: keepPinned) }) {
                 historyDeleted()
@@ -515,6 +521,7 @@ struct ClipboardStatus: Equatable {
                       "Cue cannot unlock the saved items. Resetting permanently deletes them and creates a new key. Pinboards and settings stay.",
                       "Reset History") else { return }
         let service = context.keychainService
+        cancelRead()
         Task {
             do {
                 try await store.resetHistory()
