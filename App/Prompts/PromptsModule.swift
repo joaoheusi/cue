@@ -41,6 +41,7 @@ import SwiftUI
         }
         if let actionID, let snapshot = model.snapshot {
             nav.filter = .all
+            nav.query = ""
             nav.select(actionID, in: snapshot)
         }
         NSApp.takeFocus(window)

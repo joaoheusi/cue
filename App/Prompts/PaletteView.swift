@@ -8,8 +8,28 @@ enum PaletteFilter: String, CaseIterable {
     var title: String { rawValue.capitalized }
 }
 
+enum PaletteCommand: String, CaseIterable {
+    case newAction, openLibrary
+
+    var title: String {
+        switch self {
+        case .newAction: "New Action"
+        case .openLibrary: "Open Library"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .newAction: "plus"
+        case .openLibrary: "doc.text"
+        }
+    }
+
+    var target: String? { self == .newAction ? "new" : nil }
+}
+
 enum PaletteItem: Identifiable {
-    case action(Action), snippet(Snippet), script(Script), window(WindowCommand), file(FileHit)
+    case action(Action), snippet(Snippet), script(Script), window(WindowCommand), file(FileHit), command(PaletteCommand)
     case showAll(PaletteFilter, Int)
 
     var id: String {
@@ -19,6 +39,7 @@ enum PaletteItem: Identifiable {
         case .script(let script): "script:\(script.id)"
         case .window(let command): command.owner
         case .file(let hit): "file:\(hit.id)"
+        case .command(let command): "command:\(command.rawValue)"
         case .showAll(let filter, _): "all:\(filter.rawValue)"
         }
     }
@@ -151,6 +172,7 @@ struct PaletteView: View {
             commands.snippets.forEach { add(.snippet($0), $0.keyword) }
             commands.scripts.forEach { add(.script($0), $0.name) }
             WindowCommand.allCases.forEach { add(.window($0), $0.title) }
+            PaletteCommand.allCases.forEach { add(.command($0), $0.title) }
             results.actions = ranked.enumerated().sorted { a, b in
                 (a.element.tier, a.element.weight, a.offset) < (b.element.tier, b.element.weight, b.offset)
             }.map(\.element.item)
@@ -291,6 +313,10 @@ struct PaletteView: View {
             } accessory: {
                 if hit.isApp { Text("Application") }
             }
+        case .command(let command):
+            CommandRow(title: command.title, subtitle: "Library", selected: selected, match: trimmed) {
+                Tile(symbol: command.symbol, color: Cue.text)
+            } accessory: { EmptyView() }
         case .showAll(let kind, let count):
             HStack {
                 Text("Show all \(count) \(kind.rawValue)").font(.system(size: 13, weight: .medium)).foregroundStyle(Color.accentColor)
@@ -359,6 +385,8 @@ struct PaletteView: View {
             KeyHint(label: "Open", keys: "↵", primary: true)
             KeyHint(label: "Show in Finder", keys: "⌘↵")
             KeyHint(label: "Copy Path", keys: "⌘⇧C")
+        case .command:
+            KeyHint(label: "Open", keys: "↵", primary: true)
         case .showAll:
             KeyHint(label: "Show", keys: "↵", primary: true)
         case nil:
@@ -401,6 +429,8 @@ struct PaletteView: View {
                 menu.add("Open") { commands.open(hit, reveal: false) }
                 menu.add("Show in Finder") { commands.open(hit, reveal: true) }
                 menu.add("Copy Path") { commands.copyPath(hit) }
+            case .command:
+                menu.add("Open") { submit(item, alternate: false) }
             case .showAll:
                 break
             }
@@ -448,6 +478,8 @@ struct PaletteView: View {
             }
         case .file(let hit):
             commands.open(hit, reveal: alternate)
+        case .command(let command):
+            model.context.openLibrary(command.target)
         case .showAll(let kind, _):
             filter = kind
         }

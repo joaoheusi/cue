@@ -81,6 +81,25 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "The Library should come to the front, not open behind other windows.")
     }
 
+    func testEditShortcutShowsTheSelectedActionInTheLibrary() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("review")
+        XCTAssertTrue(app.staticTexts["Review current changes"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let name = app.windows["Cue"].textFields.matching(NSPredicate(format: "value == %@", "Review current changes")).firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "⌘E should show the selected action in the Library editor.")
+    }
+
+    func testNewActionRowOpensTheLibraryOnANewAction() throws {
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("new action")
+        XCTAssertTrue(app.staticTexts["New Action"].waitForExistence(timeout: 5))
+        search.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(app.windows["Cue"].staticTexts["Not saved"].waitForExistence(timeout: 5), "Return on New Action should open the Library on a new action.")
+    }
+
     func testUnifiedSearchFindsSnippetsScriptsAndWindowCommands() throws {
         let saved = NSPasteboard.general.string(forType: .string)
         addTeardownBlock {
