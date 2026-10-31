@@ -323,4 +323,85 @@ final class CueUITests: XCTestCase {
         search.typeKey("o", modifierFlags: .command)
         XCTAssertTrue(search.waitForNonExistence(timeout: 5), "⌘O should open the link and close the panel.")
     }
+
+    func testWhatYouCopyCanBePinnedWithItsShortcut() throws {
+        let app = try launchWithCapture()
+        let copied = "pinned through the shortcut \(UUID().uuidString)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(copied, forType: .string)
+        let row = app.staticTexts[copied].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 40))
+
+        app.typeKey("p", modifierFlags: .command)
+        app.buttons["Pinned"].click()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "⌘P should pin the selected row, so the Pinned filter keeps it.")
+        XCTAssertFalse(app.staticTexts["Nothing pinned yet"].exists)
+
+        app.typeKey("p", modifierFlags: .command)
+        XCTAssertTrue(app.staticTexts["Nothing pinned yet"].waitForExistence(timeout: 5), "⌘P should unpin the row it pinned.")
+    }
+
+    func testWhatYouCopyIsSavedWhenItIsAnImage() throws {
+        let app = try launchWithCapture()
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 16, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(png, forType: .png)
+
+        let row = app.staticTexts["PNG image · 32 × 16"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 40), "A copied image should appear as a row in clipboard history.")
+        let summary = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "PNG · 32 × 16 · ")).firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), "The detail pane should show the image type, size, and bytes.")
+        XCTAssertFalse(app.staticTexts["0 characters · 0 words"].exists)
+
+        app.buttons["Images"].click()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "The Images filter should keep the image.")
+        app.buttons["Files"].click()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "The Files filter should hide the image.")
+    }
+
+    func testWhatYouCopyIsSavedWhenItIsAFile() throws {
+        let app = try launchWithCapture()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("cue-ui-\(UUID().uuidString).txt")
+        try Data("saved by path".utf8).write(to: file)
+        addTeardownBlock { try? FileManager.default.removeItem(at: file) }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([file as NSURL])
+
+        let row = app.staticTexts[file.lastPathComponent].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 40), "A copied file should appear as a row in clipboard history.")
+        XCTAssertTrue(app.staticTexts["1 file"].waitForExistence(timeout: 5), "The detail pane should show the file count.")
+        XCTAssertFalse(app.staticTexts["0 characters · 0 words"].exists)
+
+        app.buttons["Files"].click()
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "The Files filter should keep the file.")
+        app.buttons["Images"].click()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "The Images filter should hide the file.")
+    }
+
+    func testPasteAsTextDropsTheFormatting() throws {
+        let app = try launchWithCapture()
+        let search = app.textFields["command.search"]
+        let board = NSPasteboard.general
+        let copied = "formatted through the reader \(UUID().uuidString)"
+        board.declareTypes([.rtf, .string], owner: nil)
+        board.setData(Data("{\\rtf1\\ansi \(copied)}".utf8), forType: .rtf)
+        board.setString(copied, forType: .string)
+
+        XCTAssertTrue(app.staticTexts[copied].firstMatch.waitForExistence(timeout: 40), "Copied rich text should appear as a row in clipboard history.")
+        XCTAssertTrue(app.staticTexts["Rich text"].waitForExistence(timeout: 5), "The detail pane should show the format.")
+        search.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(app.menuItems["Paste as Text"].waitForExistence(timeout: 5), "⌘K should offer Paste as Text on a rich row.")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+
+        let before = board.changeCount
+        app.typeKey("v", modifierFlags: [.command, .shift])
+        let deadline = Date().addingTimeInterval(5)
+        while board.changeCount == before, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        XCTAssertNotEqual(board.changeCount, before, "⌘⇧V should write to the clipboard.")
+        XCTAssertEqual(board.string(forType: .string), copied)
+        XCTAssertNil(board.data(forType: .rtf), "Paste as Text should leave the formatting behind.")
+    }
 }
