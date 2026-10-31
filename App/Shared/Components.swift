@@ -193,6 +193,7 @@ struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View
         .onChange(of: items.map(\.id)) { _, ids in
             if selection == nil || !ids.contains(where: { $0 == selection }) { selection = ids.first }
         }
+        .onChange(of: query) { selection = items.first?.id }
     }
 
     private var list: some View {

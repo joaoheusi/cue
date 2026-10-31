@@ -6,9 +6,9 @@ import UserNotifications
 
 extension NSApplication {
     func takeFocus(_ window: NSWindow? = nil) {
+        activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         window?.orderFrontRegardless()
-        activate(ignoringOtherApps: true)
     }
 }
 

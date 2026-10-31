@@ -224,7 +224,6 @@ struct PaletteView: View {
                 }
             footer(current, count: trimmed.isEmpty ? snapshot.actions.filter(\.enabled).count + commands.scripts.count : found.count(filter), searching: !trimmed.isEmpty)
         }
-        .background { shortcuts(current) }
         .onAppear(perform: takePendingAsk)
         .onChange(of: model.pendingAsk?.id) { takePendingAsk() }
         .onChange(of: query) {
@@ -392,18 +391,6 @@ struct PaletteView: View {
         case nil:
             EmptyView()
         }
-    }
-
-    private func shortcuts(_ current: PaletteItem?) -> some View {
-        ZStack {
-            Button("ProbeRaw") { model.context.openLibrary("new") }
-                .keyboardShortcut("j", modifiers: .command)
-            Button("ProbeCurrent") { if current != nil { model.context.openLibrary("new") } }
-                .keyboardShortcut("l", modifiers: .command)
-        }
-        .opacity(0)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     private func showMenu(_ item: PaletteItem) {
