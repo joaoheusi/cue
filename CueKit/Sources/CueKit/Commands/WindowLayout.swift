@@ -228,6 +228,11 @@ public enum WindowLayout {
                       width: size.width, height: size.height)
     }
 
+    /// Fixed-size windows reject the size, and some apps report an error after applying a change.
+    public static func accepted(_ target: CGRect, from current: CGRect, result: CGRect?, placed: Bool, sized: Bool) -> Bool {
+        (placed && target.origin != current.origin) || (sized && target.size != current.size) || (result ?? current) != current
+    }
+
     public static func area(of window: CGRect, in areas: [CGRect]) -> Int? {
         let overlap = areas.indices.max { a, b in
             let first = areas[a].intersection(window), second = areas[b].intersection(window)

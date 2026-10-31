@@ -44,13 +44,14 @@ import CueKit
             next = WindowLayout.frame(landed, window: current, area: area)
         }
         guard let next, next == current || Self.set(next, on: window, from: current, application: application) else { return refused }
+        let result = Self.frame(of: window)
         if let restored {
-            history.remove(at: restored)
+            if result == next { history.remove(at: restored) }
         } else if next != current {
             history.append((window, current))
             if history.count > Self.maxHistory { history.removeFirst() }
         }
-        last = (window, landed, Self.frame(of: window) ?? next)
+        last = (window, landed, result ?? next)
         return nil
     }
 
@@ -98,7 +99,6 @@ import CueKit
         _ = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position)
         let sized = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, extent) == .success
         let placed = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position) == .success
-        // Fixed-size windows reject the size, and some apps report an error after applying a change.
-        return sized || placed || (Self.frame(of: window) ?? current) != current
+        return WindowLayout.accepted(frame, from: current, result: Self.frame(of: window), placed: placed, sized: sized)
     }
 }

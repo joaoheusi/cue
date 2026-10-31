@@ -194,6 +194,17 @@ struct CommandTests {
         #expect(WindowLayout.area(of: CGRect(x: 9000, y: 0, width: 300, height: 300), in: [small, big]) == 1)
     }
 
+    @Test func aWindowMoveCountsOnlyWhenARequestedChangeWasAccepted() {
+        let current = CGRect(x: 300, y: 200, width: 400, height: 300)
+        let moved = CGRect(x: 100, y: 200, width: 400, height: 300)
+        let snapped = CGRect(x: 100, y: 30, width: 600, height: 900)
+        #expect(!WindowLayout.accepted(moved, from: current, result: current, placed: false, sized: true))
+        #expect(!WindowLayout.accepted(snapped, from: current, result: nil, placed: false, sized: false))
+        #expect(WindowLayout.accepted(snapped, from: current, result: current, placed: true, sized: false))
+        #expect(WindowLayout.accepted(snapped, from: current, result: current, placed: false, sized: true))
+        #expect(WindowLayout.accepted(snapped, from: current, result: snapped, placed: false, sized: false))
+    }
+
     @Test func menuBarClickPointRejectsHiddenAndNotchedItems() {
         let displays = [
             MenuBarDisplay(frame: CGRect(x: 0, y: 0, width: 2560, height: 1440)),
