@@ -56,7 +56,12 @@ struct ClipboardStatus: Equatable {
         "CLIPBOARD_READ_FAILED",
         "Cue could not read your last few copies, so they were not saved. Copy again to try once more. If this keeps happening, quit and reopen Cue.")
 
-    init(context: AppContext) { self.context = context }
+    init(context: AppContext) {
+        self.context = context
+        NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.startOCR() }
+        }
+    }
 
     func start() async {
         await openStore()
