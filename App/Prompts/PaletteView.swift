@@ -56,6 +56,7 @@ private struct PaletteResults {
     var apps: [PaletteItem] = []
     var folders: [PaletteItem] = []
     var files: [PaletteItem] = []
+    var appsFirst = false
 
     var total: Int { actions.count + apps.count + folders.count + files.count }
 
@@ -155,6 +156,7 @@ struct PaletteView: View {
 
     private func results(_ snapshot: LibrarySnapshot) -> PaletteResults {
         var results = PaletteResults()
+        var bestAction = Int.max
         let sources = Set(snapshot.settings.searchIn)
         if sources.contains(.actions) {
             let actions = snapshot.actions.map { action in
@@ -176,10 +178,13 @@ struct PaletteView: View {
             results.actions = ranked.enumerated().sorted { a, b in
                 (a.element.tier, a.element.weight, a.offset) < (b.element.tier, b.element.weight, b.offset)
             }.map(\.element.item)
+            bestAction = ranked.map(\.tier).min() ?? .max
         }
         if sources.contains(.apps) {
-            results.apps = commands.apps.compactMap { hit in ActionSearch.score(query, name: hit.title).map { (hit, $0.tier, $0.weight) } }
-                .sorted { ($0.1, $0.2) < ($1.1, $1.2) }.map { .file($0.0) }
+            let apps = commands.apps.compactMap { hit in ActionSearch.score(query, name: hit.title).map { (hit, $0.tier, $0.weight) } }
+                .sorted { ($0.1, $0.2) < ($1.1, $1.2) }
+            results.apps = apps.map { .file($0.0) }
+            results.appsFirst = apps.first.map { $0.1 < bestAction } ?? false
         }
         if sources.contains(.folders) { results.folders = commands.files.results.filter(\.isFolder).map(PaletteItem.file) }
         if sources.contains(.files) { results.files = commands.files.results.filter { !$0.isFolder }.map(PaletteItem.file) }
@@ -191,14 +196,16 @@ struct PaletteView: View {
     }
 
     private func entries(_ results: PaletteResults) -> [PaletteEntry] {
+        let actions = section("Actions", results.actions)
         switch filter {
         case .all:
-            section("Actions", results.actions) + section("Apps", capped(results.apps, 5, .apps))
+            let apps = section("Apps", capped(results.apps, 5, .apps))
+            return (results.appsFirst ? apps + actions : actions + apps)
                 + section("Folders", capped(results.folders, 3, .folders)) + section("Files", capped(results.files, 3, .files))
-        case .apps: section("Apps", results.apps)
-        case .folders: section("Folders", results.folders)
-        case .files: section("Files", results.files)
-        case .actions: section("Actions", results.actions)
+        case .apps: return section("Apps", results.apps)
+        case .folders: return section("Folders", results.folders)
+        case .files: return section("Files", results.files)
+        case .actions: return actions
         }
     }
 
