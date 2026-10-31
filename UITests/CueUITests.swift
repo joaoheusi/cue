@@ -434,7 +434,7 @@ final class CueUITests: XCTestCase {
         let row = app.staticTexts["PNG image · 1200 × 240"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 40), "A copied image should appear as a row in clipboard history.")
         search.typeText("invoice")
-        XCTAssertTrue(row.waitForExistence(timeout: 90), "Search should find text inside the image once OCR finishes.")
+        XCTAssertTrue(row.waitForExistence(timeout: 200), "Search should find text inside the image once OCR finishes.")
         search.typeKey("k", modifierFlags: .command)
         let copyText = app.menuItems["Copy Text"]
         XCTAssertTrue(copyText.waitForExistence(timeout: 5), "⌘K should offer Copy Text on an image with text.")

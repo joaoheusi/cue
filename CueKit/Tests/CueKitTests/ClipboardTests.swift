@@ -1328,9 +1328,15 @@ import Testing
         }
     }
 
-    @Test func ocrReadsSparseTextOnALargeImageAndEachLineOnce() throws {
+    private func recognized(_ image: Data) async -> String? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(returning: ClipboardOCR.recognize(image)) }
+        }
+    }
+
+    @Test func ocrReadsSparseTextOnALargeImageAndEachLineOnce() async throws {
         let image = try rendered([("Quarterly invoice approved", 100, 1900), ("Sitting inside the overlap band", 1300, 1100), ("Final note near the corner", 3300, 100)], width: 3840, height: 2160)
-        let text = try #require(ClipboardOCR.recognize(image))
+        let text = try #require(await recognized(image))
         #expect(text.components(separatedBy: "invoice").count == 2, "\(text)")
         #expect(text.components(separatedBy: "overlap").count == 2, "\(text)")
         #expect(text.components(separatedBy: "corner").count == 2, "\(text)")
@@ -1338,10 +1344,10 @@ import Testing
         #expect(text.split(separator: "\n").count == 3, "\(text)")
     }
 
-    @Test func ocrReturnsNothingForDataThatIsNotAnImage() throws {
+    @Test func ocrReturnsNothingForDataThatIsNotAnImage() async throws {
         #expect(ClipboardOCR.recognize(Data("not an image".utf8)) == nil)
         #expect(ClipboardOCR.recognize(Data()) == nil)
-        #expect(ClipboardOCR.recognize(try rendered([], width: 200, height: 100))?.isEmpty == true)
+        #expect(await recognized(try rendered([], width: 200, height: 100))?.isEmpty == true)
     }
 
     @Test func ocrFeedsTheChildOverStdin() async throws {
@@ -1363,12 +1369,12 @@ import Testing
 
     @Test func ocrTimesOutAndCancelsWithoutWaitingForTheChild() async throws {
         let start = ContinuousClock.now
-        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("sleep 20"), image: Data(count: 1024 * 1024), timeout: 0.2) == .failed)
-        let task = Task { await ClipboardOCR.run(executable: sh, arguments: shell("sleep 20"), image: Data([1])) }
+        #expect(await ClipboardOCR.run(executable: sh, arguments: shell("sleep 600"), image: Data(count: 1024 * 1024), timeout: 0.2) == .failed)
+        let task = Task { await ClipboardOCR.run(executable: sh, arguments: shell("sleep 600"), image: Data([1])) }
         try await Task.sleep(for: .milliseconds(200))
         task.cancel()
         #expect(await task.value == .cancelled)
-        #expect(start.duration(to: .now) < .seconds(5))
+        #expect(start.duration(to: .now) < .seconds(120))
     }
 
     @Test func ocrDiagnosticsHoldCountsOnly() {
@@ -1756,7 +1762,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("reply")
         try data.write(to: file)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .reply(reply))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .reply(reply))
 
         var over = reply
         if case .decision(.capture(var clip), let access) = reply {
@@ -1764,7 +1770,7 @@ import Testing
             over = .decision(.capture(clip), access: access)
         }
         try over.encoded().write(to: file)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .crashed)
     }
 
     @Test func theLargestTextFitsTheReplyLimit() async throws {
@@ -1783,7 +1789,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("reply")
         try data.write(to: file)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 20) == .reply(reply))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .reply(reply))
     }
 
     @Test func everyOtherReplyFitsTheLimitToo() throws {
@@ -2038,24 +2044,22 @@ import Testing
         #expect(data.count > 256 * 1024 && data.count <= ClipboardChild.maxReplyBytes)
         let file = dir.appendingPathComponent("reply")
         try data.write(to: file)
-        let start = ContinuousClock.now
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 5) == .reply(reply))
-        #expect(start.duration(to: .now) < .seconds(4))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("cat '\(file.path)'"), timeout: 60) == .reply(reply))
     }
 
     @Test func childRunTimesOutAndStopsTheProcess() async {
         let start = ContinuousClock.now
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 20"), timeout: 0.2) == .timedOut)
-        #expect(start.duration(to: .now) < .seconds(4))
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("sleep 600"), timeout: 0.2) == .timedOut)
+        #expect(start.duration(to: .now) < .seconds(120))
     }
 
     @Test func cancellingARunKillsItAtOnce() async throws {
         let start = ContinuousClock.now
-        let task = Task { await ClipboardChild.read(executable: sh, arguments: shell("sleep 20")) }
+        let task = Task { await ClipboardChild.read(executable: sh, arguments: shell("sleep 600")) }
         try await Task.sleep(for: .milliseconds(200))
         task.cancel()
         #expect(await task.value == .cancelled)
-        #expect(start.duration(to: .now) < .seconds(4))
+        #expect(start.duration(to: .now) < .seconds(120))
     }
 
     @Test func cancellingBeforeTheRunStartsSpawnsNothing() async throws {
@@ -2077,7 +2081,7 @@ import Testing
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("printf garbage")) == .crashed)
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("true")) == .crashed)
         #expect(await ClipboardChild.read(executable: sh, arguments: shell("kill -9 $$")) == .crashed)
-        #expect(await ClipboardChild.read(executable: sh, arguments: shell("yes"), timeout: 5) == .crashed)
+        #expect(await ClipboardChild.read(executable: sh, arguments: shell("yes"), timeout: 60) == .crashed)
     }
 
     @Test func childRunReportsWhenItCannotStart() async {

@@ -11,8 +11,8 @@ public enum ClipboardOCROutcome: Equatable, Sendable {
 
 public enum ClipboardOCR {
     public static let argument = "--clipboard-ocr"
-    public static let timeout: TimeInterval = 60
-    public static let watchdog: UInt32 = 65
+    public static let timeout: TimeInterval = 180
+    public static let watchdog: UInt32 = 185
     public static let maxTextBytes = 64 * 1024
     static let maxReplyBytes = 4 * maxTextBytes
     static let tileSize = 2560
