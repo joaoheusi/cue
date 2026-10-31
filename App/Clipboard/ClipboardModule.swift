@@ -42,6 +42,7 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var keychainKind: ClipboardKeychain.Kind?
     @ObservationIgnored private var appNames: [String: String] = [:]
     @ObservationIgnored private var launchClearDone = false
+    @ObservationIgnored private let thumbnails = NSCache<NSString, NSImage>()
 
     private static let owner = "clipboard"
     static let accessDeniedError = CueError(
@@ -78,7 +79,8 @@ struct ClipboardStatus: Equatable {
     func openSettings() { context.openSettings(.clipboard) }
 
     var latest: ClipItem? {
-        capturedChangeCount == NSPasteboard.general.changeCount ? items.max { $0.lastUsedAt < $1.lastUsedAt } : nil
+        guard capturedChangeCount == NSPasteboard.general.changeCount, let item = items.max(by: { $0.lastUsedAt < $1.lastUsedAt }), item.content.isText else { return nil }
+        return item
     }
 
     func commandView() -> AnyView { AnyView(ClipboardCommandView(module: self)) }
@@ -96,6 +98,7 @@ struct ClipboardStatus: Equatable {
             rows.append(("Items", "\(counts.items) (\(items.count) readable)"))
             rows.append(("Pinned items", "\(counts.pinned)"))
         }
+        if let store, let bytes = try? await store.storedBytes() { rows.append(("Stored bytes", "\(bytes)")) }
         rows += [
             ("Pinboards", "\(pinboards.count)"),
             ("Capture", captureEnabled ? (pollTask != nil ? "on" : "on, paused") : "off"),
@@ -103,6 +106,7 @@ struct ClipboardStatus: Equatable {
             ("Keychain", keychainKind?.rawValue ?? "not used"),
             ("Retention", settings.retention.rawValue),
             ("Max unpinned items", "\(settings.maxItems)"),
+            ("Max unpinned bytes", "\(settings.maxStorage)"),
             ("Excluded apps", "\(settings.excludedApps.count)"),
             ("Shortcut", settings.shortcut ?? "none"),
             ("Captured this session", "\(capturedCount)"),
@@ -291,23 +295,23 @@ struct ClipboardStatus: Equatable {
     }
 
     private func readOnMainThread(_ types: [String]) -> CaptureDecision {
-        CaptureFilter.read(types: types) { NSPasteboard.general.string(forType: .string) }
+        CaptureFilter.readText(types: types) { NSPasteboard.general.string(forType: .string) }
     }
 
     private func finish(_ decision: CaptureDecision, count: Int, source: String?) {
         switch CaptureFilter.review(decision, sensitive: settings.sensitive) {
         case .skip(let reason):
             skipCounts[reason, default: 0] += 1
-        case .capture(let text):
+        case .capture(let clip):
             capturedChangeCount = count
-            Task { await save(text, source: source) }
+            Task { await save(clip, source: source) }
         }
     }
 
-    private func save(_ text: String, source: String?) async {
+    private func save(_ clip: ClipCapture, source: String?) async {
         guard let store else { return }
         do {
-            try await store.capture(text, source: source, now: Date())
+            try await store.capture(clip, source: source, now: Date())
             capturedCount += 1
             try await store.purge(now: Date())
             await refresh()
@@ -318,7 +322,47 @@ struct ClipboardStatus: Equatable {
 
     private static var pasteboardDenied: Bool { ClipboardReader.access == .alwaysDeny }
 
-    func use(_ item: ClipItem, paste: Bool) async {
+    private func pasteContent(_ item: ClipItem, plain: Bool) async throws -> (content: PasteContent, warning: String?) {
+        switch item.content {
+        case .plain:
+            return (.text(item.text), nil)
+        case .rich where plain:
+            return (.text(item.text), nil)
+        case .rich:
+            return (.data(text: item.text, try await payload(item)), nil)
+        case .image:
+            return (.data(text: nil, try await payload(item)), nil)
+        case .files(let paths):
+            let check = await checkFiles(paths)
+            if let error = check.error { throw error }
+            return (.files(check.present), check.warning)
+        }
+    }
+
+    private func payload(_ item: ClipItem) async throws -> [String: Data] {
+        guard let store else { throw ClipboardStore.dataMissing }
+        return try await store.payload(item.id)
+    }
+
+    func checkFiles(_ paths: [String]) async -> ClipFileCheck {
+        await Task.detached { ClipFileCheck(paths: paths) { FileManager.default.fileExists(atPath: $0) } }.value
+    }
+
+    func thumbnail(of item: ClipItem) async -> NSImage? {
+        let key = item.id as NSString
+        if let cached = thumbnails.object(forKey: key) { return cached }
+        guard let data = try? await store?.thumbnail(item.id), let image = NSImage(data: data) else { return nil }
+        thumbnails.setObject(image, forKey: key)
+        return image
+    }
+
+    func preview(of item: ClipItem, maxPixelSize: Int) async -> NSImage? {
+        guard let data = try? await payload(item).values.first else { return nil }
+        let image = await Task.detached { ClipImage.preview(data, maxPixelSize: maxPixelSize) }.value
+        return image.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+    }
+
+    func use(_ item: ClipItem, paste: Bool, plain: Bool = false) async {
         commandStatus = nil
         let invocation = context.invocation
         var target: PasteTarget?
@@ -336,19 +380,31 @@ struct ClipboardStatus: Equatable {
                 reason = PasteFailure.targetUnavailable.error.message
             }
         }
+        let generation = context.paste.changeCount
+        let loaded: (content: PasteContent, warning: String?)
+        do {
+            loaded = try await pasteContent(item, plain: plain)
+        } catch {
+            return report(error, .command)
+        }
+        if case .text = loaded.content {} else if invocation?.cancelled == true { return }
+        if let warning = loaded.warning {
+            reason = warning
+            target = nil
+        }
         let fallback = paste && target == nil
         let delivery = await context.paste.deliver(
-            item.text, paste: target != nil, target: target, generation: context.paste.changeCount,
+            loaded.content, paste: target != nil, target: target, generation: generation,
             isCancelled: { invocation?.cancelled ?? false }, hide: context.closeCommand)
         switch delivery {
         case .pasted, .copied:
-            commandStatus = fallback ? ClipboardStatus(text: "Copied, not pasted. \(reason ?? "") Press ⌘V to paste.", success: false)
-                                     : ClipboardStatus(text: delivery.message, success: true)
-            if fallback { context.showCommandPassively() }
+            let note = fallback ? "Copied, not pasted. \(reason ?? "") Press ⌘V to paste." : loaded.warning.map { "Copied. \($0)" }
+            commandStatus = note.map { ClipboardStatus(text: $0, success: false) } ?? ClipboardStatus(text: delivery.message, success: true)
+            if note != nil { context.showCommandPassively() }
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .copiedNotPasted(let error):
             context.log.record(error, "clipboard")
-            commandStatus = ClipboardStatus(text: delivery.message, success: false)
+            commandStatus = ClipboardStatus(text: item.content.isText ? delivery.message : "Copied, but not pasted. \(error.message)", success: false)
             context.showCommandPassively()
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .failedBeforeCopy(let error):
@@ -546,13 +602,13 @@ struct ClipboardStatus: Equatable {
     func exportHistory() {
         guard let store,
               confirm("Export clipboard history as plain text?",
-                      "The file is not encrypted. Anyone who can open it can read every saved item. Store it somewhere safe and delete it when you no longer need it.",
+                      "The file is not encrypted. Anyone who can open it can read every saved item. Images and files are left out, and rich text is saved as plain text. Store it somewhere safe and delete it when you no longer need it.",
                       "Export…") else { return }
         Task {
             do {
                 let data = try await store.exportData(now: Date())
                 if try FileTransfer.save(data, suggestedName: SafeFilename.make("Cue Clipboard Export", ext: "json", date: Date()), type: .json) {
-                    settingsStatus = ClipboardStatus(text: "Exported \(items.count == 1 ? "1 item" : "\(items.count) items").", success: true)
+                    settingsStatus = ClipboardStatus(text: "Exported \(Self.itemCount(items.filter(\.isExportable).count)).", success: true)
                 }
             } catch {
                 report(error, .settings)
@@ -566,8 +622,9 @@ struct ClipboardStatus: Equatable {
             do {
                 guard let data = try FileTransfer.open(type: .json, maxBytes: ClipboardExport.maxBytes) else { return }
                 let file = try await Task.detached { try ClipboardExport.decode(data) }.value
+                let loss = ClipboardExport.lossWarning(try await store.formatCounts()).map { " \($0)" } ?? ""
                 guard confirm("Replace clipboard history?",
-                              "Import \(file.items.count) items and \(file.pinboards.count) pinboards. This replaces your current clipboard history, pinboards, and clipboard settings. It cannot be undone.",
+                              "Import \(file.items.count) items and \(file.pinboards.count) pinboards. This replaces your current clipboard history, pinboards, and clipboard settings.\(loss) It cannot be undone.",
                               "Replace") else { return }
                 if !file.items.isEmpty, !(await store.isUnlocked) { try await unlock(store) }
                 cancelRead()

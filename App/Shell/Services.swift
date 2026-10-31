@@ -76,7 +76,7 @@ extension NSMenu {
             case .accessibility(let reason):
                 "\(reason)\n\nmacOS lists this under Privacy & Security → Accessibility. Cue uses it only for the action you start. Cue never records keystrokes or screen content.\n\nAfter you turn Cue on, quit and reopen Cue if it still reports no access."
             case .clipboard:
-                "Clipboard history saves text you copy so you can search and paste it later. macOS asks before Cue reads the clipboard. Choose “Always Allow” to keep history working.\n\nCue skips passwords, concealed or transient items, and apps you exclude. History is encrypted and stays on this Mac."
+                "Clipboard history saves the text, images, and files you copy so you can search and paste them later. For files, Cue saves the location, not a copy. macOS asks before Cue reads the clipboard. Choose “Always Allow” to keep history working.\n\nCue skips passwords, concealed or transient items, and apps you exclude. History is encrypted and stays on this Mac."
             }
         }
 

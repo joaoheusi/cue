@@ -36,7 +36,7 @@ public enum ClipboardChild {
     public static let argument = "--clipboard-read"
     public static let timeout: TimeInterval = 30
     public static let watchdog: UInt32 = 35
-    static let maxReplyBytes = 1024 * 1024
+    static let maxReplyBytes = CaptureFilter.maxImageBytes + 1024 * 1024
 
     public struct Request: Equatable, Sendable {
         public let changeCount: Int
@@ -60,13 +60,13 @@ public enum ClipboardChild {
         public var changeCount: () -> Int
         public var access: () -> ClipboardAccess
         public var types: () -> [String]
-        public var text: () -> String?
+        public var content: CaptureSource
 
-        public init(changeCount: @escaping () -> Int, access: @escaping () -> ClipboardAccess, types: @escaping () -> [String], text: @escaping () -> String?) {
+        public init(changeCount: @escaping () -> Int, access: @escaping () -> ClipboardAccess, types: @escaping () -> [String], content: CaptureSource) {
             self.changeCount = changeCount
             self.access = access
             self.types = types
-            self.text = text
+            self.content = content
         }
     }
 
@@ -74,7 +74,7 @@ public enum ClipboardChild {
         let before = source.access()
         guard source.changeCount() == request.changeCount else { return .decision(.skip(.stale), access: before) }
         if before == .alwaysDeny || before != request.access { return .denied(child: before, parent: request.access) }
-        let decision = CaptureFilter.read(types: source.types(), readText: source.text)
+        let decision = CaptureFilter.read(types: source.types(), source: source.content)
         let after = source.access()
         if after == .alwaysDeny { return .denied(child: after, parent: request.access) }
         guard source.changeCount() == request.changeCount else { return .decision(.skip(.stale), access: after) }

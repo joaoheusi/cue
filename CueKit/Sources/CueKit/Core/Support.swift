@@ -30,6 +30,16 @@ public enum ShortAge {
         return "\(max(2, calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 2))d"
     }
 
+    public static func stamp(_ date: Date, now: Date = Date(), calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let time = date.formatted(style.hour(.twoDigits(amPM: .abbreviated)).minute(.twoDigits))
+        if calendar.isDate(date, inSameDayAs: now) { return "Today, \(time)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) { return "Yesterday, \(time)" }
+        var day = style.month(.abbreviated).day()
+        if !calendar.isDate(date, equalTo: now, toGranularity: .year) { day = day.year() }
+        return "\(date.formatted(day)), \(time)"
+    }
+
     public static func until(_ date: Date, now: Date = Date()) -> String {
         let seconds = max(0, Int(date.timeIntervalSince(now).rounded(.up)))
         return seconds < 60 ? "\(seconds)s" : "\(Int((Double(seconds) / 60).rounded(.up)))m"

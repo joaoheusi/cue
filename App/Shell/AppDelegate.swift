@@ -311,7 +311,7 @@ import SwiftUI
         sections.append(("Clipboard", await clipboard.diagnostics()))
         sections.append(("Menu Bar", await menuBar.diagnostics()))
         sections.append(("Recent errors", context.log.entries.suffix(50).map { ("", $0) }))
-        var text = "Cue diagnostics — \(Timestamp.now())\nThis report contains no prompts, clipboard text, or menu-bar item names.\n"
+        var text = "Cue diagnostics — \(Timestamp.now())\nThis report contains no prompts, clipboard content, or menu-bar item names.\n"
         for (title, entries) in sections {
             text += "\n## \(title)\n"
             text += entries.isEmpty ? "(none)\n" : entries.map { $0.0.isEmpty ? "\($0.1)\n" : "\($0.0): \($0.1)\n" }.joined()

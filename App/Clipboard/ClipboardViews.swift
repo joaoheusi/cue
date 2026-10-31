@@ -1,9 +1,10 @@
 import AppKit
 import CueKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum ClipFilter: String, CaseIterable {
-    case all, pinned, text, links, code
+    case all, pinned, text, links, code, images, files
 
     var title: String { rawValue.capitalized }
 
@@ -14,6 +15,8 @@ private enum ClipFilter: String, CaseIterable {
         case .text: item.kind == .text
         case .links: item.kind == .link
         case .code: item.kind == .code
+        case .images: item.kind == .image
+        case .files: item.kind == .file
         }
     }
 }
@@ -86,7 +89,7 @@ struct ClipboardCommandView: View {
                            actionTitle: "Try Again", action: module.retry)
         case .ready where !module.captureEnabled && module.items.isEmpty:
             EmptyStateView(symbol: "clipboard", title: "Clipboard history is off",
-                           message: "Turn it on to save text you copy and paste it again later. History is encrypted and stays on this Mac.",
+                           message: "Turn it on to save the text, images, and files you copy and paste them again later. History is encrypted and stays on this Mac.",
                            actionTitle: "Turn On Clipboard History") { module.setCaptureEnabled(true) }
                 .accessibilityIdentifier("clipboard.turnOn")
         case .ready:
@@ -100,7 +103,7 @@ struct ClipboardCommandView: View {
                         header: { $0.header }, showsDetail: current != nil,
                         row: { entry, selected in row(entry.item, selected) },
                         bar: { bar },
-                        detail: { if let current { detail(current) } },
+                        detail: { if let current { ClipDetail(item: current, module: module) } },
                         onSubmit: { entry, alternate in Task { await module.use(entry.item, paste: !alternate) } })
                 .overlay { emptyMessage.padding(.top, 96) }
             if module.accessDenied && module.captureEnabled {
@@ -158,7 +161,7 @@ struct ClipboardCommandView: View {
                 EmptyStateView(symbol: "pin", title: "Nothing pinned yet", message: "Select an item and press ⌘P to pin it.")
             } else {
                 EmptyStateView(symbol: "clipboard", title: "Nothing copied yet",
-                               message: module.captureEnabled ? "Copy text in any app. It appears here." : "Clipboard history is off. Turn it on in Settings → Clipboard.")
+                               message: module.captureEnabled ? "Copy text, an image, or a file in any app. It appears here." : "Clipboard history is off. Turn it on in Settings → Clipboard.")
             }
         }
     }
@@ -170,6 +173,8 @@ struct ClipboardCommandView: View {
         case .link: return ("link", Cue.link)
         case .code: return ("chevron.left.forwardslash.chevron.right", .secondary)
         case .text: return ("text.alignleft", .secondary)
+        case .image: return ("photo", .secondary)
+        case .file: return ("doc", .secondary)
         }
     }
 
@@ -185,10 +190,19 @@ struct ClipboardCommandView: View {
         }
     }
 
-    private func row(_ item: ClipItem, _ selected: Bool) -> some View {
+    @ViewBuilder private func leading(_ item: ClipItem) -> some View {
         let (name, color) = symbol(item)
-        return CommandRow(title: item.preview, selected: selected, monospaced: item.sensitive, match: query.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            Image(systemName: name).font(.system(size: 13)).foregroundStyle(color).frame(width: 16)
+        let icon = Image(systemName: name).font(.system(size: 13)).foregroundStyle(color)
+        switch item.content {
+        case .image: ClipThumbnail(item: item, module: module, placeholder: icon)
+        case .files(let paths): ClipFileIcon(path: paths.first ?? "")
+        case .plain, .rich: icon
+        }
+    }
+
+    private func row(_ item: ClipItem, _ selected: Bool) -> some View {
+        CommandRow(title: item.preview, selected: selected, monospaced: item.sensitive, match: query.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            leading(item).frame(width: 16)
         } accessory: {
             meta(item)
         }
@@ -196,6 +210,7 @@ struct ClipboardCommandView: View {
         .contextMenu {
             Button("Paste") { Task { await module.use(item, paste: true) } }
             Button("Copy") { Task { await module.use(item, paste: false) } }
+            if item.content == .rich { Button("Paste as Text") { Task { await module.use(item, paste: true, plain: true) } } }
             if item.linkURL != nil { Button("Go to Link") { module.goToLink(item) } }
             Menu("Pin To") {
                 ForEach(module.pinboards) { board in
@@ -206,34 +221,6 @@ struct ClipboardCommandView: View {
             Divider()
             Button("Delete", role: .destructive) { Task { await module.delete(item) } }
         }
-    }
-
-    private func detail(_ item: ClipItem) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ScrollView {
-                Text(item.display)
-                    .font(item.sensitive ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5))
-                    .lineSpacing(4)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-            }
-            .background(Cue.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
-            DetailRows(rows: [
-                ("Source", item.source.map(module.appName) ?? "Unknown"),
-                ("Copied", item.createdAt.formatted(.relative(presentation: .named))),
-                ("Content", item.sensitive ? "Hidden API key or token" : contentSummary(item.text)),
-            ])
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
-    }
-
-    private func contentSummary(_ text: String) -> String {
-        let words = text.split(whereSeparator: \.isWhitespace).count
-        return "\(text.count) character\(text.count == 1 ? "" : "s") · \(words) word\(words == 1 ? "" : "s")"
     }
 
     private var pasteLabel: String {
@@ -260,6 +247,8 @@ struct ClipboardCommandView: View {
                 .keyboardShortcut(.delete, modifiers: .command)
             Button("Go to Link") { if let current { module.goToLink(current) } }
                 .keyboardShortcut("o", modifiers: .command)
+            Button("Paste as Text") { if let current, current.content.isText { Task { await module.use(current, paste: true, plain: true) } } }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
             Button("Previous Pinboard") { cyclePinboard(-1) }.keyboardShortcut("[", modifiers: .command)
             Button("Next Pinboard") { cyclePinboard(1) }.keyboardShortcut("]", modifiers: .command)
         }
@@ -272,6 +261,7 @@ struct ClipboardCommandView: View {
         PanelMenu.show { menu in
             menu.add(pasteLabel) { Task { await module.use(item, paste: true) } }
             menu.add("Copy") { Task { await module.use(item, paste: false) } }
+            if item.content == .rich { menu.add("Paste as Text", key: "V") { Task { await module.use(item, paste: true, plain: true) } } }
             if item.linkURL != nil { menu.add("Go to Link", key: "o") { module.goToLink(item) } }
             menu.addItem(.separator())
             for board in module.pinboards where board.id != item.pinboardID {
@@ -299,6 +289,133 @@ struct ClipboardCommandView: View {
     }
 }
 
+private struct ClipThumbnail<Placeholder: View>: View {
+    let item: ClipItem
+    let module: ClipboardModule
+    let placeholder: Placeholder
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit).frame(width: 20, height: 20)
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+            } else {
+                placeholder
+            }
+        }
+        .task(id: item.id) { image = await module.thumbnail(of: item) }
+    }
+}
+
+private struct ClipFileIcon: View {
+    let path: String
+    var size: CGFloat = 20
+
+    var body: some View {
+        let type = path.hasSuffix("/") ? UTType.folder : UTType(filenameExtension: (path as NSString).pathExtension) ?? .data
+        Image(nsImage: NSWorkspace.shared.icon(for: type)).resizable().frame(width: size, height: size)
+    }
+}
+
+private struct ClipDetail: View {
+    let item: ClipItem
+    let module: ClipboardModule
+    @State private var files: ClipFileCheck?
+
+    private var rows: [(String, String)] {
+        var rows = [
+            ("Source", item.source.map(module.appName) ?? "Unknown"),
+            ("Copied", ShortAge.stamp(item.createdAt)),
+            ("Content", item.summary),
+        ]
+        if item.content == .rich { rows.append(("Format", "Rich text")) }
+        if let status = files?.error?.message ?? files?.warning { rows.append(("Status", status)) }
+        return rows
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            card
+                .background(Cue.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Cue.hairline) }
+            DetailRows(rows: rows)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .task(id: item.id) {
+            files = nil
+            guard case .files(let paths) = item.content else { return }
+            let check = await module.checkFiles(paths)
+            if !Task.isCancelled { files = check }
+        }
+    }
+
+    @ViewBuilder private var card: some View {
+        switch item.content {
+        case .image:
+            ClipImagePreview(item: item, module: module)
+        case .files(let paths):
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(paths, id: \.self) { path in
+                        HStack(spacing: 8) {
+                            ClipFileIcon(path: path)
+                            Text((path as NSString).abbreviatingWithTildeInPath)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(files?.missing.contains(path) == true ? Cue.warning : Cue.ink)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+        case .plain, .rich:
+            ScrollView {
+                Text(item.display)
+                    .font(item.sensitive ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5))
+                    .lineSpacing(4)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+            }
+        }
+    }
+}
+
+private struct ClipImagePreview: View {
+    let item: ClipItem
+    let module: ClipboardModule
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: image.size.width, maxHeight: image.size.height)
+                    .padding(10)
+            } else if failed {
+                Text(ClipboardStore.dataMissing.message).font(.system(size: 12.5)).foregroundStyle(Cue.warning).multilineTextAlignment(.center).padding(16)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: item.id) {
+            image = nil
+            failed = false
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            let loaded = await module.preview(of: item, maxPixelSize: 1024)
+            guard !Task.isCancelled else { return }
+            image = loaded
+            failed = loaded == nil
+        }
+    }
+}
+
 struct ClipboardSettingsView: View {
     let module: ClipboardModule
     @State private var selectedApp: String?
@@ -318,6 +435,10 @@ struct ClipboardSettingsView: View {
                 CardDivider()
                 SettingsRow("Keep at most") {
                     picker(\.maxItems, ClipboardSettings.maxItemChoices) { "\($0) items" }
+                }
+                CardDivider()
+                SettingsRow("Storage limit", note: "Pinned items do not count toward this limit.") {
+                    picker(\.maxStorage, ClipboardSettings.maxStorageChoices) { ClipboardSettings.storageTitle($0) }
                 }
                 CardDivider()
                 SettingsRow("Stored", note: stored) {
@@ -390,7 +511,7 @@ struct ClipboardSettingsView: View {
                 .frame(height: 40)
             }
             SettingsSection("Data") {
-                SettingsRow("History file", note: "Unencrypted JSON. Import replaces history.") {
+                SettingsRow("History file", note: "Unencrypted JSON with text only. Import replaces history.") {
                     Button("Import…", action: module.importHistory)
                     Button("Export…", action: module.exportHistory)
                 }
@@ -402,7 +523,8 @@ struct ClipboardSettingsView: View {
 
     private var stored: String {
         let pinned = module.items.filter(\.isPinned).count
-        return "\(module.items.count) items · \(pinned) pinned · encrypted"
+        let bytes = module.items.reduce(0) { $0 + $1.byteSize }
+        return "\(module.items.count) items · \(pinned) pinned · \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) · encrypted"
     }
 
     @ViewBuilder private var problems: some View {
