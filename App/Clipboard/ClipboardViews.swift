@@ -260,7 +260,7 @@ struct ClipboardCommandView: View {
             KeyHint(label: "Copy", keys: "⌘↵")
             KeyHint(label: current?.isPinned == true ? "Unpin" : "Pin", keys: "⌘P")
             KeyHint(label: "Delete", keys: "⌘⌫")
-            if let current { ActionsHint(target: current.id) { showMenu(self.current ?? current) } }
+            if let current { ActionsHint(target: current.id) { showMenu(current) } }
         }
     }
 
@@ -282,7 +282,8 @@ struct ClipboardCommandView: View {
         .accessibilityHidden(true)
     }
 
-    private func showMenu(_ item: ClipItem) {
+    private func showMenu(_ selected: ClipItem) {
+        let item = current ?? selected
         PanelMenu.show { menu in
             menu.add(pasteLabel) { Task { await module.use(item, paste: true) } }
             menu.add("Copy") { Task { await module.use(item, paste: false) } }
