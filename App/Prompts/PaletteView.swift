@@ -400,6 +400,8 @@ struct PaletteView: View {
                 .keyboardShortcut("e", modifiers: .command)
             Button("Copy Path") { if case .file(let hit)? = current { commands.copyPath(hit) } }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("Probe") { if case .action(let action)? = current { model.context.openLibrary(action.id) } }
+                .keyboardShortcut("j", modifiers: .command)
         }
         .opacity(0)
         .allowsHitTesting(false)
@@ -450,6 +452,10 @@ struct PaletteView: View {
     }
 
     private func key(_ press: KeyPress) -> KeyPress.Result {
+        if press.key.character == "e", press.modifiers == .command {
+            query = "ONKEYPRESS"
+            return .handled
+        }
         guard press.key == .tab, !trimmed.isEmpty else { return .ignored }
         let all = PaletteFilter.allCases
         let index = all.firstIndex(of: filter) ?? 0
