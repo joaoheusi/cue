@@ -89,7 +89,7 @@ struct ClipboardCommandView: View {
                            actionTitle: "Try Again", action: module.retry)
         case .ready where !module.captureEnabled && module.items.isEmpty:
             EmptyStateView(symbol: "clipboard", title: "Clipboard history is off",
-                           message: "Turn it on to save text you copy and paste it again later. History is encrypted and stays on this Mac.",
+                           message: "Turn it on to save the text, images, and files you copy and paste them again later. History is encrypted and stays on this Mac.",
                            actionTitle: "Turn On Clipboard History") { module.setCaptureEnabled(true) }
                 .accessibilityIdentifier("clipboard.turnOn")
         case .ready:
@@ -161,7 +161,7 @@ struct ClipboardCommandView: View {
                 EmptyStateView(symbol: "pin", title: "Nothing pinned yet", message: "Select an item and press ⌘P to pin it.")
             } else {
                 EmptyStateView(symbol: "clipboard", title: "Nothing copied yet",
-                               message: module.captureEnabled ? "Copy text in any app. It appears here." : "Clipboard history is off. Turn it on in Settings → Clipboard.")
+                               message: module.captureEnabled ? "Copy text, an image, or a file in any app. It appears here." : "Clipboard history is off. Turn it on in Settings → Clipboard.")
             }
         }
     }
@@ -437,6 +437,10 @@ struct ClipboardSettingsView: View {
                     picker(\.maxItems, ClipboardSettings.maxItemChoices) { "\($0) items" }
                 }
                 CardDivider()
+                SettingsRow("Storage limit", note: "Pinned items do not count toward this limit.") {
+                    picker(\.maxStorage, ClipboardSettings.maxStorageChoices) { ClipboardSettings.storageTitle($0) }
+                }
+                CardDivider()
                 SettingsRow("Stored", note: stored) {
                     Menu("Delete Recent") {
                         ForEach(RecentRange.allCases, id: \.self) { range in
@@ -507,7 +511,7 @@ struct ClipboardSettingsView: View {
                 .frame(height: 40)
             }
             SettingsSection("Data") {
-                SettingsRow("History file", note: "Unencrypted JSON. Import replaces history.") {
+                SettingsRow("History file", note: "Unencrypted JSON with text only. Import replaces history.") {
                     Button("Import…", action: module.importHistory)
                     Button("Export…", action: module.exportHistory)
                 }
@@ -519,7 +523,8 @@ struct ClipboardSettingsView: View {
 
     private var stored: String {
         let pinned = module.items.filter(\.isPinned).count
-        return "\(module.items.count) items · \(pinned) pinned · encrypted"
+        let bytes = module.items.reduce(0) { $0 + $1.byteSize }
+        return "\(module.items.count) items · \(pinned) pinned · \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) · encrypted"
     }
 
     @ViewBuilder private var problems: some View {
