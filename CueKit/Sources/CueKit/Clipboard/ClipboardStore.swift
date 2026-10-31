@@ -3,7 +3,9 @@ import Foundation
 
 public actor ClipboardStore {
     public static let fileName = "clipboard.sqlite3"
+    public static let payloadFolder = "clipboard-payloads"
     static let schemaVersion = 3
+    private static let bytesSQL = "length(text) + file_bytes + COALESCE(length(meta), 0) + COALESCE(length(rich), 0) + COALESCE(length(thumbnail), 0)"
 
     public static let keyUnavailable = CueError(
         "HISTORY_KEY_UNAVAILABLE",
@@ -11,8 +13,10 @@ public actor ClipboardStore {
     static let newerVersion = CueError(
         "HISTORY_NEWER_VERSION",
         "This clipboard history was created by a newer version of Cue. Update Cue to open it. Your history has not been changed.")
+    public static let dataMissing = CueError("CLIPBOARD_DATA_MISSING", "The saved data for this item is missing or damaged.")
 
     private let db: SQLite
+    private let payloads: URL
     private var crypto: ClipboardCrypto?
     private var cache: [String: ClipItem] = [:]
     public private(set) var settings: ClipboardSettings
@@ -22,6 +26,8 @@ public actor ClipboardStore {
 
     public init(url: URL?) throws {
         let db = try url.map { try SQLite(path: $0) } ?? SQLite()
+        payloads = url?.deletingLastPathComponent().appendingPathComponent(Self.payloadFolder, isDirectory: true)
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("\(Self.payloadFolder)-\(Self.newID())", isDirectory: true)
         try db.executeScript("PRAGMA secure_delete=ON; PRAGMA journal_mode=WAL;")
         let version = try db.userVersion()
         if version > Self.schemaVersion { throw Self.newerVersion }
@@ -101,27 +107,123 @@ public actor ClipboardStore {
 
     @discardableResult
     public func capture(_ text: String, source: String?, now: Date) throws -> String {
+        try capture(.plain(text), source: source, now: now)
+    }
+
+    @discardableResult
+    public func capture(_ captured: ClipCapture, source: String?, now: Date) throws -> String {
         let crypto = try requireCrypto()
         let (stamp, date) = Self.stamp(now)
-        let digest = crypto.digest(text)
-        let sensitive = settings.sensitive != .keep && SensitiveText.matches(text)
+        let sensitive = captured.content.isText && settings.sensitive != .keep && SensitiveText.matches(captured.text)
+        let clip = sensitive ? ClipCapture.plain(captured.text) : captured
+        let digest = crypto.digest(clip)
         let expiry = Self.expiry(sensitive: sensitive, settings: settings, now: date)
         if let id = try db.scalar("SELECT id FROM items WHERE digest=?1", [.blob(digest)])?.string {
             let old = cache[id]
             let kept = old?.isPinned == true ? nil : expiry
-            try db.execute("UPDATE items SET last_used_at=?1, sensitive=?2, expires_at=?3 WHERE id=?4",
-                           [.text(stamp), SQLValue(sensitive), kept.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
-            cache[id] = ClipItem(id: id, text: text, source: old?.source, createdAt: old?.createdAt ?? date, lastUsedAt: date,
-                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept)
+            let replaces = sensitive || clip.content == .rich
+            let content = replaces ? clip.content : old?.content ?? clip.content
+            let rich = try Self.sealedRich(clip, id: id, crypto: crypto)
+            try db.transaction {
+                try db.execute("UPDATE items SET last_used_at=?1, sensitive=?2, expires_at=?3 WHERE id=?4",
+                               [.text(stamp), SQLValue(sensitive), kept.map { .text(Timestamp.iso($0)) } ?? .null, .text(id)])
+                if replaces {
+                    try db.execute("UPDATE items SET format=?1, rich=?2 WHERE id=?3", [.text(content.format), rich.map(SQLValue.blob) ?? .null, .text(id)])
+                }
+            }
+            cache[id] = ClipItem(id: id, text: clip.text, source: old?.source, createdAt: old?.createdAt ?? date, lastUsedAt: date,
+                                 pinboardID: old?.pinboardID, sensitive: sensitive, expiresAt: kept, content: content, byteSize: try storedBytes(id))
             return id
         }
         let id = Self.newID()
         let sealedSource = try source.map { try crypto.seal($0, context: "\(id).source") }
-        try db.execute("INSERT INTO items(id, digest, text, source, created_at, last_used_at, sensitive, expires_at) VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)",
-                       [.text(id), .blob(digest), .blob(try crypto.seal(text, context: "\(id).text")), sealedSource.map(SQLValue.blob) ?? .null, .text(stamp),
-                        SQLValue(sensitive), expiry.map { .text(Timestamp.iso($0)) } ?? .null])
-        cache[id] = ClipItem(id: id, text: text, source: source, createdAt: date, lastUsedAt: date, pinboardID: nil, sensitive: sensitive, expiresAt: expiry)
+        let sealedMeta = clip.content.isText ? nil : try crypto.seal(try JSONEncoder().encode(clip.content), context: "\(id).meta")
+        let sealedThumbnail = try clip.thumbnail.map { try crypto.seal($0, context: "\(id).thumbnail") }
+        let rich = try Self.sealedRich(clip, id: id, crypto: crypto)
+        let fileBytes = try writePayload(clip, id: id, crypto: crypto)
+        do {
+            try db.execute("""
+            INSERT INTO items(id, digest, text, source, created_at, last_used_at, sensitive, expires_at, format, meta, rich, file_bytes, thumbnail)
+            VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            """, [.text(id), .blob(digest), .blob(try crypto.seal(clip.text, context: "\(id).text")), sealedSource.map(SQLValue.blob) ?? .null, .text(stamp),
+                  SQLValue(sensitive), expiry.map { .text(Timestamp.iso($0)) } ?? .null, .text(clip.content.format), sealedMeta.map(SQLValue.blob) ?? .null,
+                  rich.map(SQLValue.blob) ?? .null, SQLValue(fileBytes), sealedThumbnail.map(SQLValue.blob) ?? .null])
+        } catch {
+            removePayload(id)
+            throw error
+        }
+        cache[id] = ClipItem(id: id, text: clip.text, source: source, createdAt: date, lastUsedAt: date, pinboardID: nil, sensitive: sensitive,
+                             expiresAt: expiry, content: clip.content, byteSize: try storedBytes(id))
         return id
+    }
+
+    public func payload(_ id: String) throws -> [String: Data] {
+        let crypto = try requireCrypto()
+        switch cache[id]?.content {
+        case .image(let type, _, _):
+            guard let sealed = try? Data(contentsOf: payloadFile(id)),
+                  let data = try? crypto.openData(sealed, context: "\(id).payload") else { throw Self.dataMissing }
+            return [type: data]
+        case .rich:
+            guard let sealed = try db.scalar("SELECT rich FROM items WHERE id=?1", [.text(id)])?.data,
+                  let plist = try? crypto.openData(sealed, context: "\(id).rich"),
+                  let data = try? PropertyListDecoder().decode([String: Data].self, from: plist) else { throw Self.dataMissing }
+            return data
+        default:
+            throw Self.dataMissing
+        }
+    }
+
+    public func thumbnail(_ id: String) throws -> Data? {
+        let crypto = try requireCrypto()
+        guard let sealed = try db.scalar("SELECT thumbnail FROM items WHERE id=?1", [.text(id)])?.data else { return nil }
+        return try? crypto.openData(sealed, context: "\(id).thumbnail")
+    }
+
+    public func formatCounts() throws -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for row in try db.query("SELECT format, COUNT(*) FROM items GROUP BY format") {
+            if let format = row[0].string { counts[format] = row[1].int }
+        }
+        return counts
+    }
+
+    public func storedBytes() throws -> Int { try db.scalar("SELECT COALESCE(SUM(\(Self.bytesSQL)), 0) FROM items")?.int ?? 0 }
+
+    private func storedBytes(_ id: String) throws -> Int {
+        try db.scalar("SELECT \(Self.bytesSQL) FROM items WHERE id=?1", [.text(id)])?.int ?? 0
+    }
+
+    private static func sealedRich(_ clip: ClipCapture, id: String, crypto: ClipboardCrypto) throws -> Data? {
+        guard clip.content == .rich else { return nil }
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try crypto.seal(try encoder.encode(clip.data), context: "\(id).rich")
+    }
+
+    private func payloadFile(_ id: String) -> URL { payloads.appendingPathComponent(id) }
+
+    private func writePayload(_ clip: ClipCapture, id: String, crypto: ClipboardCrypto) throws -> Int {
+        guard case .image(let type, _, _) = clip.content else { return 0 }
+        guard let data = clip.data[type] else { throw CueError.storage() }
+        let sealed = try crypto.seal(data, context: "\(id).payload")
+        let manager = FileManager.default
+        try manager.createDirectory(at: payloads, withIntermediateDirectories: true)
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: payloads.path)
+        try sealed.write(to: payloadFile(id), options: .atomic)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: payloadFile(id).path)
+        return sealed.count
+    }
+
+    private func removePayload(_ id: String) {
+        try? FileManager.default.removeItem(at: payloadFile(id))
+    }
+
+    private func sweepPayloads() {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: payloads.path)) ?? []
+        guard !names.isEmpty, let rows = try? db.query("SELECT id FROM items WHERE file_bytes > 0") else { return }
+        let live = Set(rows.compactMap { $0[0].string })
+        for name in names where !live.contains(name) { removePayload(name) }
     }
 
     private static func expiry(sensitive: Bool, settings: ClipboardSettings, now: Date) -> Date? {
@@ -146,12 +248,13 @@ public actor ClipboardStore {
     public func delete(_ id: String) throws {
         try db.execute("DELETE FROM items WHERE id=?1", [.text(id)])
         cache[id] = nil
+        removePayload(id)
         try checkpoint()
     }
 
     @discardableResult
     public func purge(now: Date) throws -> Int {
-        let doomed = ClipboardPurge.select(try purgeCandidates(), now: now, retention: settings.retention, maxItems: settings.maxItems)
+        let doomed = ClipboardPurge.select(try purgeCandidates(), now: now, retention: settings.retention, maxItems: settings.maxItems, maxBytes: settings.maxStorage)
         try remove(doomed)
         return doomed.count
     }
@@ -168,10 +271,10 @@ public actor ClipboardStore {
     }
 
     private func purgeCandidates() throws -> [PurgeCandidate] {
-        try db.query("SELECT id, last_used_at, pinboard_id, expires_at FROM items").compactMap { row in
+        try db.query("SELECT id, last_used_at, pinboard_id, expires_at, \(Self.bytesSQL) FROM items").compactMap { row in
             guard let id = row[0].string else { return nil }
             let used = row[1].string.flatMap(Timestamp.parse) ?? .distantPast
-            return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null, expiresAt: row[3].string.flatMap(Timestamp.parse))
+            return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null, expiresAt: row[3].string.flatMap(Timestamp.parse), bytes: row[4].int ?? 0)
         }
     }
 
@@ -180,13 +283,17 @@ public actor ClipboardStore {
         try db.transaction {
             for id in ids { try db.execute("DELETE FROM items WHERE id=?1", [.text(id)]) }
         }
-        for id in ids { cache[id] = nil }
+        for id in ids {
+            cache[id] = nil
+            removePayload(id)
+        }
         try checkpoint()
     }
 
     public func clear(keepPinned: Bool) throws {
         try db.execute(keepPinned ? "DELETE FROM items WHERE pinboard_id IS NULL" : "DELETE FROM items")
         cache = cache.filter { keepPinned && $0.value.isPinned }
+        sweepPayloads()
         try checkpoint()
     }
 
@@ -197,6 +304,7 @@ public actor ClipboardStore {
         }
         crypto = nil
         cache = [:]
+        sweepPayloads()
         try checkpoint()
     }
 
@@ -251,7 +359,7 @@ public actor ClipboardStore {
         if crypto == nil, try itemCount() > 0 { throw Self.keyUnavailable }
         let file = ClipboardExport(
             schemaVersion: ClipboardExport.currentVersion, exportedAt: Timestamp.iso(now), settings: settings, pinboards: pinboards,
-            items: items().filter { !$0.sensitive }.map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
+            items: items().filter(\.isExportable).map { .init(id: $0.id, text: $0.text, createdAt: Timestamp.iso($0.createdAt), lastUsedAt: Timestamp.iso($0.lastUsedAt), pinboardID: $0.pinboardID) })
         return try file.encoded()
     }
 
@@ -279,22 +387,34 @@ public actor ClipboardStore {
         settings = file.settings
         pinboards = file.pinboards
         cache = [:]
-        if let crypto { try load(crypto) }
+        if let crypto { try load(crypto) } else { sweepPayloads() }
         try checkpoint()
     }
 
     private func load(_ crypto: ClipboardCrypto) throws {
         var cache: [String: ClipItem] = [:]
-        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at FROM items") {
+        for row in try db.query("SELECT id, text, source, created_at, last_used_at, pinboard_id, sensitive, expires_at, format, meta, \(Self.bytesSQL) FROM items") {
             guard let id = row[0].string, let sealed = row[1].data, let text = try? crypto.open(sealed, context: "\(id).text"),
-                  let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse)
+                  let created = row[3].string.flatMap(Timestamp.parse), let used = row[4].string.flatMap(Timestamp.parse),
+                  let content = Self.content(format: row[8].string, meta: row[9].data, id: id, crypto: crypto)
             else { continue }
             let source = row[2].data.flatMap { try? crypto.open($0, context: "\(id).source") }
             cache[id] = ClipItem(id: id, text: text, source: source, createdAt: created, lastUsedAt: used, pinboardID: row[5].string,
-                                 sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse))
+                                 sensitive: row[6].int == 1, expiresAt: row[7].string.flatMap(Timestamp.parse), content: content, byteSize: row[10].int ?? 0)
         }
         self.crypto = crypto
         self.cache = cache
+        sweepPayloads()
+    }
+
+    private static func content(format: String?, meta: Data?, id: String, crypto: ClipboardCrypto) -> ClipContent? {
+        switch format {
+        case "plain": .plain
+        case "rich": .rich
+        case "image", "files":
+            meta.flatMap { try? crypto.openData($0, context: "\(id).meta") }.flatMap { try? JSONDecoder().decode(ClipContent.self, from: $0) }
+        default: nil
+        }
     }
 
     private func requireCrypto() throws -> ClipboardCrypto {

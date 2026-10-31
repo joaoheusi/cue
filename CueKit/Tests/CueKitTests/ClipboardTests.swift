@@ -454,6 +454,357 @@ import Testing
         #expect(try await store.itemCount() == 0)
     }
 
+    private func image(_ seed: UInt8 = 1, count: Int = 4096, type: String = "public.png") -> ClipCapture {
+        ClipCapture(content: .image(type: type, width: 20, height: 10), data: [type: Data((0..<count).map { UInt8(truncatingIfNeeded: $0) &+ seed })],
+                    thumbnail: Data("thumbnail \(seed)".utf8))
+    }
+
+    private func payloadNames(_ dir: URL) -> Set<String> {
+        Set((try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent(ClipboardStore.payloadFolder).path)) ?? [])
+    }
+
+    private func diskBytes(_ url: URL) -> Data {
+        ["", "-wal", "-shm"].reduce(into: Data()) { $0.append((try? Data(contentsOf: URL(fileURLWithPath: url.path + $1))) ?? Data()) }
+    }
+
+    @Test func imagesStaySealedAndLoadOnDemand() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let clip = image(count: 8192, type: "public.jpeg")
+        let bytes = try #require(clip.data["public.jpeg"])
+        let id = try await store.capture(clip, source: "com.apple.Preview", now: Date())
+
+        let item = try #require(await store.items().first)
+        #expect(item.id == id && item.text.isEmpty && item.kind == .image && item.source == "com.apple.Preview")
+        #expect(item.content == .image(type: "public.jpeg", width: 20, height: 10) && item.preview == "JPEG image · 20 × 10")
+        #expect(item.byteSize > bytes.count)
+        #expect(try await store.payload(id) == ["public.jpeg": bytes])
+        #expect(try await store.thumbnail(id) == clip.thumbnail)
+
+        let file = try Data(contentsOf: dir.appendingPathComponent(ClipboardStore.payloadFolder).appendingPathComponent(id))
+        #expect(!file.contains(bytes.prefix(64)))
+        #expect(file.count < 8192 + 64)
+        let stored = diskBytes(url)
+        #expect(!stored.contains(bytes.prefix(64)) && !stored.contains(Data("thumbnail 1".utf8)) && !stored.contains(Data("public.jpeg".utf8)))
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().first?.content == item.content)
+        #expect(await reopened.items().first?.byteSize == item.byteSize)
+        #expect(try await reopened.payload(id) == ["public.jpeg": bytes])
+        #expect(try await reopened.thumbnail(id) == clip.thumbnail)
+        #expect(try await reopened.formatCounts() == ["image": 1])
+        #expect(try await reopened.storedBytes() == item.byteSize)
+    }
+
+    @Test func payloadFolderAndFilesAreOwnerOnly() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let folder = dir.appendingPathComponent(ClipboardStore.payloadFolder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let id = try await store.capture(image(), source: nil, now: Date())
+        func mode(_ url: URL) throws -> Int { (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue ?? -1 }
+        #expect(try mode(folder) == 0o700)
+        #expect(try mode(folder.appendingPathComponent(id)) == 0o600)
+    }
+
+    @Test func copyingTheSameImageTwiceReusesOneEntry() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let t0 = Date(timeIntervalSince1970: 1_792_670_100)
+        let id = try await store.capture(image(), source: "com.apple.Preview", now: t0)
+        let other = try await store.capture(image(2), source: nil, now: t0.addingTimeInterval(1))
+        #expect(try await store.capture(image(), source: nil, now: t0.addingTimeInterval(2)) == id)
+        #expect(try await store.itemCount() == 2)
+        #expect(await store.items().map(\.id) == [id, other])
+        #expect(await store.items().first?.source == "com.apple.Preview")
+        #expect(await store.items().first?.content == image().content)
+        #expect(payloadNames(dir) == [id, other])
+    }
+
+    @Test func deletesRemoveKnownFilesAndLeaveTheSweepToBulkPaths() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let now = Date(timeIntervalSince1970: 1_792_670_100)
+        let first = try await store.capture(image(1), source: nil, now: now)
+        let second = try await store.capture(image(2), source: nil, now: now.addingTimeInterval(1))
+        let third = try await store.capture(image(3), source: nil, now: now.addingTimeInterval(2))
+        let pinned = try await store.capture(image(4), source: nil, now: now.addingTimeInterval(3))
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(pinned, board.id)
+        let orphan = dir.appendingPathComponent(ClipboardStore.payloadFolder).appendingPathComponent("orphan")
+        try Data("left behind".utf8).write(to: orphan)
+
+        try await store.delete(first)
+        #expect(payloadNames(dir) == [second, third, pinned, "orphan"])
+
+        #expect(try await store.deleteRecent(in: now.addingTimeInterval(1)...now.addingTimeInterval(1)) == 1)
+        #expect(payloadNames(dir) == [third, pinned, "orphan"])
+
+        var settings = await store.settings
+        settings.maxItems = 50
+        try await store.save(settings)
+        #expect(try await store.purge(now: now.addingTimeInterval(30 * 86_400)) == 1)
+        #expect(payloadNames(dir) == [pinned, "orphan"])
+
+        try await store.clear(keepPinned: true)
+        #expect(payloadNames(dir) == [pinned])
+        try await store.clear(keepPinned: false)
+        #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func loadResetAndImportSweepOrphans() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let kept = try await store.capture(image(), source: nil, now: Date())
+        let folder = dir.appendingPathComponent(ClipboardStore.payloadFolder)
+        try Data().write(to: folder.appendingPathComponent("orphan"))
+
+        let reopened = try ClipboardStore(url: url)
+        #expect(payloadNames(dir) == [kept, "orphan"])
+        try await reopened.unlock(key)
+        #expect(payloadNames(dir) == [kept])
+
+        let exported = try await reopened.exportData(now: Date())
+        try await reopened.importData(exported)
+        #expect(payloadNames(dir).isEmpty)
+        #expect(try await reopened.itemCount() == 0)
+
+        let again = try await reopened.capture(image(9), source: nil, now: Date())
+        #expect(payloadNames(dir) == [again])
+        try await reopened.resetHistory()
+        #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func lockedStoreDeletesPayloadFilesWithoutTheKey() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let end = Date(timeIntervalSince1970: 1_792_670_100)
+        try await store.capture(image(1), source: nil, now: end)
+        let other = try await store.capture(image(2), source: nil, now: end.addingTimeInterval(-7200))
+        let locked = try ClipboardStore(url: url)
+        #expect(try await locked.deleteRecent(in: RecentRange.hour.window(endingAt: end)) == 1)
+        #expect(payloadNames(dir) == [other])
+        try await locked.clear(keepPinned: false)
+        #expect(payloadNames(dir).isEmpty)
+    }
+
+    @Test func missingOrSwappedPayloadsFailCleanlyAndKeepTheRow() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let first = try await store.capture(image(1), source: nil, now: Date())
+        let second = try await store.capture(image(2), source: nil, now: Date())
+        let folder = dir.appendingPathComponent(ClipboardStore.payloadFolder)
+
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(first))
+        try FileManager.default.copyItem(at: folder.appendingPathComponent(second), to: folder.appendingPathComponent(first))
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload(first) }
+
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(first))
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload(first) }
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload("no-such-item") }
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().count == 2)
+        #expect(await reopened.items().first { $0.id == first }?.kind == .image)
+        await #expect(throws: ClipboardStore.dataMissing) { try await reopened.payload(first) }
+        try await reopened.delete(first)
+        #expect(try await reopened.itemCount() == 1)
+    }
+
+    @Test func aFailedInsertLeavesNoFileBehind() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        try SQLite(path: url).executeScript("CREATE TRIGGER reject BEFORE INSERT ON items BEGIN SELECT RAISE(ABORT, 'no'); END;")
+        await #expect(throws: (any Error).self) { try await store.capture(image(), source: nil, now: Date()) }
+        #expect(payloadNames(dir).isEmpty)
+        #expect(await store.items().isEmpty)
+    }
+
+    @Test func budgetRemovesOldestUnpinnedEntriesAndTheirFiles() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        var settings = await store.settings
+        settings.maxStorage = try #require(ClipboardSettings.maxStorageChoices.first)
+        try await store.save(settings)
+        let t0 = Date()
+        let size = 60 * 1024 * 1024
+        func large(_ seed: UInt8) -> ClipCapture {
+            ClipCapture(content: .image(type: "public.tiff", width: 1, height: 1), data: ["public.tiff": Data(repeating: seed, count: size)])
+        }
+        let pinned = try await store.capture(large(0), source: nil, now: t0)
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(pinned, board.id)
+        var ids: [String] = []
+        for seed in 1...5 as ClosedRange<UInt8> {
+            ids.append(try await store.capture(large(seed), source: nil, now: t0.addingTimeInterval(Double(seed))))
+            try await store.purge(now: t0.addingTimeInterval(Double(seed)))
+        }
+        #expect(payloadNames(dir) == Set([pinned] + ids.suffix(4)))
+        #expect(await store.items().map(\.id) == ids.suffix(4).reversed() + [pinned])
+        let unpinned = await store.items().filter { !$0.isPinned }.reduce(0) { $0 + $1.byteSize }
+        #expect(unpinned <= settings.maxStorage)
+        #expect(try await store.storedBytes() > settings.maxStorage)
+    }
+
+    @Test func richTextFollowsTheRecopyRules() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        func rich(_ marker: String) -> ClipCapture {
+            ClipCapture(content: .rich, text: "Quarterly report", data: ["public.rtf": Data("{\\rtf1 \(marker)}".utf8), "public.html": Data("<b>\(marker)</b>".utf8)])
+        }
+        let now = Date()
+        let id = try await store.capture("Quarterly report", source: "com.apple.Notes", now: now)
+        #expect(await store.items().first?.content == .plain)
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload(id) }
+
+        #expect(try await store.capture(rich("first"), source: nil, now: now) == id)
+        #expect(await store.items().first?.content == .rich)
+        #expect(await store.items().first?.text == "Quarterly report")
+        #expect(try await store.payload(id) == rich("first").data)
+
+        #expect(try await store.capture(rich("second"), source: nil, now: now) == id)
+        #expect(try await store.payload(id) == rich("second").data)
+
+        #expect(try await store.capture("Quarterly report", source: nil, now: now) == id)
+        #expect(await store.items().first?.content == .rich)
+        #expect(try await store.payload(id) == rich("second").data)
+        #expect(try await store.itemCount() == 1)
+        #expect(payloadNames(dir).isEmpty)
+        #expect(!diskBytes(url).contains(Data("second".utf8)))
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().first?.content == .rich)
+        #expect(try await reopened.payload(id) == rich("second").data)
+        #expect(await reopened.items().first?.byteSize ?? 0 > "Quarterly report".utf8.count)
+    }
+
+    @Test func sensitiveTextKeepsPlainTextOnly() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let secret = "sk-ant-usr-abcdefghijklmnopqrstuv3c27"
+        let clip = ClipCapture(content: .rich, text: secret, data: ["public.html": Data("<i>\(secret)</i>".utf8)])
+        let now = Date()
+
+        let id = try await store.capture(clip, source: nil, now: now)
+        #expect(await store.items().first?.content == .plain)
+        #expect(await store.items().first?.sensitive == true)
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload(id) }
+        #expect(try SQLite(path: url).scalar("SELECT rich FROM items") == .null)
+        #expect(try await store.formatCounts() == ["plain": 1])
+        try await store.delete(id)
+
+        var settings = await store.settings
+        settings.sensitive = .keep
+        try await store.save(settings)
+        let kept = try await store.capture(clip, source: nil, now: now)
+        #expect(await store.items().first?.content == .rich)
+        #expect(try await store.payload(kept) == clip.data)
+
+        settings.sensitive = .maskAndExpire
+        try await store.save(settings)
+        #expect(try await store.capture(clip, source: nil, now: now) == kept)
+        #expect(await store.items().first?.content == .plain)
+        #expect(await store.items().first?.sensitive == true)
+        #expect(try SQLite(path: url).scalar("SELECT rich FROM items") == .null)
+        #expect(try SQLite(path: url).scalar("SELECT format FROM items") == .text("plain"))
+        await #expect(throws: ClipboardStore.dataMissing) { try await store.payload(kept) }
+    }
+
+    @Test func filePathsStaySealedAndNeverReadTheFiles() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let paths = ["/Users/me/Private Report.pdf", "/Users/me/Folder/"]
+        let clip = ClipCapture(content: .files(paths))
+        let id = try await store.capture(clip, source: "com.apple.finder", now: Date())
+        #expect(try await store.capture(ClipCapture(content: .files(paths.reversed())), source: nil, now: Date()) == id)
+        #expect(payloadNames(dir).isEmpty)
+        #expect(!diskBytes(url).contains(Data("Private Report".utf8)))
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        let item = try #require(await reopened.items().first)
+        #expect(item.content == .files(paths) && item.text.isEmpty && item.kind == .file)
+        #expect(item.preview == "Private Report.pdf + 1 more")
+        #expect(ClipboardSearch.filter(await reopened.items(), query: "report").map(\.id) == [id])
+        await #expect(throws: ClipboardStore.dataMissing) { try await reopened.payload(id) }
+    }
+
+    @Test func aRowWithAnUnknownFormatIsSkippedNotFatal() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let good = try await store.capture("readable", source: nil, now: Date())
+        let bad = try await store.capture("from the future", source: nil, now: Date())
+        try SQLite(path: url).execute("UPDATE items SET format='hologram' WHERE id=?1", [.text(bad)])
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().map(\.id) == [good])
+    }
+
+    @Test func exportsKeepTextOnlyAndReimport() async throws {
+        let (dir, url) = temporaryDatabase()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(SymmetricKey(size: .bits256))
+        let now = Date(timeIntervalSince1970: 1_792_670_100)
+        let plain = try await store.capture("plain note", source: nil, now: now)
+        let rich = try await store.capture(ClipCapture(content: .rich, text: "styled note", data: ["public.rtf": Data("{\\rtf1 x}".utf8)]), source: nil, now: now.addingTimeInterval(1))
+        let picture = try await store.capture(image(), source: nil, now: now.addingTimeInterval(2))
+        let document = try await store.capture(ClipCapture(content: .files(["/tmp/report.pdf"])), source: nil, now: now.addingTimeInterval(3))
+        let token = try await store.capture("sk-ant-usr-abcdefghijklmnopqrstuv3c27", source: nil, now: now.addingTimeInterval(4))
+
+        let exported = try await store.exportData(now: now)
+        let file = try ClipboardExport.decode(exported)
+        #expect(file.schemaVersion == ClipboardExport.currentVersion)
+        #expect(Set(file.items.map(\.id)) == [plain, rich])
+        #expect(Set(file.items.map(\.text)) == ["plain note", "styled note"])
+        #expect(!String(decoding: exported, as: UTF8.self).contains("report.pdf"))
+        #expect(await store.items().filter(\.isExportable).count == file.items.count)
+        #expect(Set(await store.items().filter(\.isExportable).map(\.id)) == [plain, rich])
+        #expect(Set([picture, document, token]).isDisjoint(with: file.items.map(\.id)))
+
+        #expect(try await store.formatCounts() == ["plain": 2, "rich": 1, "image": 1, "files": 1])
+        try await store.importData(exported)
+        #expect(try await store.formatCounts() == ["plain": 2])
+        #expect(Set(await store.items().map(\.id)) == [plain, rich])
+        #expect(await store.items().allSatisfy { $0.content == .plain })
+        #expect(payloadNames(dir).isEmpty)
+    }
+
     @Test func tokensAreRecognizedAndMasked() {
         #expect(SensitiveText.matches("sk-ant-usr-abcdefghijklmnopqrstuv3c27\n"))
         #expect(SensitiveText.matches("ghp_" + String(repeating: "a", count: 36)))
