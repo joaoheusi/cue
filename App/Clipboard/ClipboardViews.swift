@@ -170,6 +170,8 @@ struct ClipboardCommandView: View {
         case .link: return ("link", Cue.link)
         case .code: return ("chevron.left.forwardslash.chevron.right", .secondary)
         case .text: return ("text.alignleft", .secondary)
+        case .image: return ("photo", .secondary)
+        case .file: return ("doc", .secondary)
         }
     }
 

@@ -10,13 +10,15 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public var pinboardID: String?
     public let sensitive: Bool
     public var expiresAt: Date?
+    public let content: ClipContent
+    public let byteSize: Int
     public let kind: ClipKind
     public let folded: String
     public let preview: String
     public let foldedPreview: String
 
     public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?,
-                sensitive: Bool = false, expiresAt: Date? = nil) {
+                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0) {
         self.id = id
         self.text = text
         self.source = source
@@ -25,14 +27,29 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         self.pinboardID = pinboardID
         self.sensitive = sensitive
         self.expiresAt = expiresAt
-        kind = sensitive ? .text : ClipKind.of(text)
-        preview = sensitive ? SensitiveText.mask(text) : ClipboardSearch.preview(text)
-        folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(text)
+        self.content = content
+        self.byteSize = byteSize
+        switch content {
+        case .plain, .rich:
+            kind = sensitive ? .text : ClipKind.of(text)
+            preview = sensitive ? SensitiveText.mask(text) : ClipboardSearch.preview(text)
+            folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(text)
+        case .image(let type, let width, let height):
+            kind = .image
+            preview = "\(ClipContent.imageName(type)) image · \(width) × \(height)"
+            folded = ClipboardSearch.fold(preview)
+        case .files(let paths):
+            let names = paths.map(ClipContent.fileName)
+            kind = .file
+            preview = (names.first ?? "") + (names.count > 1 ? " + \(names.count - 1) more" : "")
+            folded = ClipboardSearch.fold(String(names.joined(separator: " ").prefix(4096)))
+        }
         foldedPreview = ClipboardSearch.fold(preview)
     }
 
     public var isPinned: Bool { pinboardID != nil }
-    public var display: String { sensitive ? preview : text }
+    public var display: String { sensitive || !content.isText ? preview : text }
+    public var isExportable: Bool { content.isText && !sensitive }
 
     public var linkURL: URL? {
         guard kind == .link else { return nil }
@@ -41,8 +58,49 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     }
 }
 
+public enum ClipContent: Codable, Equatable, Sendable {
+    case plain, rich
+    case image(type: String, width: Int, height: Int)
+    case files([String])
+
+    public var isText: Bool {
+        switch self {
+        case .plain, .rich: true
+        case .image, .files: false
+        }
+    }
+
+    public var format: String {
+        switch self {
+        case .plain: "plain"
+        case .rich: "rich"
+        case .image: "image"
+        case .files: "files"
+        }
+    }
+
+    public static func imageName(_ type: String) -> String { (type.split(separator: ".").last.map(String.init) ?? type).uppercased() }
+    public static func fileName(_ path: String) -> String { URL(fileURLWithPath: path).lastPathComponent }
+}
+
+public struct ClipCapture: Codable, Equatable, Sendable {
+    public var content: ClipContent
+    public var text: String
+    public var data: [String: Data]
+    public var thumbnail: Data?
+
+    public init(content: ClipContent, text: String = "", data: [String: Data] = [:], thumbnail: Data? = nil) {
+        self.content = content
+        self.text = text
+        self.data = data
+        self.thumbnail = thumbnail
+    }
+
+    public static func plain(_ text: String) -> ClipCapture { ClipCapture(content: .plain, text: text) }
+}
+
 public enum ClipKind: String, Sendable, CaseIterable {
-    case text, link, code
+    case text, link, code, image, file
 
     public static func of(_ text: String) -> ClipKind {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -172,6 +230,7 @@ public enum RecentRange: TimeInterval, CaseIterable, Sendable {
 public struct ClipboardSettings: Codable, Equatable, Sendable {
     public var retention: Retention = .week
     public var maxItems = 500
+    public var maxStorage = ClipboardSettings.defaultMaxStorage
     public var excludedApps: [String] = ClipboardSettings.defaultExcludedApps
     public var shortcut: String? = "Super+Alt+V"
     public var sensitive = SensitiveHandling.maskAndExpire
@@ -181,6 +240,8 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
     public init() {}
 
     public static let maxItemChoices = [50, 100, 250, 500, 1000, 2000, 5000]
+    public static let defaultMaxStorage = 1024 * 1024 * 1024
+    public static let maxStorageChoices = [256, 512, 1024, 2048, 5120].map { $0 * 1024 * 1024 }
     public static let maxExcludedApps = 200
 
     public static let defaultExcludedApps = [
@@ -200,6 +261,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         guard Self.maxItemChoices.contains(maxItems) else {
             throw .validation("Maximum items must be one of \(Self.maxItemChoices.map(String.init).joined(separator: ", ")).")
         }
+        guard Self.maxStorageChoices.contains(maxStorage) else { throw .validation("Choose one of the listed storage limits.") }
         guard excludedApps.count <= Self.maxExcludedApps else { throw .validation("Too many excluded apps.") }
         if let bad = excludedApps.first(where: { !Self.isValidBundleID($0) }) {
             throw .validation("“\(bad.prefix(80))” is not a valid bundle ID.")
@@ -210,12 +272,13 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         if let shortcut, Shortcut(shortcut) == nil { throw .validation("The clipboard shortcut is not valid.") }
     }
 
-    private enum CodingKeys: String, CodingKey { case retention, maxItems, excludedApps, shortcut, sensitive, clearOnQuit, clearSystemClipboard }
+    private enum CodingKeys: String, CodingKey { case retention, maxItems, maxStorage, excludedApps, shortcut, sensitive, clearOnQuit, clearSystemClipboard }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         retention = try c.decode(Retention.self, forKey: .retention)
         maxItems = try c.decode(Int.self, forKey: .maxItems)
+        maxStorage = try c.decodeIfPresent(Int.self, forKey: .maxStorage) ?? Self.defaultMaxStorage
         excludedApps = try c.decode([String].self, forKey: .excludedApps)
         shortcut = try c.decodeIfPresent(String.self, forKey: .shortcut)
         sensitive = try c.decodeIfPresent(SensitiveHandling.self, forKey: .sensitive) ?? .maskAndExpire
@@ -227,6 +290,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(retention, forKey: .retention)
         try c.encode(maxItems, forKey: .maxItems)
+        try c.encode(maxStorage, forKey: .maxStorage)
         try c.encode(excludedApps, forKey: .excludedApps)
         try c.encode(shortcut, forKey: .shortcut)
         try c.encode(sensitive, forKey: .sensitive)
@@ -236,7 +300,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
 }
 
 public enum SkipReason: String, CaseIterable, Codable, Sendable {
-    case concealed, ownWrite, secureInput, excludedApp, notText, unreadable, blank, tooLarge, sensitive, stale, timedOut
+    case concealed, ownWrite, secureInput, excludedApp, unsupported, unreadable, blank, tooLarge, sensitive, stale, timedOut
 }
 
 public enum CaptureDecision: Codable, Equatable, Sendable {
@@ -263,7 +327,7 @@ public enum CaptureFilter {
     }
 
     public static func read(types: [String], readText: () -> String?) -> CaptureDecision {
-        guard types.contains(plainTextType) else { return .skip(.notText) }
+        guard types.contains(plainTextType) else { return .skip(.unsupported) }
         guard let text = readText() else { return .skip(.unreadable) }
         if let reason = textProblem(text) { return .skip(reason) }
         return .capture(text)
@@ -312,23 +376,31 @@ public struct PurgeCandidate: Sendable {
     public let lastUsedAt: Date
     public let pinned: Bool
     public let expiresAt: Date?
+    public let bytes: Int
 
-    public init(id: String, lastUsedAt: Date, pinned: Bool, expiresAt: Date? = nil) {
+    public init(id: String, lastUsedAt: Date, pinned: Bool, expiresAt: Date? = nil, bytes: Int = 0) {
         self.id = id
         self.lastUsedAt = lastUsedAt
         self.pinned = pinned
         self.expiresAt = expiresAt
+        self.bytes = bytes
     }
 }
 
 public enum ClipboardPurge {
-    public static func select(_ items: [PurgeCandidate], now: Date, retention: Retention, maxItems: Int) -> Set<String> {
+    public static func select(_ items: [PurgeCandidate], now: Date, retention: Retention, maxItems: Int, maxBytes: Int = .max) -> Set<String> {
         let unpinned = items.filter { !$0.pinned }.sorted { $0.lastUsedAt > $1.lastUsedAt }
         var doomed = Set<String>()
+        var kept = 0
         for (index, item) in unpinned.enumerated() {
             let expired = retention.interval.map { now.timeIntervalSince(item.lastUsedAt) > $0 } ?? false
             let lapsed = item.expiresAt.map { $0 <= now } ?? false
-            if expired || lapsed || index >= maxItems { doomed.insert(item.id) }
+            if expired || lapsed || index >= maxItems {
+                doomed.insert(item.id)
+                continue
+            }
+            kept += item.bytes
+            if kept > maxBytes { doomed.insert(item.id) }
         }
         return doomed
     }
@@ -341,6 +413,7 @@ public enum ClipboardPurge {
 public struct ClipboardCrypto: Sendable {
     private let sealKey: SymmetricKey
     private let digestKey: SymmetricKey
+    private let contentDigestKey: SymmetricKey
     public let keyCheck: Data
 
     public init(master: SymmetricKey) {
@@ -349,23 +422,46 @@ public struct ClipboardCrypto: Sendable {
         }
         sealKey = derive("cue.clipboard.seal.v1")
         digestKey = derive("cue.clipboard.digest.v1")
+        contentDigestKey = derive("cue.clipboard.digest.content.v1")
         keyCheck = Data(HMAC<SHA256>.authenticationCode(for: Data("cue.clipboard.key-check".utf8), using: derive("cue.clipboard.check.v1")))
     }
 
     public func seal(_ text: String, context: String) throws -> Data {
-        guard let combined = try AES.GCM.seal(Data(text.utf8), using: sealKey, authenticating: Data(context.utf8)).combined else {
+        try seal(Data(text.utf8), context: context)
+    }
+
+    public func seal(_ data: Data, context: String) throws -> Data {
+        guard let combined = try AES.GCM.seal(data, using: sealKey, authenticating: Data(context.utf8)).combined else {
             throw CueError.storage()
         }
         return combined
     }
 
     public func open(_ data: Data, context: String) throws -> String {
-        let plain = try AES.GCM.open(AES.GCM.SealedBox(combined: data), using: sealKey, authenticating: Data(context.utf8))
-        guard let text = String(data: plain, encoding: .utf8) else { throw CueError.storage() }
+        guard let text = String(data: try openData(data, context: context), encoding: .utf8) else { throw CueError.storage() }
         return text
+    }
+
+    public func openData(_ data: Data, context: String) throws -> Data {
+        try AES.GCM.open(AES.GCM.SealedBox(combined: data), using: sealKey, authenticating: Data(context.utf8))
     }
 
     public func digest(_ text: String) -> Data {
         Data(HMAC<SHA256>.authenticationCode(for: Data(text.utf8), using: digestKey))
+    }
+
+    public func digest(_ clip: ClipCapture) -> Data {
+        var code = HMAC<SHA256>(key: contentDigestKey)
+        switch clip.content {
+        case .plain, .rich:
+            return digest(clip.text)
+        case .image:
+            code.update(data: Data("image".utf8))
+            for key in clip.data.keys.sorted() { clip.data[key].map { code.update(data: $0) } }
+        case .files(let paths):
+            code.update(data: Data("files".utf8))
+            code.update(data: Data(paths.sorted().joined(separator: "\0").utf8))
+        }
+        return Data(code.finalize())
     }
 }

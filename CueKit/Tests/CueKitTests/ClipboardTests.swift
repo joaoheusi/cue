@@ -32,7 +32,7 @@ import Testing
         #expect(!read)
         #expect(decide([text], app: "com.apple.passwords", read: &read) == .skip(.excludedApp))
         #expect(!read)
-        #expect(decide(["public.png"], read: &read) == .skip(.notText))
+        #expect(decide(["public.png"], read: &read) == .skip(.unsupported))
         #expect(!read)
         #expect(decide([text], content: nil, read: &read) == .skip(.unreadable))
         #expect(decide([text], content: " \n\t", read: &read) == .skip(.blank))
@@ -92,6 +92,26 @@ import Testing
         #expect(url("https://example.com/a", sensitive: true) == nil)
     }
 
+    @Test func purgeRemovesOldestUnpinnedBytesFirst() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func item(_ id: String, minutesAgo: Double, bytes: Int, pinned: Bool = false) -> PurgeCandidate {
+            PurgeCandidate(id: id, lastUsedAt: now.addingTimeInterval(-minutesAgo * 60), pinned: pinned, bytes: bytes)
+        }
+        let items = [item("newest", minutesAgo: 1, bytes: 40), item("middle", minutesAgo: 2, bytes: 40), item("old", minutesAgo: 3, bytes: 40),
+                     item("oldest", minutesAgo: 4, bytes: 1), item("hugePin", minutesAgo: 5, bytes: 1_000, pinned: true)]
+        func purge(_ maxBytes: Int) -> Set<String> { ClipboardPurge.select(items, now: now, retention: .never, maxItems: 500, maxBytes: maxBytes) }
+        #expect(purge(121).isEmpty)
+        #expect(purge(120) == ["oldest"])
+        #expect(purge(100) == ["old", "oldest"])
+        #expect(purge(80) == ["old", "oldest"])
+        #expect(purge(79) == ["middle", "old", "oldest"])
+        #expect(ClipboardPurge.select(items, now: now, retention: .never, maxItems: 500).isEmpty)
+
+        let lapsed = [item("big", minutesAgo: 1, bytes: 90), item("small", minutesAgo: 2, bytes: 9),
+                      PurgeCandidate(id: "gone", lastUsedAt: now, pinned: false, expiresAt: now, bytes: 90)]
+        #expect(ClipboardPurge.select(lapsed, now: now, retention: .never, maxItems: 500, maxBytes: 100) == ["gone"])
+    }
+
     @Test func recentWindowIncludesBothEdgesAndSkipsPins() {
         let end = Date(timeIntervalSince1970: 1_000_000)
         let window = RecentRange.fiveMinutes.window(endingAt: end)
@@ -119,9 +139,65 @@ import Testing
         #expect(ClipboardSearch.preview("\n  \n  first   line \nsecond") == "first line")
     }
 
+    @Test func imageAndFileItemsAreSearchableWithoutCarryingText() {
+        let date = Date(timeIntervalSince1970: 0)
+        let image = ClipItem(id: "i", text: "", source: nil, createdAt: date, lastUsedAt: date, pinboardID: nil,
+                             content: .image(type: "public.png", width: 1024, height: 768), byteSize: 9)
+        #expect(image.kind == .image && image.text.isEmpty && image.byteSize == 9 && !image.isExportable)
+        #expect(image.preview == "PNG image · 1024 × 768" && image.display == image.preview)
+
+        let files = ClipItem(id: "f", text: "", source: nil, createdAt: date, lastUsedAt: date, pinboardID: nil,
+                             content: .files(["/Users/me/Relatório.pdf", "/Users/me/Folder/", "/tmp/c.txt"]))
+        #expect(files.kind == .file && files.text.isEmpty && !files.isExportable)
+        #expect(files.preview == "Relatório.pdf + 2 more" && files.display == files.preview)
+        #expect(ClipboardSearch.filter([image, files], query: "relatorio").map(\.id) == ["f"])
+        #expect(ClipboardSearch.filter([image, files], query: "folder").map(\.id) == ["f"])
+        #expect(ClipboardSearch.filter([image, files], query: "png").map(\.id) == ["i"])
+        #expect(!files.folded.contains("users"))
+
+        let rich = ClipItem(id: "r", text: "https://example.com/a", source: nil, createdAt: date, lastUsedAt: date, pinboardID: nil, content: .rich)
+        #expect(rich.kind == .link && rich.display == rich.text && rich.isExportable)
+        let token = ClipItem(id: "t", text: "secret", source: nil, createdAt: date, lastUsedAt: date, pinboardID: nil, sensitive: true)
+        #expect(!token.isExportable && token.display == token.preview)
+    }
+
+    @Test func digestsIdentifyContentPerType() {
+        let key = SymmetricKey(size: .bits256)
+        let crypto = ClipboardCrypto(master: key)
+        func image(_ bytes: [UInt8]) -> ClipCapture {
+            ClipCapture(content: .image(type: "public.png", width: 1, height: 1), data: ["public.png": Data(bytes)])
+        }
+        #expect(crypto.digest(image([1, 2, 3])) == ClipboardCrypto(master: key).digest(image([1, 2, 3])))
+        #expect(crypto.digest(image([1, 2, 3])) != crypto.digest(image([1, 2, 4])))
+        #expect(crypto.digest(image([1, 2, 3])) != ClipboardCrypto(master: SymmetricKey(size: .bits256)).digest(image([1, 2, 3])))
+
+        let files = ClipCapture(content: .files(["/a", "/b"]))
+        #expect(crypto.digest(files) == crypto.digest(ClipCapture(content: .files(["/b", "/a"]))))
+        #expect(crypto.digest(files) != crypto.digest(ClipCapture(content: .files(["/a"]))))
+        #expect(crypto.digest(files) != crypto.digest(ClipCapture(content: .files(["/a/", "b"]))))
+        #expect(crypto.digest(image([1])) != crypto.digest(ClipCapture(content: .files([String(decoding: [1] as [UInt8], as: UTF8.self)]))))
+
+        #expect(crypto.digest(ClipCapture.plain("hello")) == crypto.digest("hello"))
+        #expect(crypto.digest(ClipCapture(content: .rich, text: "hello", data: ["public.rtf": Data([1])])) == crypto.digest("hello"))
+    }
+
+    @Test func sealedDataRoundTripsAndStaysBoundToItsContext() throws {
+        let crypto = ClipboardCrypto(master: SymmetricKey(size: .bits256))
+        let bytes = Data((0..<4096).map { UInt8($0 % 251) })
+        let sealed = try crypto.seal(bytes, context: "a.payload")
+        #expect(try crypto.openData(sealed, context: "a.payload") == bytes)
+        #expect(throws: (any Error).self) { try crypto.openData(sealed, context: "b.payload") }
+        #expect(try crypto.open(try crypto.seal("Olá", context: "a.text"), context: "a.text") == "Olá")
+        #expect(try crypto.open(try crypto.seal("", context: "a.text"), context: "a.text").isEmpty)
+    }
+
     @Test func settingsValidation() throws {
         var settings = ClipboardSettings()
         try settings.validate()
+        #expect(settings.maxStorage == ClipboardSettings.defaultMaxStorage)
+        settings.maxStorage = 12345
+        #expect(throws: CueError.self) { try settings.validate() }
+        settings = ClipboardSettings()
         #expect(ClipboardSettings.isValidBundleID("com.example.My-App2"))
         for bad in ["", "com", "com..x", "com.exa mple", "../etc", "com.ex/ample", ".com.x"] {
             #expect(!ClipboardSettings.isValidBundleID(bad), "\(bad)")
@@ -208,6 +284,7 @@ import Testing
         let old = Data(#"{"retention":"1d","maxItems":250,"excludedApps":[],"shortcut":null,"sensitive":"mask"}"#.utf8)
         let decoded = try JSONDecoder().decode(ClipboardSettings.self, from: old)
         #expect(decoded.retention == .day && decoded.maxItems == 250 && decoded.sensitive == .mask)
+        #expect(decoded.maxStorage == ClipboardSettings.defaultMaxStorage)
         #expect(!decoded.clearOnQuit && !decoded.clearSystemClipboard)
 
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
