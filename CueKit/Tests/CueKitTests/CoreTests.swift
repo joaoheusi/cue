@@ -3,6 +3,15 @@ import Testing
 @testable import CueKit
 
 @Suite struct CoreTests {
+    @Test func parallelChunkRangesCoverEveryIndexOnce() {
+        for count in [0, 1, 2, 17, 65, 100, 603, 5000] {
+            for parts in [1, 2, 3, 16, 18, 32, 5000] {
+                let ranges = ParallelChunks.ranges(count: count, maxParts: parts)
+                #expect(ranges.flatMap { $0 } == Array(0..<count), "count \(count), parts \(parts)")
+            }
+        }
+    }
+
     @Test func transactionRollsBackOnError() throws {
         let db = try SQLite()
         try db.executeScript("CREATE TABLE t(v INTEGER)")

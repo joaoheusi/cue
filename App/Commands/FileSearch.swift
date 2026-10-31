@@ -38,7 +38,8 @@ enum InstalledApps {
 }
 
 @MainActor @Observable final class FileSearch {
-    private(set) var results: [FileHit] = []
+    private(set) var results: [FileHit] = [] { didSet { if results != oldValue { resultsRevision += 1 } } }
+    private(set) var resultsRevision = 0
     @ObservationIgnored private var query: NSMetadataQuery?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
@@ -86,16 +87,13 @@ enum InstalledApps {
             return FileHit(url: URL(fileURLWithPath: path), isFolder: item.value(forAttribute: NSMetadataItemContentTypeKey) as? String == "public.folder")
         }
         query.enableUpdates()
-        results = found.sorted { a, b in
-            let first = Self.rank(a, needle), second = Self.rank(b, needle)
-            if first != second { return first < second }
-            return a.name.count != b.name.count ? a.name.count < b.name.count : a.id < b.id
-        }.prefix(Self.resultLimit).map { $0 }
+        let lowered = needle.lowercased()
+        let ranked: [(rank: Int, length: Int, id: String, hit: FileHit)] = found.map {
+            ($0.name.lowercased().hasPrefix(lowered) ? 0 : 1, $0.name.count, $0.id, $0)
+        }
+        let sorted = ranked.sorted { ($0.rank, $0.length, $0.id) < ($1.rank, $1.length, $1.id) }.prefix(Self.resultLimit).map(\.hit)
+        if sorted != results { results = sorted }
         if finished || query.resultCount >= Self.scanLimit { stop() }
-    }
-
-    private static func rank(_ hit: FileHit, _ needle: String) -> Int {
-        hit.name.lowercased().hasPrefix(needle.lowercased()) ? 0 : 1
     }
 }
 

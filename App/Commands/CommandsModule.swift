@@ -6,6 +6,7 @@ import SwiftUI
     private(set) var snippets: [Snippet] = []
     private(set) var scripts: [Script] = []
     private(set) var apps: [FileHit] = []
+    private(set) var catalogRevision = 0
     private(set) var snippetError: CueError?
     private(set) var hasKey = false
     private(set) var keyPreview: String?
@@ -44,6 +45,7 @@ import SwiftUI
         }.value
         scripts = loaded.scripts
         apps = loaded.apps
+        catalogRevision += 1
         hasKey = loaded.key != nil
         keyPreview = loaded.key.map(SensitiveText.mask)
         switch loaded.snippets {

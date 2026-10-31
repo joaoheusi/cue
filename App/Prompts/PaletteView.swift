@@ -71,6 +71,13 @@ private struct PaletteResults {
     }
 }
 
+private struct PaletteMemoKey: Equatable {
+    var revision: Int
+    var catalog: Int
+    var files: Int
+    var query: String
+}
+
 struct PaletteView: View {
     private struct Asking {
         var action: Action
@@ -89,6 +96,8 @@ struct PaletteView: View {
     @State private var recovering = false
     @State private var asking: Asking?
     @State private var frozenUsage: [String: String]
+    @State private var homeMemo = Memo<PaletteMemoKey, [PaletteEntry]>()
+    @State private var resultsMemo = Memo<PaletteMemoKey, PaletteResults>()
 
     init(model: PromptsModel, commands: CommandsModule, clipboard: ClipboardModule) {
         self.model = model
@@ -131,6 +140,10 @@ struct PaletteView: View {
         snapshot.settings.scriptUsage[script.url.lastPathComponent]
     }
 
+    private func memoKey(_ snapshot: LibrarySnapshot, query: String) -> PaletteMemoKey {
+        PaletteMemoKey(revision: snapshot.revision, catalog: commands.catalogRevision, files: commands.files.resultsRevision, query: query)
+    }
+
     private func home(_ snapshot: LibrarySnapshot) -> [PaletteEntry] {
         let enabled = snapshot.actions.filter(\.enabled)
         let favorites = enabled.filter(\.favorite).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -157,6 +170,7 @@ struct PaletteView: View {
     private func results(_ snapshot: LibrarySnapshot) -> PaletteResults {
         var results = PaletteResults()
         var bestAction = Int.max
+        let prepared = ActionSearch.prepare(query)
         let sources = Set(snapshot.settings.searchIn)
         if sources.contains(.actions) {
             let actions = snapshot.actions.map { action in
@@ -165,11 +179,11 @@ struct PaletteView: View {
                 return copy
             }
             let live = Dictionary(uniqueKeysWithValues: snapshot.actions.map { ($0.id, $0) })
-            var ranked: [(item: PaletteItem, tier: Int, weight: Int)] = ActionSearch.scored(actions, query: query).compactMap { entry in
+            var ranked: [(item: PaletteItem, tier: Int, weight: Int)] = ActionSearch.scored(actions, query: prepared).compactMap { entry in
                 live[entry.action.id].map { (.action($0), entry.tier, entry.weight) }
             }
             func add(_ item: PaletteItem, _ name: String) {
-                if let score = ActionSearch.score(query, name: name) { ranked.append((item, score.tier, score.weight)) }
+                if let score = prepared.score(name: name) { ranked.append((item, score.tier, score.weight)) }
             }
             commands.snippets.forEach { add(.snippet($0), $0.keyword) }
             commands.scripts.forEach { add(.script($0), $0.name) }
@@ -181,7 +195,7 @@ struct PaletteView: View {
             bestAction = ranked.map(\.tier).min() ?? .max
         }
         if sources.contains(.apps) {
-            let apps = commands.apps.compactMap { hit in ActionSearch.score(query, name: hit.title).map { (hit, $0.tier, $0.weight) } }
+            let apps = commands.apps.compactMap { hit in prepared.score(name: hit.title).map { (hit, $0.tier, $0.weight) } }
                 .sorted { ($0.1, $0.2) < ($1.1, $1.2) }
             results.apps = apps.map { .file($0.0) }
             results.appsFirst = apps.first.map { $0.1 < bestAction } ?? false
@@ -210,8 +224,8 @@ struct PaletteView: View {
     }
 
     @ViewBuilder private func palette(_ snapshot: LibrarySnapshot) -> some View {
-        let found = results(snapshot)
-        let list = trimmed.isEmpty ? home(snapshot) : entries(found)
+        let found = resultsMemo.value(for: memoKey(snapshot, query: query)) { results(snapshot) }
+        let list = trimmed.isEmpty ? homeMemo.value(for: memoKey(snapshot, query: "")) { home(snapshot) } : entries(found)
         let current = list.first { $0.id == selection }?.item
         VStack(spacing: 0) {
             CommandList(query: $query, placeholder: "Search actions, apps, files", items: list, selection: $selection,

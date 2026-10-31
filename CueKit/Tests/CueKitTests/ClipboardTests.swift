@@ -373,6 +373,29 @@ import Testing
         #expect(!ClipboardSearch.isSubsequence("long needle", of: "short"))
     }
 
+    @Test func searchOverManyLargeItemsKeepsExactFirstInRecencyOrder() {
+        let base = Date(timeIntervalSince1970: 0)
+        let filler = String(repeating: "plain filler text with nothing special in it at all. ", count: 140)
+        func item(_ id: String, _ text: String, age: Double) -> ClipItem {
+            ClipItem(id: id, text: text, source: nil, createdAt: base, lastUsedAt: base.addingTimeInterval(-age), pinboardID: nil)
+        }
+        var items = (0..<600).map { item("f\($0)", filler, age: Double($0)) }
+        items.append(item("exact-new", "needle " + filler, age: 0.5))
+        items.append(item("exact-old", filler + " needle", age: 900))
+        items.append(item("fuzzy", "n e e d l e " + filler, age: 0.25))
+        #expect(ClipboardSearch.filter(items, query: "needle").map(\.id) == ["exact-new", "exact-old", "fuzzy"])
+        #expect(ClipboardSearch.filter(items, query: "zqxjkv").isEmpty)
+    }
+
+    @Test func kindClassificationCoversLongText() {
+        let prose = String(repeating: "The meeting notes cover the roadmap and the launch plan for next week. ", count: 120)
+        #expect(ClipKind.of(prose) == .text)
+        let code = String(repeating: "let value = compute(input);\nreturn value * 2;\n", count: 90)
+        #expect(ClipKind.of(code) == .code)
+        #expect(ClipKind.of("letter-spacing is a CSS property") == .text)
+        #expect(ClipKind.of("if only we had more time") == .code)
+    }
+
     @Test func settingsValidation() throws {
         var settings = ClipboardSettings()
         try settings.validate()
@@ -576,6 +599,16 @@ import Testing
         try await reopened.unlock(key)
         #expect(await reopened.items().first?.pinboardID == nil)
         #expect(await reopened.pinboards.map(\.name) == ["Pinned"])
+    }
+
+    @Test func loadJustAboveParallelThresholdKeepsEveryItem() async throws {
+        let store = try ClipboardStore(url: nil)
+        let key = SymmetricKey(size: .bits256)
+        try await store.unlock(key)
+        let base = Date()
+        for i in 0..<65 { try await store.capture("item \(i)", source: nil, now: base.addingTimeInterval(Double(i))) }
+        try await store.unlock(key)
+        #expect(await store.items().map(\.text) == (0..<65).reversed().map { "item \($0)" })
     }
 
     @Test func endToEndHappyPath() async throws {
