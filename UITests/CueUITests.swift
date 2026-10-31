@@ -214,7 +214,7 @@ final class CueUITests: XCTestCase {
         let turnOn = app.buttons["Turn On Clipboard History"]
         XCTAssertTrue(turnOn.waitForExistence(timeout: 5))
         turnOn.click()
-        let confirm = app.buttons["Turn On"]
+        let confirm = app.dialogs.buttons["Turn On"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Cue should explain clipboard access before turning capture on.")
         confirm.click()
         XCTAssertTrue(app.staticTexts["Nothing copied yet"].waitForExistence(timeout: 20), "Capture did not turn on. In CI, the Keychain is the likely cause.")
