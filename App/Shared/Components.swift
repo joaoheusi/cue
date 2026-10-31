@@ -257,7 +257,7 @@ struct CommandRow<Leading: View, Accessory: View>: View {
         HStack(spacing: 10) {
             leading()
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(AttributedString.highlighted(title, matching: match))
+                Text(AttributedString.highlighted(title, matching: selected ? match : ""))
                     .font(monospaced ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5, weight: selected ? .semibold : .medium))
                     .lineLimit(1)
                     .layoutPriority(1)
