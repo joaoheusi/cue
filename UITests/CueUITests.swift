@@ -327,6 +327,7 @@ final class CueUITests: XCTestCase {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(link, forType: .string)
         XCTAssertTrue(app.staticTexts[link].firstMatch.waitForExistence(timeout: 40))
+        XCTAssertTrue(app.descendants(matching: .any)["hint.Go to Link"].waitForExistence(timeout: 5), "The footer should show Go to Link on a link row.")
         search.typeKey("k", modifierFlags: .command)
         XCTAssertTrue(app.menuItems["Go to Link"].waitForExistence(timeout: 5), "⌘K should offer Go to Link on a link row.")
         app.typeKey(.escape, modifierFlags: [])

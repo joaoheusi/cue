@@ -301,10 +301,11 @@ struct KeyHint: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(label).fontWeight(primary ? .semibold : .regular).foregroundStyle(primary ? .primary : dimmed ? .tertiary : .secondary)
+            Text(label).fontWeight(primary ? .semibold : .regular).foregroundStyle(primary ? .primary : dimmed ? .tertiary : .secondary).lineLimit(1)
             Key(text: keys, dimmed: dimmed)
         }
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("hint.\(label)")
     }
 }
 
