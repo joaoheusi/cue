@@ -351,7 +351,7 @@ final class CueUITests: XCTestCase {
 
         let row = app.staticTexts["PNG image · 32 × 16"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 40), "A copied image should appear as a row in clipboard history.")
-        let summary = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "PNG · 32 × 16 · ")).firstMatch
+        let summary = app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "PNG · 32 × 16 · ")).firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 5), "The detail pane should show the image type, size, and bytes.")
         XCTAssertFalse(app.staticTexts["0 characters · 0 words"].exists)
 
