@@ -283,7 +283,7 @@ struct PaletteSettingsView: View {
                 .foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.primary.opacity(0.75)))
                 .padding(.horizontal, 11)
                 .frame(height: 24)
-                .background(on ? AnyShapeStyle(Cue.accent) : AnyShapeStyle(Cue.fill), in: Capsule())
+                .background(on ? AnyShapeStyle(Cue.rowSelected) : AnyShapeStyle(Cue.fill), in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])

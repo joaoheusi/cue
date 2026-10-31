@@ -119,6 +119,44 @@ final class CueUITests: XCTestCase {
         XCTAssertTrue(library.buttons["Close test"].waitForNonExistence(timeout: 5))
     }
 
+    func testCopyTextCopiesTheActionNowInTheEditor() throws {
+        let saved = NSPasteboard.general.string(forType: .string)
+        addTeardownBlock {
+            NSPasteboard.general.clearContents()
+            if let saved { NSPasteboard.general.setString(saved, forType: .string) }
+        }
+        NSPasteboard.general.clearContents()
+        let app = try launch()
+        let search = app.textFields["command.search"]
+        search.typeText("explain this")
+        XCTAssertTrue(app.staticTexts["Explain this PR"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let library = app.windows["Cue"]
+        func name(_ value: String) -> XCUIElement { library.textFields.matching(NSPredicate(format: "value == %@", value)).firstMatch }
+        XCTAssertTrue(name("Explain this PR").waitForExistence(timeout: 5))
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Create a handoff")).firstMatch.click()
+        XCTAssertTrue(name("Create a handoff").waitForExistence(timeout: 5))
+        library.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitForClipboard { $0.hasPrefix("Create an implementation handoff") }, "⌘⇧C should copy the action in the editor, not the first one opened.")
+    }
+
+    func testSelectingAScriptWithAnActionOpenClearsTheEditorSafely() throws {
+        let app = try launch { data in
+            let folder = data.appendingPathComponent("commands")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try "#!/bin/sh\necho hello\n".write(to: folder.appendingPathComponent("build-info.sh"), atomically: true, encoding: .utf8)
+        }
+        let search = app.textFields["command.search"]
+        search.typeText("explain this")
+        XCTAssertTrue(app.staticTexts["Explain this PR"].waitForExistence(timeout: 5))
+        search.typeKey("e", modifierFlags: .command)
+        let library = app.windows["Cue"]
+        XCTAssertTrue(library.textFields.matching(NSPredicate(format: "value == %@", "Explain this PR")).firstMatch.waitForExistence(timeout: 5))
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scripts")).firstMatch.click()
+        library.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "build-info")).firstMatch.click()
+        XCTAssertTrue(library.buttons["Reveal"].waitForExistence(timeout: 5), "The script should open after the action closes.")
+    }
+
     func testActionsMenuActsOnTheSelectedRow() throws {
         let app = try launch()
         let search = app.textFields["command.search"]

@@ -213,7 +213,7 @@ struct LibraryView: View {
 
     private func sidebar(_ snapshot: LibrarySnapshot) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: 20)
+            Color.clear.frame(height: 34)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     sidebarHeader("Library")

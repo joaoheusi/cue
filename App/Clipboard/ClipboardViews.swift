@@ -165,7 +165,7 @@ struct ClipboardCommandView: View {
 
     private func symbol(_ item: ClipItem) -> (String, Color) {
         if item.sensitive { return ("lock", Cue.warning) }
-        if item.isPinned { return ("pin", Cue.claude) }
+        if item.isPinned { return ("pin", Cue.claudeAccent) }
         switch item.kind {
         case .link: return ("link", Cue.link)
         case .code: return ("chevron.left.forwardslash.chevron.right", .secondary)

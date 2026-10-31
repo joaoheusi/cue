@@ -110,6 +110,7 @@ struct EditorView: View {
         }
         .confirmationDialog("Delete “\(draft.name)”?", isPresented: $confirmDelete) {
             Button("Delete Action", role: .destructive) {
+                guard let draft = nav.draft else { return }
                 Task {
                     await model.delete(draft)
                     nav.edit(nil)
@@ -154,10 +155,10 @@ struct EditorView: View {
             }
             .accessibilityLabel("Favorite")
             Menu {
-                Button("Copy Text") { Task { await model.copy(draft) } }
+                Button("Copy Text") { if let draft = nav.draft { Task { await model.copy(draft) } } }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(isNew || nav.isDirty)
-                Button("Duplicate") { Task { if let copy = await model.duplicate(draft) { nav.edit(copy) } } }.disabled(isNew)
+                Button("Duplicate") { if let draft = nav.draft { Task { if let copy = await model.duplicate(draft) { nav.edit(copy) } } } }.disabled(isNew)
                 Button("Revert Changes") { nav.revert() }.disabled(isNew || nav.baseline == nav.draft)
                 Divider()
                 Button("Delete…", role: .destructive) { confirmDelete = true }.disabled(isNew)
@@ -271,7 +272,7 @@ struct EditorView: View {
     }
 
     private func binding<T>(_ path: WritableKeyPath<Action, T>) -> Binding<T> {
-        Binding(get: { nav.draft![keyPath: path] }, set: { value in nav.update { $0[keyPath: path] = value } })
+        Binding(get: { (nav.draft ?? Action())[keyPath: path] }, set: { value in nav.update { $0[keyPath: path] = value } })
     }
 
     private func test() {
