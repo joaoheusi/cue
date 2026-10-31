@@ -477,9 +477,11 @@ struct ClipboardStatus: Equatable {
     func copyText(_ item: ClipItem) async {
         commandStatus = nil
         guard let store else { return }
+        let invocation = context.invocation, generation = context.paste.changeCount
         do {
             guard let text = try await store.ocrText(item.id), !text.isEmpty else { throw ClipboardStore.dataMissing }
-            let delivery = await context.paste.deliver(text, paste: false, target: nil, generation: nil, isCancelled: { false }, hide: context.closeCommand)
+            if invocation?.cancelled == true { return }
+            let delivery = await context.paste.deliver(text, paste: false, target: nil, generation: generation, isCancelled: { false }, hide: context.closeCommand)
             commandStatus = ClipboardStatus(text: delivery.message, success: delivery.succeeded)
         } catch {
             report(error, .command)
