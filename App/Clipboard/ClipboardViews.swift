@@ -354,6 +354,7 @@ private struct ClipDetail: View {
             ("Content", item.summary),
         ]
         if item.content == .rich { rows.append(("Format", "Rich text")) }
+        if item.isTruncated { rows.append(("Search", "First 8 KB")) }
         if let status = files?.error?.message ?? files?.warning { rows.append(("Status", status)) }
         return rows
     }
@@ -398,7 +399,7 @@ private struct ClipDetail: View {
             }
         case .plain, .rich:
             ScrollView {
-                Text(item.display)
+                Text(item.isTruncated ? item.display + "…" : item.display)
                     .font(item.sensitive ? .system(size: 12.5, design: .monospaced) : .system(size: 13.5))
                     .lineSpacing(4)
                     .textSelection(.enabled)

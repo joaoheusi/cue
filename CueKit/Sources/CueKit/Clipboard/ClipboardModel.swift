@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 
 public struct ClipItem: Identifiable, Equatable, Sendable {
+    public static let inlineBytes = 8 * 1024
+
     public let id: String
     public let text: String
     public let source: String?
@@ -12,15 +14,17 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public var expiresAt: Date?
     public let content: ClipContent
     public let byteSize: Int
+    public let isTruncated: Bool
     public let kind: ClipKind
     public let folded: String
     public let preview: String
     public let foldedPreview: String
 
     public init(id: String, text: String, source: String?, createdAt: Date, lastUsedAt: Date, pinboardID: String?,
-                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0) {
+                sensitive: Bool = false, expiresAt: Date? = nil, content: ClipContent = .plain, byteSize: Int = 0, truncated: Bool = false) {
+        let inline = Self.prefix(text, bytes: Self.inlineBytes)
         self.id = id
-        self.text = text
+        self.text = inline
         self.source = source
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
@@ -29,11 +33,12 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
         self.expiresAt = expiresAt
         self.content = content
         self.byteSize = byteSize
+        isTruncated = content.isText && (truncated || inline.utf8.count < text.utf8.count)
         switch content {
         case .plain, .rich:
-            kind = sensitive ? .text : ClipKind.of(text)
-            preview = sensitive ? SensitiveText.mask(text) : ClipboardSearch.preview(text)
-            folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(text)
+            kind = sensitive ? .text : ClipKind.of(inline)
+            preview = sensitive ? SensitiveText.mask(inline) : ClipboardSearch.preview(inline)
+            folded = sensitive ? ClipboardSearch.fold(preview) : ClipboardSearch.fold(inline)
         case .image(let type, let width, let height):
             kind = .image
             preview = "\(ClipContent.imageName(type)) image · \(width) × \(height)"
@@ -50,15 +55,25 @@ public struct ClipItem: Identifiable, Equatable, Sendable {
     public var isPinned: Bool { pinboardID != nil }
     public var display: String { sensitive || !content.isText ? preview : text }
     public var isExportable: Bool { content.isText && !sensitive }
+    public var sizeLabel: String { isTruncated ? byteLabel : "\(display.count) chars" }
+    private var byteLabel: String { ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file) }
+
+    public static func prefix(_ text: String, bytes: Int) -> String {
+        guard text.utf8.count > bytes else { return text }
+        var end = text.utf8.index(text.startIndex, offsetBy: bytes)
+        while end.samePosition(in: text.unicodeScalars) == nil { end = text.utf8.index(before: end) }
+        return String(text[..<end])
+    }
 
     public var summary: String {
         if sensitive { return "Hidden API key or token" }
         switch content {
         case .plain, .rich:
+            if isTruncated { return "\(byteLabel) of text" }
             let words = text.split(whereSeparator: \.isWhitespace).count
             return "\(text.count) character\(text.count == 1 ? "" : "s") · \(words) word\(words == 1 ? "" : "s")"
         case .image(let type, let width, let height):
-            return "\(ClipContent.imageName(type)) · \(width) × \(height) · \(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file))"
+            return "\(ClipContent.imageName(type)) · \(width) × \(height) · \(byteLabel)"
         case .files(let paths):
             let folders = paths.filter { $0.hasSuffix("/") }.count
             let parts = [(paths.count - folders, "file"), (folders, "folder")].filter { $0.0 > 0 }
@@ -186,6 +201,7 @@ public enum SensitiveText {
     ]
 
     public static func matches(_ text: String) -> Bool {
+        guard text.utf8.count <= maxLength * 8 else { return false }
         let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard token.count <= maxLength, !token.contains(where: \.isWhitespace) else { return false }
         return patterns.contains { token.range(of: "^\($0)$", options: .regularExpression) != nil }
@@ -364,7 +380,8 @@ public struct CaptureSource {
 }
 
 public enum CaptureFilter {
-    public static let maxBytes = 256 * 1024
+    public static let maxTextBytes = 16 * 1024 * 1024
+    public static let maxPathBytes = 256 * 1024
     public static let maxImageBytes = 64 * 1024 * 1024
     public static let maxRichBytes = 1024 * 1024
     public static let plainTextType = "public.utf8-plain-text"
@@ -395,7 +412,7 @@ public enum CaptureFilter {
         if types.contains(fileType) {
             let paths = source.files()
             if !paths.isEmpty {
-                return paths.reduce(0) { $0 + $1.utf8.count } > maxBytes ? .skip(.tooLarge) : .capture(ClipCapture(content: .files(paths)))
+                return paths.reduce(0) { $0 + $1.utf8.count } > maxPathBytes ? .skip(.tooLarge) : .capture(ClipCapture(content: .files(paths)))
             }
         }
         let hasText = types.contains(plainTextType)
@@ -425,14 +442,17 @@ public enum CaptureFilter {
     }
 
     private static func imageWins(over text: String?) -> Bool {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        guard let text, !isBlank(text) else { return true }
         return text.utf8.count <= 4096 && ClipKind.of(text) == .link
     }
 
-    static func textProblem(_ text: String) -> SkipReason? {
-        if text.utf8.count > maxBytes { return .tooLarge }
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .blank }
-        return nil
+    private static func isBlank(_ text: String) -> Bool {
+        text.unicodeScalars.allSatisfy(CharacterSet.whitespacesAndNewlines.contains)
+    }
+
+    static func textProblem(_ text: String, limit: Int = maxTextBytes) -> SkipReason? {
+        if text.utf8.count > limit { return .tooLarge }
+        return isBlank(text) ? .blank : nil
     }
 }
 

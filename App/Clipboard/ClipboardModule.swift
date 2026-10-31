@@ -326,11 +326,11 @@ struct ClipboardStatus: Equatable {
     private func pasteContent(_ item: ClipItem, plain: Bool) async throws -> (content: PasteContent, warning: String?) {
         switch item.content {
         case .plain:
-            return (.text(item.text), nil)
+            return (.text(try await fullText(item)), nil)
         case .rich where plain:
-            return (.text(item.text), nil)
+            return (.text(try await fullText(item)), nil)
         case .rich:
-            return (.data(text: item.text, try await payload(item)), nil)
+            return (.data(text: try await fullText(item), try await payload(item)), nil)
         case .image:
             return (.data(text: nil, try await payload(item)), nil)
         case .files(let paths):
@@ -338,6 +338,12 @@ struct ClipboardStatus: Equatable {
             if let error = check.error { throw error }
             return (.files(check.present), check.warning)
         }
+    }
+
+    private func fullText(_ item: ClipItem) async throws -> String {
+        guard item.isTruncated else { return item.text }
+        guard let store else { throw ClipboardStore.dataMissing }
+        return try await store.fullText(item.id)
     }
 
     private func payload(_ item: ClipItem) async throws -> [String: Data] {
@@ -388,7 +394,7 @@ struct ClipboardStatus: Equatable {
         } catch {
             return report(error, .command)
         }
-        if case .text = loaded.content {} else if invocation?.cancelled == true { return }
+        if item.isTruncated || !item.content.isText || item.content == .rich && !plain, invocation?.cancelled == true { return }
         if let warning = loaded.warning {
             reason = warning
             target = nil
