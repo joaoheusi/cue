@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
     @ObservationIgnored private var store: PromptStore?
     @ObservationIgnored let context: AppContext
 
-    static let pasteReason = "To paste a prompt into the app you were using, Cue reads which text field has focus and sends one ⌘V to it."
+    static let pasteReason = "To paste a prompt into the app you were using, Cue reads which text field has focus and sends one ⌘V to it. When that app hides its selected text, Cue sends one ⌘C to read it."
 
     init(context: AppContext) {
         self.context = context
@@ -267,15 +267,16 @@ import UniformTypeIdentifiers
         guard action.revision == requested.revision else { return CueError("REVISION_CONFLICT", "Action changed. Reload before continuing.") }
         guard action.enabled else { return CueError("ACTION_DISABLED", "Enable this action before using it.") }
         let paste = willPaste(action, copyOnly: copyOnly)
-        switch prepare(action.template, paste: paste, assistant: true, invocation: invocation, answers: answers) {
+        switch await prepare(action.template, paste: paste, assistant: true, invocation: invocation, answers: answers) {
         case .failure(let error):
             return error
         case .success(let prepared):
             if invocation.cancelled { return nil }
             invocation.consumed = true
+            let replacing = paste && action.deliveryMode == .replace ? prepared.selection : nil
             let next = ActionRun(title: action.name, kind: .claude, surface: .palette, prompt: prepared.output, input: prepared.input, inputName: prepared.inputName,
                                  action: action, invocation: invocation, target: prepared.target, targetName: invocation.front?.localizedName,
-                                 generation: prepared.generation, finish: paste ? .paste : .copy)
+                                 generation: prepared.generation, replacing: replacing, finish: replacing != nil ? .replace : paste ? .paste : .copy)
             replaceRun(with: next)
             begin(next)
             return nil
@@ -287,14 +288,14 @@ import UniformTypeIdentifiers
         run = next
     }
 
-    func test(_ draft: Action) {
+    func test(_ draft: Action) async {
         guard run?.isRunning != true else {
             notice = ("Stop the running action before you test this one.", false)
             return
         }
         let invocation = Invocation(target: .failure(PasteFailure.targetUnavailable.error))
         let claude = draft.ai == true
-        switch prepare(draft.template, paste: false, assistant: claude, invocation: invocation, answers: [:], sampleSelection: "Selected text") {
+        switch await prepare(draft.template, paste: false, assistant: claude, invocation: invocation, answers: [:], sampleSelection: "Selected text") {
         case .failure(let error):
             notice = (error.message, false)
         case .success(let prepared):
@@ -364,7 +365,7 @@ import UniformTypeIdentifiers
             try? await reload()
         }
         switch run.finish {
-        case .paste: await deliver(run, paste: true)
+        case .paste, .replace: await deliver(run, paste: true)
         case .copy: await deliver(run, paste: false)
         case .keep:
             if !context.commandVisible() { context.notifier.post(run.title, "Result ready. Open Cue to see it.") }
@@ -373,7 +374,7 @@ import UniformTypeIdentifiers
 
     func deliver(_ run: ActionRun, paste: Bool) async {
         let visible = context.commandVisible()
-        let delivery = await context.paste.deliver(run.output, paste: paste && run.target != nil, target: run.target, generation: run.generation,
+        let delivery = await context.paste.deliver(run.output, paste: paste && run.target != nil, target: run.target, generation: run.generation, replacing: run.replacing,
                                                    isCancelled: { run.invocation.cancelled }, hide: context.closeCommand)
         var failure: CueError?
         switch delivery {
@@ -465,7 +466,7 @@ import UniformTypeIdentifiers
     }
 
     func willPaste(_ action: Action, copyOnly: Bool) -> Bool {
-        !copyOnly && (action.deliveryMode == .paste || (action.deliveryMode == .inherit && snapshot?.settings.defaultDelivery == .paste))
+        !copyOnly && ([.paste, .replace].contains(action.deliveryMode) || (action.deliveryMode == .inherit && snapshot?.settings.defaultDelivery == .paste))
     }
 
     var willPasteByDefault: Bool { snapshot?.settings.defaultDelivery == .paste }
@@ -489,7 +490,7 @@ import UniformTypeIdentifiers
             return .failure(CueError("REVISION_CONFLICT", "Action changed. Reload before continuing."))
         }
         guard action.enabled else { return .failure(CueError("ACTION_DISABLED", "Enable this action before using it.")) }
-        let result = await render(action.template, paste: willPaste(action, copyOnly: copyOnly),
+        let result = await render(action.template, paste: willPaste(action, copyOnly: copyOnly), replace: action.deliveryMode == .replace,
                                   assistant: action.ai == true ? action.name : nil, invocation: invocation, answers: answers)
         guard case .success(let delivery) = result else { return result }
         switch delivery {
@@ -508,10 +509,11 @@ import UniformTypeIdentifiers
         var inputName = "clipboard"
         var target: PasteTarget?
         var generation: Int?
+        var selection = ""
     }
 
     private func prepare(_ template: String, paste: Bool, assistant: Bool, invocation: Invocation, answers: [String: String],
-                         sampleSelection: String? = nil) -> Result<Prepared, CueError> {
+                         sampleSelection: String? = nil) async -> Result<Prepared, CueError> {
         var target: PasteTarget?
         if paste {
             switch invocation.target {
@@ -522,7 +524,6 @@ import UniformTypeIdentifiers
                 return .failure(error)
             }
         }
-        let generation = paste || assistant ? context.paste.changeCount : nil
         do {
             let uses = try Template.uses(template)
             var inputs = Template.Inputs(answers: answers)
@@ -531,23 +532,29 @@ import UniformTypeIdentifiers
                 if inputs.clipboard.isEmpty { throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.") }
                 try Template.validateText(inputs.clipboard, maxBytes: Template.outputLimit)
             }
+            if assistant { _ = try credentials() }
             if uses.selection {
-                inputs.selection = sampleSelection ?? context.paste.selectedText(in: invocation.front) ?? ""
+                if let sampleSelection {
+                    inputs.selection = sampleSelection
+                } else {
+                    inputs.selection = await context.paste.selectedText(in: invocation.front).text ?? ""
+                }
                 if inputs.selection.isEmpty { throw CueError("SELECTION_EMPTY", "Select text before using this action.") }
                 try Template.validateText(inputs.selection, maxBytes: Template.outputLimit)
             }
+            let generation = paste || assistant ? context.paste.changeCount : nil
             let output = try Template.renderLocal(template, inputs: inputs)
-            if assistant { _ = try credentials() }
             return .success(Prepared(output: output, input: uses.clipboard ? inputs.clipboard : uses.selection ? inputs.selection : nil,
-                                     inputName: uses.clipboard ? "clipboard" : "selection", target: target, generation: generation))
+                                     inputName: uses.clipboard ? "clipboard" : "selection", target: target, generation: generation, selection: inputs.selection))
         } catch {
             return .failure(error.cueError)
         }
     }
 
-    private func render(_ template: String, paste: Bool, assistant: String?, invocation: Invocation, answers: [String: String] = [:]) async -> Result<Delivery, CueError> {
+    private func render(_ template: String, paste: Bool, replace: Bool = false, assistant: String?, invocation: Invocation,
+                        answers: [String: String] = [:]) async -> Result<Delivery, CueError> {
         let prepared: Prepared
-        switch prepare(template, paste: paste, assistant: assistant != nil, invocation: invocation, answers: answers) {
+        switch await prepare(template, paste: paste, assistant: assistant != nil, invocation: invocation, answers: answers) {
         case .success(let value): prepared = value
         case .failure(let error): return .failure(error)
         }
@@ -565,7 +572,7 @@ import UniformTypeIdentifiers
                 return .success(.cancelled)
             }
         }
-        let delivery = await context.paste.deliver(output, paste: paste, target: target, generation: generation,
+        let delivery = await context.paste.deliver(output, paste: paste, target: target, generation: generation, replacing: replace ? prepared.selection : nil,
                                                    isCancelled: { invocation.cancelled }, hide: assistant == nil ? context.closeCommand : {})
         if let assistant {
             switch delivery {
