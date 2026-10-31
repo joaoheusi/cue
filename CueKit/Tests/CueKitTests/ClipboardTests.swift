@@ -76,6 +76,18 @@ import Testing
         #expect(ClipboardPurge.select(items, now: now, retention: .never, maxItems: 500).isEmpty)
     }
 
+    @Test func recentWindowIncludesBothEdgesAndSkipsPins() {
+        let end = Date(timeIntervalSince1970: 1_000_000)
+        let window = RecentRange.fiveMinutes.window(endingAt: end)
+        func item(_ id: String, secondsAgo: Double, pinned: Bool = false) -> PurgeCandidate {
+            PurgeCandidate(id: id, lastUsedAt: end.addingTimeInterval(-secondsAgo), pinned: pinned)
+        }
+        let items = [item("start", secondsAgo: 300), item("end", secondsAgo: 0), item("inside", secondsAgo: 10),
+                     item("older", secondsAgo: 300.001), item("newer", secondsAgo: -0.001), item("pinned", secondsAgo: 10, pinned: true)]
+        #expect(ClipboardPurge.recent(items, in: window) == ["start", "end", "inside"])
+        #expect(RecentRange.allCases.map(\.rawValue) == [300, 900, 1800, 3600, 86_400])
+    }
+
     @Test func searchIgnoresCaseAndDiacriticsAndSortsByLastUse() {
         let base = Date(timeIntervalSince1970: 0)
         let items = [
@@ -174,6 +186,89 @@ import Testing
         try await target.importData(data)
         #expect(await target.settings == settings)
         #expect(await !target.isUnlocked)
+    }
+
+    @Test func settingsFromOlderVersionsLoadWithNewDefaults() async throws {
+        let old = Data(#"{"retention":"1d","maxItems":250,"excludedApps":[],"shortcut":null,"sensitive":"mask"}"#.utf8)
+        let decoded = try JSONDecoder().decode(ClipboardSettings.self, from: old)
+        #expect(decoded.retention == .day && decoded.maxItems == 250 && decoded.sensitive == .mask)
+        #expect(!decoded.clearOnQuit && !decoded.clearSystemClipboard)
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(ClipboardStore.fileName)
+        _ = try ClipboardStore(url: url)
+        try SQLite(path: url).execute("UPDATE meta SET value=?1 WHERE key='settings'", [.blob(old)])
+        #expect(await (try ClipboardStore(url: url)).settings == decoded)
+        #expect(try SQLite(path: url).userVersion() == 2)
+    }
+
+    @Test func newSettingsSurviveExportAndImport() async throws {
+        let source = try ClipboardStore(url: nil)
+        var settings = await source.settings
+        settings.clearOnQuit = true
+        settings.clearSystemClipboard = true
+        try await source.save(settings)
+        let data = try await source.exportData(now: Date())
+        #expect(try ClipboardExport.decode(data).settings == settings)
+        let target = try ClipboardStore(url: nil)
+        try await target.importData(data)
+        #expect(await target.settings == settings)
+    }
+
+    @Test func deleteRecentKeepsCacheAndDatabaseInSync() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(ClipboardStore.fileName)
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let end = Date(timeIntervalSince1970: 1_792_670_100)
+        let old = try await store.capture("just before the window", source: nil, now: end.addingTimeInterval(-300.001))
+        try await store.capture("at the window start", source: nil, now: end.addingTimeInterval(-300))
+        try await store.capture("inside the window", source: nil, now: end.addingTimeInterval(-10))
+        let pinned = try await store.capture("pinned inside the window", source: nil, now: end.addingTimeInterval(-5))
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(pinned, board.id)
+        let later = try await store.capture("copied during the confirmation", source: nil, now: end.addingTimeInterval(1))
+        let window = RecentRange.fiveMinutes.window(endingAt: end)
+
+        #expect(try await store.recentCount(in: window) == 2)
+        #expect(try await store.deleteRecent(in: window) == 2)
+        #expect(await store.items().map(\.id) == [later, pinned, old])
+        #expect(try await store.itemCount() == 3)
+        #expect(try await store.deleteRecent(in: window) == 0)
+
+        let reopened = try ClipboardStore(url: url)
+        try await reopened.unlock(key)
+        #expect(await reopened.items().map(\.id) == [later, pinned, old])
+    }
+
+    @Test func lockedStoreDeletesWithoutTheKey() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent(ClipboardStore.fileName)
+        let key = SymmetricKey(size: .bits256)
+        let store = try ClipboardStore(url: url)
+        try await store.unlock(key)
+        let end = Date(timeIntervalSince1970: 1_792_670_100)
+        try await store.capture("recent", source: nil, now: end)
+        try await store.capture("older", source: nil, now: end.addingTimeInterval(-7200))
+        let pinned = try await store.capture("pinned", source: nil, now: end)
+        let board = try await store.defaultPinboard()
+        try await store.setPinboard(pinned, board.id)
+
+        let locked = try ClipboardStore(url: url)
+        #expect(await !locked.isUnlocked)
+        let window = RecentRange.hour.window(endingAt: end)
+        #expect(try await locked.recentCount(in: window) == 1)
+        #expect(try await locked.deleteRecent(in: window) == 1)
+        #expect(try await locked.counts() == (2, 1))
+        try await locked.clear(keepPinned: true)
+        #expect(try await locked.counts() == (1, 1))
+
+        try await locked.unlock(key)
+        #expect(await locked.items().map(\.id) == [pinned])
     }
 
     @Test func deletingPinboardUnpinsItemsOnDisk() async throws {

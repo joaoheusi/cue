@@ -38,6 +38,7 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var capturedCount = 0
     @ObservationIgnored private var keychainKind: ClipboardKeychain.Kind?
     @ObservationIgnored private var appNames: [String: String] = [:]
+    @ObservationIgnored private var launchClearDone = false
 
     private static let owner = "clipboard"
     static let accessDeniedError = CueError(
@@ -123,6 +124,10 @@ struct ClipboardStatus: Equatable {
         guard let store else { return }
         phase = .loading
         do {
+            if !launchClearDone {
+                if settings.clearOnQuit { try await store.clear(keepPinned: true) }
+                launchClearDone = true
+            }
             try await store.purge(now: Date())
             let needsKey = try await captureEnabled ? true : store.itemCount() > 0
             if needsKey, !(await store.isUnlocked) { try await unlock(store) }
@@ -209,7 +214,7 @@ struct ClipboardStatus: Equatable {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
-                self?.poll()
+                if !Task.isCancelled { self?.poll() }
             }
         }
     }
@@ -325,6 +330,53 @@ struct ClipboardStatus: Equatable {
         await run(.command) { try await $0.delete(item.id) }
     }
 
+    func deleteRecent(_ range: RecentRange, from surface: Surface) {
+        guard let store else { return }
+        let window = range.window(endingAt: Date())
+        let label = range.title.lowercased()
+        Task {
+            let count: Int
+            do {
+                count = try await store.recentCount(in: window)
+            } catch {
+                return report(error, surface)
+            }
+            guard count > 0 else {
+                return show(ClipboardStatus(text: "Nothing saved in the \(label).", success: true), on: surface)
+            }
+            guard confirm("Delete \(Self.itemCount(count)) from the \(label)?",
+                          "Pinned items stay. This cannot be undone.\(settings.clearSystemClipboard ? " The system clipboard is also cleared." : "")",
+                          "Delete") else { return }
+            var deleted = 0
+            guard await run(surface, { deleted = try await $0.deleteRecent(in: window) }) else { return }
+            historyDeleted()
+            show(ClipboardStatus(text: "Deleted \(Self.itemCount(deleted)).", success: true), on: surface)
+        }
+    }
+
+    private static func itemCount(_ count: Int) -> String { count == 1 ? "1 item" : "\(count) items" }
+
+    private func historyDeleted() {
+        capturedChangeCount = nil
+        clearSystemClipboard()
+    }
+
+    private func clearSystemClipboard() {
+        if settings.clearSystemClipboard { lastChangeCount = context.paste.clear() }
+    }
+
+    var clearsOnQuit: Bool { store != nil && settings.clearOnQuit }
+
+    func clearForQuit() async {
+        stopCapture()
+        clearSystemClipboard()
+        do {
+            try await store?.clear(keepPinned: true)
+        } catch {
+            context.log.record(error.cueError, "clipboard")
+        }
+    }
+
     func update(_ edit: (inout ClipboardSettings) -> Void) {
         var next = settings
         edit(&next)
@@ -401,7 +453,7 @@ struct ClipboardStatus: Equatable {
     func clearHistory() {
         let alert = NSAlert()
         alert.messageText = "Clear clipboard history?"
-        alert.informativeText = "This permanently deletes saved clipboard items from this Mac."
+        alert.informativeText = "This permanently deletes saved clipboard items from this Mac.\(settings.clearSystemClipboard ? " The system clipboard is also cleared." : "")"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Clear History")
         alert.addButton(withTitle: "Cancel")
@@ -413,6 +465,7 @@ struct ClipboardStatus: Equatable {
         let keepPinned = alert.suppressionButton?.state == .on
         Task {
             if await run(.settings, { try await $0.clear(keepPinned: keepPinned) }) {
+                historyDeleted()
                 settingsStatus = ClipboardStatus(text: keepPinned ? "History cleared. Pinned items were kept." : "History cleared.", success: true)
             }
         }
@@ -503,7 +556,10 @@ struct ClipboardStatus: Equatable {
     private func report(_ error: Error, _ surface: Surface) {
         let error = error.cueError
         if error.code != "VALIDATION" { context.log.record(error, "clipboard") }
-        let status = ClipboardStatus(text: error.message, success: false)
+        show(ClipboardStatus(text: error.message, success: false), on: surface)
+    }
+
+    private func show(_ status: ClipboardStatus, on surface: Surface) {
         switch surface {
         case .command: commandStatus = status
         case .settings: settingsStatus = status

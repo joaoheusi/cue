@@ -74,7 +74,7 @@ extension AttributedString {
     static func highlighted(_ text: String, matching query: String) -> AttributedString {
         var result = AttributedString(text)
         let needle = query.trimmingCharacters(in: .whitespaces)
-        if !needle.isEmpty, let range = result.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) {
+        if !needle.isEmpty, let range = result.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) {
             result[range].underlineStyle = .single
         }
         return result

@@ -134,19 +134,37 @@ public actor ClipboardStore {
 
     @discardableResult
     public func purge(now: Date) throws -> Int {
-        let candidates = try db.query("SELECT id, last_used_at, pinboard_id, expires_at FROM items").compactMap { row -> PurgeCandidate? in
+        let doomed = ClipboardPurge.select(try purgeCandidates(), now: now, retention: settings.retention, maxItems: settings.maxItems)
+        try remove(doomed)
+        return doomed.count
+    }
+
+    public func recentCount(in window: ClosedRange<Date>) throws -> Int {
+        ClipboardPurge.recent(try purgeCandidates(), in: window).count
+    }
+
+    @discardableResult
+    public func deleteRecent(in window: ClosedRange<Date>) throws -> Int {
+        let doomed = ClipboardPurge.recent(try purgeCandidates(), in: window)
+        try remove(doomed)
+        return doomed.count
+    }
+
+    private func purgeCandidates() throws -> [PurgeCandidate] {
+        try db.query("SELECT id, last_used_at, pinboard_id, expires_at FROM items").compactMap { row in
             guard let id = row[0].string else { return nil }
             let used = row[1].string.flatMap(Timestamp.parse) ?? .distantPast
             return PurgeCandidate(id: id, lastUsedAt: used, pinned: row[2] != .null, expiresAt: row[3].string.flatMap(Timestamp.parse))
         }
-        let doomed = ClipboardPurge.select(candidates, now: now, retention: settings.retention, maxItems: settings.maxItems)
-        guard !doomed.isEmpty else { return 0 }
+    }
+
+    private func remove(_ ids: Set<String>) throws {
+        guard !ids.isEmpty else { return }
         try db.transaction {
-            for id in doomed { try db.execute("DELETE FROM items WHERE id=?1", [.text(id)]) }
+            for id in ids { try db.execute("DELETE FROM items WHERE id=?1", [.text(id)]) }
         }
-        for id in doomed { cache[id] = nil }
+        for id in ids { cache[id] = nil }
         try checkpoint()
-        return doomed.count
     }
 
     public func clear(keepPinned: Bool) throws {
