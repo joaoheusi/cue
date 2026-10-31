@@ -537,7 +537,7 @@ import UniformTypeIdentifiers
                 if let sampleSelection {
                     inputs.selection = sampleSelection
                 } else {
-                    inputs.selection = await context.paste.selectedText(in: invocation.front).text ?? ""
+                    inputs.selection = await context.paste.selectedText(in: invocation.front, unchanged: context.paste.changeCount).text ?? ""
                 }
                 if inputs.selection.isEmpty { throw CueError("SELECTION_EMPTY", "Select text before using this action.") }
                 try Template.validateText(inputs.selection, maxBytes: Template.outputLimit)
