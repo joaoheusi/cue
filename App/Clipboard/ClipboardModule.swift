@@ -561,6 +561,7 @@ struct ClipboardStatus: Equatable {
                               "Import \(file.items.count) items and \(file.pinboards.count) pinboards. This replaces your current clipboard history, pinboards, and clipboard settings. It cannot be undone.",
                               "Replace") else { return }
                 if !file.items.isEmpty, !(await store.isUnlocked) { try await unlock(store) }
+                cancelRead()
                 try await store.importData(data)
                 try await store.purge(now: Date())
                 await refresh()
