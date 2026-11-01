@@ -131,7 +131,7 @@ extension AttributedString {
         var result = AttributedString(text)
         let needle = query.trimmingCharacters(in: .whitespaces)
         if !needle.isEmpty, let range = result.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) {
-            result[range].underlineStyle = .single
+            result[range].inlinePresentationIntent = .stronglyEmphasized
         }
         return result
     }
