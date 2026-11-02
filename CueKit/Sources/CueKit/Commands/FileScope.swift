@@ -33,6 +33,16 @@ public struct FileScope: Sendable {
 
     public var roots: [String] { locations.map(\.expanded) }
 
+    /// Positions of the best `limit` paths: names that start with the needle first, then shorter names, then path order.
+    public static func ranked(_ paths: [String], needle: String, limit: Int) -> [Int] {
+        let lowered = needle.lowercased()
+        let keyed = paths.enumerated().map { offset, path in
+            let name = (path as NSString).lastPathComponent
+            return (rank: name.lowercased().hasPrefix(lowered) ? 0 : 1, length: name.count, path: path, offset: offset)
+        }
+        return keyed.sorted { ($0.rank, $0.length, $0.path) < ($1.rank, $1.length, $1.path) }.prefix(limit).map(\.offset)
+    }
+
     public func allows(_ path: String) -> Bool {
         if path.contains(".app/") || path.hasSuffix(".app") { return false }
         return locations.contains { location in

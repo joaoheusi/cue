@@ -137,7 +137,7 @@ struct FileDetail: View {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     row("Location", details.location, monospaced: true)
                     if let version = details.version { row("Version", version) }
-                    if let size = details.size { row("Size", size) }
+                    row("Size", details.size ?? "Calculating…")
                     if let opened = details.lastOpened { row("Last opened", opened.formatted(.relative(presentation: .named))) }
                     if hit.isApp {
                         GridRow {
@@ -155,7 +155,11 @@ struct FileDetail: View {
         .task(id: hit.id) {
             details = nil
             let loaded = await FileInfo.load(hit)
-            if !Task.isCancelled { details = loaded }
+            guard !Task.isCancelled else { return }
+            details = loaded
+            guard loaded.size == nil else { return }
+            let size = await FileInfo.folderSize(hit)
+            if !Task.isCancelled { details?.size = size }
         }
     }
 

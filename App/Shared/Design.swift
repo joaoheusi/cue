@@ -4,21 +4,39 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum IconCache {
-    private nonisolated(unsafe) static let files = NSCache<NSString, NSImage>()
-    private nonisolated(unsafe) static let types = NSCache<NSString, NSImage>()
+    enum Source: Hashable, Sendable {
+        case file(String), type(UTType)
 
-    static func file(_ path: String) -> NSImage {
-        if let cached = files.object(forKey: path as NSString) { return cached }
-        let icon = NSWorkspace.shared.icon(forFile: path)
-        files.setObject(icon, forKey: path as NSString)
-        return icon
+        fileprivate var key: NSString {
+            switch self {
+            case .file(let path): "file:\(path)" as NSString
+            case .type(let type): "type:\(type.identifier)" as NSString
+            }
+        }
+
+        fileprivate var icon: NSImage {
+            switch self {
+            case .file(let path): NSWorkspace.shared.icon(forFile: path)
+            case .type(let type): NSWorkspace.shared.icon(for: type)
+            }
+        }
     }
 
-    static func type(_ type: UTType) -> NSImage {
-        if let cached = types.object(forKey: type.identifier as NSString) { return cached }
-        let icon = NSWorkspace.shared.icon(for: type)
-        types.setObject(icon, forKey: type.identifier as NSString)
-        return icon
+    private nonisolated(unsafe) static let icons = NSCache<NSString, NSImage>()
+
+    static func cached(_ source: Source) -> NSImage? { icons.object(forKey: source.key) }
+
+    /// Decodes off the main thread. One new icon takes about 20 ms, and a new result list can show a dozen.
+    static func load(_ source: Source) async -> NSImage? {
+        if let cached = cached(source) { return cached }
+        let decoded = await Task.detached(priority: .userInitiated) {
+            var rect = NSRect(x: 0, y: 0, width: 128, height: 128)
+            return source.icon.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        }.value
+        guard let decoded else { return nil }
+        let image = NSImage(cgImage: decoded, size: NSSize(width: decoded.width, height: decoded.height))
+        icons.setObject(image, forKey: source.key)
+        return image
     }
 }
 
@@ -162,11 +180,27 @@ struct Tile: View {
 }
 
 struct FileIcon: View {
-    var path: String
+    var source: IconCache.Source
     var size: CGFloat = 26
+    @State private var loaded: (source: IconCache.Source, image: NSImage)?
+
+    init(source: IconCache.Source, size: CGFloat = 26) {
+        self.source = source
+        self.size = size
+    }
+
+    init(path: String, size: CGFloat = 26) {
+        self.init(source: .file(path), size: size)
+    }
 
     var body: some View {
-        Image(nsImage: IconCache.file(path)).resizable().frame(width: size, height: size)
+        ZStack {
+            if let image = IconCache.cached(source) ?? (loaded?.source == source ? loaded?.image : nil) { Image(nsImage: image).resizable() }
+        }
+        .frame(width: size, height: size)
+        .task(id: source) {
+            if let image = await IconCache.load(source) { loaded = (source, image) }
+        }
     }
 }
 

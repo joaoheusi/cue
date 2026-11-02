@@ -2,7 +2,7 @@ import AppKit
 import CoreServices
 import CueKit
 
-struct FileHit: Identifiable, Equatable {
+struct FileHit: Identifiable, Equatable, Sendable {
     let url: URL
     var isFolder = false
     var id: String { url.path }
@@ -37,63 +37,107 @@ enum InstalledApps {
     }
 }
 
-@MainActor @Observable final class FileSearch {
-    private(set) var results: [FileHit] = [] { didSet { if results != oldValue { resultsRevision += 1 } } }
-    private(set) var resultsRevision = 0
-    @ObservationIgnored private var query: NSMetadataQuery?
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
-
-    private static let minimumLength = 2
+/// One Spotlight query. It runs on its own serial queue because reading a large result set takes far longer than one frame.
+private final class SpotlightQuery: @unchecked Sendable {
     private static let scanLimit = 2000
     private static let resultLimit = 60
 
-    func clear() {
-        stop()
-        results = []
-    }
+    private let query = NSMetadataQuery()
+    private let queue = OperationQueue()
+    private var observers: [NSObjectProtocol] = []
 
-    func search(_ text: String, scope: FileScope) {
-        clear()
-        let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard needle.count >= Self.minimumLength, !scope.locations.isEmpty else { return }
-        let query = NSMetadataQuery()
+    init(needle: String, scope: FileScope) {
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .userInitiated
+        query.operationQueue = queue
         query.predicate = NSPredicate(format: "%K CONTAINS[cd] %@", NSMetadataItemFSNameKey, needle)
         query.searchScopes = scope.roots.map { URL(fileURLWithPath: $0, isDirectory: true) }
         query.notificationBatchingInterval = 0.05
-        let center = NotificationCenter.default
-        for name in [Notification.Name.NSMetadataQueryGatheringProgress, .NSMetadataQueryDidFinishGathering] {
-            observers.append(center.addObserver(forName: name, object: query, queue: .main) { [weak self] note in
-                let finished = note.name == .NSMetadataQueryDidFinishGathering
-                MainActor.assumeIsolated { self?.collect(needle, scope: scope, finished: finished) }
-            })
+    }
+
+    func start(needle: String, scope: FileScope, publish: @escaping @Sendable (_ hits: [FileHit], _ finished: Bool) -> Void) {
+        queue.addOperation { [self] in
+            for name in [Notification.Name.NSMetadataQueryGatheringProgress, .NSMetadataQueryDidFinishGathering] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: query, queue: queue) { [self] note in
+                    guard !observers.isEmpty else { return }
+                    let hits = collect(needle, scope: scope)
+                    let finished = note.name == .NSMetadataQueryDidFinishGathering || query.resultCount >= Self.scanLimit
+                    if finished { end() }
+                    publish(hits, finished)
+                })
+            }
+            query.start()
         }
-        self.query = query
-        query.start()
     }
 
     func stop() {
-        query?.stop()
-        query = nil
+        queue.addOperation { [self] in end() }
+    }
+
+    private func end() {
+        query.stop()
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
     }
 
-    private func collect(_ needle: String, scope: FileScope, finished: Bool) {
-        guard let query else { return }
+    /// Reads the content type only for the hits that are kept. Each read costs about 0.4 ms, and ranking does not need it.
+    // ponytail: each progress batch rescans up to 2000 hits off the main thread. Keep a cursor if that CPU time ever matters.
+    private func collect(_ needle: String, scope: FileScope) -> [FileHit] {
         query.disableUpdates()
-        let found = (0..<min(query.resultCount, Self.scanLimit)).compactMap { index -> FileHit? in
+        defer { query.enableUpdates() }
+        var items: [NSMetadataItem] = [], paths: [String] = []
+        for index in 0..<min(query.resultCount, Self.scanLimit) {
             guard let item = query.result(at: index) as? NSMetadataItem,
-                  let path = item.value(forAttribute: NSMetadataItemPathKey) as? String, scope.allows(path) else { return nil }
-            return FileHit(url: URL(fileURLWithPath: path), isFolder: item.value(forAttribute: NSMetadataItemContentTypeKey) as? String == "public.folder")
+                  let path = item.value(forAttribute: NSMetadataItemPathKey) as? String, scope.allows(path) else { continue }
+            items.append(item)
+            paths.append(path)
         }
-        query.enableUpdates()
-        let lowered = needle.lowercased()
-        let ranked: [(rank: Int, length: Int, id: String, hit: FileHit)] = found.map {
-            ($0.name.lowercased().hasPrefix(lowered) ? 0 : 1, $0.name.count, $0.id, $0)
+        return FileScope.ranked(paths, needle: needle, limit: Self.resultLimit).map { index in
+            FileHit(url: URL(fileURLWithPath: paths[index]), isFolder: items[index].value(forAttribute: NSMetadataItemContentTypeKey) as? String == "public.folder")
         }
-        let sorted = ranked.sorted { ($0.rank, $0.length, $0.id) < ($1.rank, $1.length, $1.id) }.prefix(Self.resultLimit).map(\.hit)
-        if sorted != results { results = sorted }
-        if finished || query.resultCount >= Self.scanLimit { stop() }
+    }
+}
+
+@MainActor @Observable final class FileSearch {
+    private(set) var results: [FileHit] = [] { didSet { if results != oldValue { resultsRevision += 1 } } }
+    private(set) var resultsRevision = 0
+    @ObservationIgnored private var active: SpotlightQuery?
+
+    private static let minimumLength = 2
+
+    private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Keeps the hits that still match, so file rows do not vanish on each keystroke while Spotlight answers.
+    func narrow(to text: String) {
+        stop()
+        let needle = Self.trimmed(text)
+        let kept = needle.count < Self.minimumLength ? [] : results.filter { $0.name.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+        if kept != results { results = kept }
+    }
+
+    func search(_ text: String, scope: FileScope) {
+        stop()
+        let needle = Self.trimmed(text)
+        guard needle.count >= Self.minimumLength, !scope.locations.isEmpty else {
+            if !results.isEmpty { results = [] }
+            return
+        }
+        let query = SpotlightQuery(needle: needle, scope: scope)
+        active = query
+        query.start(needle: needle, scope: scope) { [weak self] hits, finished in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.receive(hits, finished: finished, from: query) } }
+        }
+    }
+
+    func stop() {
+        active?.stop()
+        active = nil
+    }
+
+    private func receive(_ hits: [FileHit], finished: Bool, from query: SpotlightQuery) {
+        guard active === query else { return }
+        if finished { active = nil }
+        if (finished || hits.count >= results.count), hits != results { results = hits }
     }
 }
 
@@ -106,9 +150,10 @@ struct FileDetails: Equatable, Sendable {
 }
 
 enum FileInfo {
+    /// Folders return no size here, because adding one up can take seconds. Use `folderSize` for those.
     static func load(_ hit: FileHit) async -> FileDetails {
         let url = hit.url
-        let task = Task.detached(priority: .utility) {
+        return await Task.detached(priority: .utility) {
             var details = FileDetails(location: (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
             let keys: Set<URLResourceKey> = [.localizedTypeDescriptionKey, .isDirectoryKey, .totalFileAllocatedSizeKey]
             let values = try? url.resourceValues(forKeys: keys)
@@ -117,17 +162,23 @@ enum FileInfo {
             if let item = MDItemCreateWithURL(kCFAllocatorDefault, url as CFURL) {
                 details.lastOpened = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
             }
-            var bytes = values?.totalFileAllocatedSize.map(Int64.init) ?? 0
-            if values?.isDirectory == true {
-                let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey], options: [])
-                var seen = 0
-                while let next = walker?.nextObject() as? URL, seen < 200_000, !Task.isCancelled {
-                    seen += 1
-                    bytes += Int64((try? next.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
-                }
+            if values?.isDirectory != true {
+                details.size = ByteCountFormatter.string(fromByteCount: Int64(values?.totalFileAllocatedSize ?? 0), countStyle: .file)
             }
-            details.size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
             return details
+        }.value
+    }
+
+    static func folderSize(_ hit: FileHit) async -> String {
+        let url = hit.url
+        let task = Task.detached(priority: .utility) {
+            let walker = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey], options: [])
+            var bytes: Int64 = 0, seen = 0
+            while let next = walker?.nextObject() as? URL, seen < 200_000, !Task.isCancelled {
+                seen += 1
+                bytes += Int64((try? next.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+            }
+            return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         }
         return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
