@@ -175,8 +175,7 @@ enum PasteContent {
             o.front = .target
             let (window, windowRead) = read(target.application, kAXFocusedWindowAttribute)
             let (field, fieldRead) = read(target.application, kAXFocusedUIElementAttribute)
-            // With no captured window, still wait until the app reports one so ⌘V does not land mid-switch.
-            o.focusedWindow = target.window == nil && window == nil ? .missing : Self.compare(window, to: target.window)
+            o.focusedWindow = Self.compare(window, to: target.window)
             o.focusedField = Self.compare(field, to: target.field)
             o.secureField = isSecure(field)
             lastObservation = "front=target window=\(o.focusedWindow)/\(windowRead) field=\(o.focusedField)/\(fieldRead)"
