@@ -29,7 +29,7 @@ enum PaletteCommand: String, CaseIterable {
 }
 
 enum PaletteItem: Identifiable {
-    case action(Action), snippet(Snippet), script(Script), window(WindowCommand), file(FileHit), command(PaletteCommand)
+    case action(Action), snippet(Snippet), script(Script), window(WindowCommand), system(SystemCommand), file(FileHit), command(PaletteCommand)
     case showAll(PaletteFilter, Int)
 
     var id: String {
@@ -38,6 +38,7 @@ enum PaletteItem: Identifiable {
         case .snippet(let snippet): "snippet:\(snippet.id)"
         case .script(let script): "script:\(script.id)"
         case .window(let command): command.owner
+        case .system(let command): command.owner
         case .file(let hit): "file:\(hit.id)"
         case .command(let command): "command:\(command.rawValue)"
         case .showAll(let filter, _): "all:\(filter.rawValue)"
@@ -161,6 +162,7 @@ struct PaletteView: View {
             + section("Scripts", commands.scripts.filter { !shown.contains(PaletteItem.script($0).id) }.map(PaletteItem.script))
             + section("Snippets", commands.snippets.map(PaletteItem.snippet))
             + section("Window", WindowCommand.allCases.map(PaletteItem.window))
+            + section("System", SystemCommand.allCases.map(PaletteItem.system))
     }
 
     private func section(_ title: String, _ items: [PaletteItem]) -> [PaletteEntry] {
@@ -188,6 +190,12 @@ struct PaletteView: View {
             commands.snippets.forEach { add(.snippet($0), $0.keyword) }
             commands.scripts.forEach { add(.script($0), $0.name) }
             WindowCommand.allCases.forEach { add(.window($0), $0.title) }
+            SystemCommand.allCases.forEach { command in
+                let scores = ([command.title] + command.keywords).compactMap { prepared.score(name: $0) }
+                if let best = scores.min(by: { ($0.tier, $0.weight) < ($1.tier, $1.weight) }) {
+                    ranked.append((.system(command), best.tier, best.weight))
+                }
+            }
             PaletteCommand.allCases.forEach { add(.command($0), $0.title) }
             results.actions = ranked.enumerated().sorted { a, b in
                 (a.element.tier, a.element.weight, a.offset) < (b.element.tier, b.element.weight, b.offset)
@@ -290,6 +298,7 @@ struct PaletteView: View {
         case .snippet(let snippet)?: SnippetDetail(snippet: snippet)
         case .script(let script)?: ScriptDetail(script: script, timeout: snapshot.settings.scriptTimeout)
         case .window(let command)?: WindowDetail(command: command, shortcut: commands.shortcut(for: command))
+        case .system(let command)?: SystemDetail(command: command, shortcut: commands.shortcut(for: command))
         case .file(let hit)?: FileDetail(hit: hit).id(hit.id)
         default: EmptyView()
         }
@@ -323,6 +332,12 @@ struct PaletteView: View {
             }
         case .window(let command):
             CommandRow(title: command.title, subtitle: "Window", selected: selected, match: trimmed) {
+                Tile(symbol: command.symbol, color: Cue.text)
+            } accessory: {
+                if let shortcut = commands.shortcut(for: command) { Key(text: shortcut.display) }
+            }
+        case .system(let command):
+            CommandRow(title: command.title, subtitle: "System", selected: selected, match: trimmed) {
                 Tile(symbol: command.symbol, color: Cue.text)
             } accessory: {
                 if let shortcut = commands.shortcut(for: command) { Key(text: shortcut.display) }
@@ -404,6 +419,8 @@ struct PaletteView: View {
             KeyHint(label: shows ? "Copy Output" : "Show Output", keys: "⌘↵")
         case .window:
             KeyHint(label: "Apply", keys: "↵", primary: true)
+        case .system:
+            KeyHint(label: "Run", keys: "↵", primary: true)
         case .file(let hit):
             KeyHint(label: "Open", keys: "↵", primary: true)
             KeyHint(label: "Show in Finder", keys: "⌘↵")
@@ -436,6 +453,8 @@ struct PaletteView: View {
                 menu.add("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([script.url]) }
             case .window:
                 menu.add("Apply") { submit(item, alternate: false) }
+            case .system:
+                menu.add("Run") { submit(item, alternate: false) }
             case .file(let hit):
                 menu.add("Open") { commands.open(hit, reveal: false) }
                 menu.add("Show in Finder") { commands.open(hit, reveal: true) }
@@ -457,6 +476,7 @@ struct PaletteView: View {
 
     private func reason(for item: PaletteItem?) -> String {
         if case .window = item { return WindowManager.accessReason }
+        if case .system = item { return SystemRunner.mediaReason }
         return PromptsModel.pasteReason
     }
 
@@ -487,6 +507,8 @@ struct PaletteView: View {
             } else {
                 model.context.closeCommand()
             }
+        case .system(let command):
+            runSystem(command)
         case .file(let hit):
             commands.open(hit, reveal: alternate)
         case .command(let command):
@@ -507,6 +529,24 @@ struct PaletteView: View {
             }
         } else {
             deliver { await model.deliver(action, copyOnly: copyOnly, answers: answers) }
+        }
+    }
+
+    private func runSystem(_ command: SystemCommand) {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        let front = model.context.invocation?.front
+        Task {
+            defer { busy = false }
+            switch await commands.performSystem(command, front: front) {
+            case .success(true):
+                model.context.closeCommand()
+            case .success(false):
+                break
+            case .failure(let failure):
+                error = failure
+            }
         }
     }
 

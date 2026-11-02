@@ -169,6 +169,14 @@ struct ShortcutsSettingsView: View {
                         }
                     }
                 }
+                SettingsSection("System") {
+                    ForEach(Array(SystemCommand.allCases.enumerated()), id: \.element) { index, command in
+                        if index > 0 { CardDivider() }
+                        row(command.title, value: commands.shortcut(for: command), failure: commands.shortcutError(for: command)) { value in
+                            Task { await commands.setShortcut(value, for: command) }
+                        }
+                    }
+                }
                 if let notice = model.notice { StatusLine(text: notice.text, success: notice.success) }
                 if let status = commands.status { StatusLine(text: status.text, success: status.success) }
             } else {

@@ -348,6 +348,40 @@ struct CommandTests {
         #expect(!scope.allows("/tmp/x"))
     }
 
+    @Test func systemCatalogIsConsistent() {
+        #expect(SystemCommand.sections.flatMap(\.commands) == SystemCommand.allCases)
+        #expect(Set(SystemCommand.allCases.map(\.owner)).count == SystemCommand.allCases.count)
+        #expect(SystemCommand.allCases.allSatisfy { $0.owner.hasPrefix("system:") })
+        #expect(Set(SystemCommand.allCases.map(\.title)).count == SystemCommand.allCases.count)
+        #expect(SystemCommand.allCases.allSatisfy { !$0.title.isEmpty && !$0.symbol.isEmpty && !$0.summary.isEmpty })
+        #expect(Set(SystemCommand.allCases.map(\.owner)).isDisjoint(with: WindowCommand.allCases.map(\.owner)))
+    }
+
+    @Test func systemPresetsAndConfirmationsAreExact() {
+        #expect(SystemCommand.allCases.compactMap(\.volumePercent) == [0, 25, 50, 75, 100])
+        #expect(Set(SystemCommand.allCases.filter(\.needsConfirmation)) == [.emptyTrash, .quitAllApps])
+        #expect(SystemCommand.allCases.allSatisfy { !$0.needsConfirmation || $0.confirmationText != nil })
+        #expect(SystemCommand.appearanceDark.keywords.contains("dark mode"))
+        #expect(SystemCommand.toggleAppearance.appearance == .toggle)
+        #expect(SystemCommand.volumeUp.appearance == nil)
+    }
+
+    @Test func appearanceScriptsSetDarkModeExplicitly() {
+        #expect(AppearanceMode.dark.appleScript?.contains("set dark mode to true") == true)
+        #expect(AppearanceMode.light.appleScript?.contains("set dark mode to false") == true)
+        #expect(AppearanceMode.toggle.appleScript?.contains("not dark mode") == true)
+        #expect(AppearanceMode.auto.appleScript == nil)
+    }
+
+    @Test func audioLevelsClampAtBothEnds() {
+        #expect(AudioLevel.stepped(0.5, by: 1) == 0.5625)
+        #expect(AudioLevel.stepped(0.99, by: 1) == 1)
+        #expect(AudioLevel.stepped(0.01, by: -1) == 0)
+        #expect(AudioLevel.percent(0.5) == 50)
+        #expect(AudioLevel.percent(1.4) == 100)
+        #expect(AudioLevel.percent(-0.2) == 0)
+    }
+
     @Test func snippetsBecomeActionsOnce() {
         let existing = [Action(name: "Today", template: "x")]
         let actions = Snippets.actions([.init(keyword: "today", expansion: "{date}"), .init(keyword: "sig", expansion: "> {clipboard}")], existing: existing)
