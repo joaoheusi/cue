@@ -27,7 +27,7 @@ import SwiftUI
     let target: PasteTarget?
     let targetName: String?
     var generation: Int?
-    let replacing: String?
+    let replacing: SelectedText?
     var output = ""
     var phase = Phase.running
     var finish: Finish
@@ -38,7 +38,7 @@ import SwiftUI
     @ObservationIgnored var task: Task<Void, Never>?
 
     init(title: String, kind: RunsAs, surface: Surface, prompt: String = "", input: String? = nil, inputName: String = "clipboard", action: Action? = nil,
-         invocation: Invocation, target: PasteTarget? = nil, targetName: String? = nil, generation: Int? = nil, replacing: String? = nil, finish: Finish) {
+         invocation: Invocation, target: PasteTarget? = nil, targetName: String? = nil, generation: Int? = nil, replacing: SelectedText? = nil, finish: Finish) {
         self.title = title
         self.kind = kind
         self.surface = surface
