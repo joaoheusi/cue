@@ -550,7 +550,7 @@ struct PaletteView: View {
             defer { busy = false }
             switch await work() {
             case .success(.copiedNotPasted(let failure)):
-                notify("Copied, not pasted", CueError(failure.code, Delivery.copiedNotPasted(failure).message))
+                notify("Copied, not pasted", CueError(failure.code, "\(Delivery.copiedNotPasted(failure).message) Press ⌘V to paste."))
             case .success(.failedBeforeCopy(let failure)):
                 if model.context.commandVisible() { error = failure } else { notify("Not pasted", failure) }
             case .success:
