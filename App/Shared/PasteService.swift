@@ -86,11 +86,37 @@ enum PasteContent {
         if Self.isTerminal(app) { return .failure(PasteFailure.terminal.error) }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
-        guard let window = element(application, kAXFocusedWindowAttribute),
-              let field = element(application, kAXFocusedUIElementAttribute)
-        else { return .failure(PasteFailure.targetUnavailable.error) }
+        guard let (window, field) = focus(of: app, application: application) else { return .failure(PasteFailure.targetUnavailable.error) }
         if isSecure(field) { return .failure(PasteFailure.protectedInput.error) }
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
+    }
+
+    /// Electron keeps its accessibility tree off until a client asks for it, so its first focus read fails.
+    /// Capture runs before Cue's panel takes key focus, so the wait must stay synchronous and short.
+    private func focus(of app: NSRunningApplication, application: AXUIElement) -> (window: AXUIElement, field: AXUIElement)? {
+        func readFocus() -> (window: AXUIElement, field: AXUIElement)? {
+            guard let window = element(application, kAXFocusedWindowAttribute),
+                  let field = element(application, kAXFocusedUIElementAttribute)
+            else { return nil }
+            return (window, field)
+        }
+        if let focus = readFocus() { return focus }
+        if Self.isElectron(app) {
+            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            let deadline = Date().addingTimeInterval(0.3)
+            while Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.02)
+                if let focus = readFocus() { return focus }
+            }
+        }
+        let window = read(application, kAXFocusedWindowAttribute).1, field = read(application, kAXFocusedUIElementAttribute).1
+        log.record("\(PasteFailure.targetUnavailable.error.code) app=\(app.bundleIdentifier ?? "?") window=\(window) field=\(field)", "paste.capture")
+        return nil
+    }
+
+    private static func isElectron(_ app: NSRunningApplication) -> Bool {
+        guard let bundle = app.bundleURL else { return false }
+        return FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
     }
 
     func selectedText(in app: NSRunningApplication?, unchanged generation: Int? = nil) async -> (text: String?, copied: Bool) {
