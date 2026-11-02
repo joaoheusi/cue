@@ -228,9 +228,18 @@ import CueKit
         let folders = trashFolders
         let result = await Task.detached(priority: .userInitiated) {
             let manager = FileManager.default
-            var removed = 0, failed = 0
+            var removed = 0, failed = 0, unreadable = 0
             for folder in folders {
-                for item in (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
+                // A volume with no Trash folder is normal. A folder Cue cannot read is not.
+                guard manager.fileExists(atPath: folder.path) else { continue }
+                let items: [URL]
+                do {
+                    items = try manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+                } catch {
+                    unreadable += 1
+                    continue
+                }
+                for item in items {
                     do {
                         try manager.removeItem(at: item)
                         removed += 1
@@ -239,10 +248,15 @@ import CueKit
                     }
                 }
             }
-            return (removed, failed)
+            return (removed, failed, unreadable)
         }.value
+        if result.2 > 0 {
+            let lead = result.0 == 0 ? "Cue could not read the Trash, so nothing was deleted." : "Cue emptied part of the Trash, but could not read every Trash folder."
+            throw CueError("SYSTEM_FAILED", "\(lead) macOS may be blocking access. Check Privacy & Security.")
+        }
         if result.1 > 0 {
-            throw CueError("SYSTEM_FAILED", "Cue emptied most of the Trash, but \(result.1) item\(result.1 == 1 ? " could" : "s could") not be deleted. It may be in use or locked.")
+            let lead = result.0 == 0 ? "Cue could not empty the Trash." : "Cue emptied part of the Trash."
+            throw CueError("SYSTEM_FAILED", "\(lead) \(result.1) item\(result.1 == 1 ? "" : "s") could not be deleted. It may be in use or locked.")
         }
         return result.0 == 0 ? "The Trash is already empty." : "Trash emptied."
     }
