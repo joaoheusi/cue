@@ -27,7 +27,7 @@ import CueKit
         case .previousTrack: try mediaKey(18, command)
         case .toggleAppearance, .appearanceLight, .appearanceDark, .appearanceAuto:
             try await setAppearance(command.appearance ?? .toggle)
-        case .lockScreen: try await lockScreen()
+        case .lockScreen: try lockScreen()
         case .sleepDisplays: try await tool("/usr/bin/pmset", ["displaysleepnow"], "Cue could not put the displays to sleep.")
         case .sleep: try await appleScript("tell application \"System Events\" to sleep")
         case .openTrash: try openTrash()
@@ -196,14 +196,15 @@ import CueKit
         }
     }
 
-    private func lockScreen() async throws(CueError) {
-        // There is no public lock API. Use the login framework when it is there, and fail closed to display sleep.
+    private func lockScreen() throws(CueError) {
+        // There is no public lock API. If the login framework call is missing or fails, say so.
+        // Sleeping the display instead would leave the session open on Macs that delay the password.
         if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_NOW),
            let symbol = dlsym(handle, "SACLockScreenImmediate") {
             typealias Lock = @convention(c) () -> Int32
             if unsafeBitCast(symbol, to: Lock.self)() == 0 { return }
         }
-        try await tool("/usr/bin/pmset", ["displaysleepnow"], "Cue could not lock the screen.")
+        throw CueError("SYSTEM_FAILED", "Cue could not lock the screen. Press Control-Command-Q to lock it.")
     }
 
     // MARK: Files
