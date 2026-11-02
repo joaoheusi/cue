@@ -18,10 +18,12 @@ import SwiftUI
     @ObservationIgnored let context: AppContext
     @ObservationIgnored private let prompts: PromptsModel
     @ObservationIgnored private let windows = WindowManager()
+    @ObservationIgnored private let system: SystemRunner
 
     init(context: AppContext, prompts: PromptsModel) {
         self.context = context
         self.prompts = prompts
+        system = SystemRunner(canPostEvents: { context.paste.canPostPaste })
     }
 
     private var snippetsURL: URL { context.dataDirectory.appendingPathComponent(Snippets.fileName) }
@@ -128,9 +130,78 @@ import SwiftUI
             : ("\(result) \(skipped) could not be set because the keys are already in use.", false)
     }
 
+    /// Runs a system command after asking first when it is destructive. False means the user cancelled.
+    func performSystem(_ command: SystemCommand, front: NSRunningApplication?) async -> Result<Bool, CueError> {
+        if command.needsConfirmation, !confirm(command) { return .success(false) }
+        do {
+            if let message = try await system.perform(command, front: front) {
+                context.notifier.post(command.title, message) { self.context.log.record("SYSTEM_NOTICE_UNDELIVERED", command.owner) }
+            }
+            return .success(true)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    func applySystemToFront(_ command: SystemCommand) {
+        Task {
+            guard case .failure(let error) = await performSystem(command, front: NSWorkspace.shared.frontmostApplication) else { return }
+            if error.code == "PERMISSION_REQUIRED" {
+                if context.permissions.explain(.accessibility(reason: SystemRunner.mediaReason)) { context.paste.requestAccess() }
+            } else {
+                context.notifier.post(command.title, error.message) { self.context.log.record(error, "system") }
+            }
+        }
+    }
+
+    private func confirm(_ command: SystemCommand) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "\(command.title)?"
+        alert.informativeText = command.confirmationText ?? ""
+        alert.alertStyle = .warning
+        // Cancel is first, so Return cancels. A reflexive second Return cannot fire the command.
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: command.title)
+        NSApp.takeFocus()
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    func shortcut(for command: SystemCommand) -> Shortcut? {
+        prompts.snapshot?.bindings[command.owner].flatMap(Shortcut.init)
+    }
+
+    func shortcutError(for command: SystemCommand) -> String? {
+        context.hotKeys.statuses[command.owner]?.error
+    }
+
+    func setShortcut(_ shortcut: Shortcut?, for command: SystemCommand) async {
+        if let shortcut, !register(command, shortcut) { return }
+        if shortcut == nil { context.hotKeys.unregister(command.owner) }
+        await prompts.perform { try await $0.saveBinding(owner: command.owner, chord: shortcut?.description ?? "") }
+    }
+
+    private func register(_ command: SystemCommand, _ shortcut: Shortcut) -> Bool {
+        do {
+            try context.hotKeys.register(command.owner, shortcut) { [weak self] in
+                self?.applySystemToFront(command)
+            }
+            status = nil
+            return true
+        } catch {
+            status = (error.message, false)
+            if context.hotKeys.statuses[command.owner]?.requested == nil {
+                context.hotKeys.markUnavailable(command.owner, shortcut, reason: error.message)
+            }
+            return false
+        }
+    }
+
     private func restoreShortcuts() {
         guard !context.isUITesting else { return }
         for command in WindowCommand.allCases {
+            if let shortcut = shortcut(for: command) { _ = register(command, shortcut) }
+        }
+        for command in SystemCommand.allCases {
             if let shortcut = shortcut(for: command) { _ = register(command, shortcut) }
         }
         for script in scripts {
@@ -343,6 +414,7 @@ import SwiftUI
             ("Snippets", snippetError?.code ?? "\(snippets.count)"),
             ("Scripts", "\(scripts.count)"),
             ("Window shortcuts", "\(WindowCommand.allCases.filter { shortcut(for: $0) != nil }.count)"),
+            ("System shortcuts", "\(SystemCommand.allCases.filter { shortcut(for: $0) != nil }.count)"),
         ]
     }
 }

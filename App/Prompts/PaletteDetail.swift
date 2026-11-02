@@ -114,6 +114,24 @@ struct WindowDetail: View {
     }
 }
 
+struct SystemDetail: View {
+    let command: SystemCommand
+    let shortcut: Shortcut?
+
+    var body: some View {
+        DetailPage {
+            Text(command.title).font(.system(size: 16, weight: .semibold))
+            Chip(text: "System")
+            DetailRows(rows: [
+                ("Does", command.summary),
+                ("Group", command.group),
+                ("Asks first", command.needsConfirmation ? "Yes" : "No"),
+                ("Shortcut", shortcut?.display ?? "None"),
+            ])
+        }
+    }
+}
+
 struct FileDetail: View {
     let hit: FileHit
     @State private var details: FileDetails?
