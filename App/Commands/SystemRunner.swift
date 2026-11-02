@@ -195,6 +195,14 @@ import CueKit
         guard CFPreferencesSynchronize(kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
             throw CueError("SYSTEM_FAILED", "Cue could not change the appearance.")
         }
+        // Read the change back, then tell running apps the theme inputs changed, as the system does.
+        let stored = CFPreferencesCopyValue("AppleInterfaceStyleSwitchesAutomatically" as CFString,
+                                            kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        guard (stored as? NSNumber)?.boolValue == true else {
+            throw CueError("SYSTEM_FAILED", "Cue could not change the appearance.")
+        }
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil, userInfo: nil, deliverImmediately: true)
     }
 
     private func lockScreen() throws(CueError) {

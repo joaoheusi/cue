@@ -37,6 +37,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHumanReadableCopyright: Your prompts, clipboard, and menu bar, on cue.
+        NSAppleEventsUsageDescription: Cue controls System Events to change the system appearance and put this Mac to sleep when you run those commands.
         SUFeedURL: https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml
         SUPublicEDKey: SU5Q3SRAb8XyQO5dDikWbab9z2uf136QrGSHUqboLso=
         SUEnableAutomaticChecks: true
