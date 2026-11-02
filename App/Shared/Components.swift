@@ -156,6 +156,8 @@ struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View
     @ViewBuilder var detail: () -> Detail
     var onSubmit: (Item, _ alternate: Bool) -> Void
     var onKeyPress: ((Item?, KeyPress) -> KeyPress.Result)?
+    /// Runs on Esc when the search is already empty. Return true to keep the window open.
+    var onEscape: () -> Bool = { false }
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -173,6 +175,13 @@ struct CommandList<Item: Identifiable, Row: View, Bar: View, Detail: View>: View
                         guard let item = current else { return .ignored }
                         onSubmit(item, !press.modifiers.isDisjoint(with: [.shift, .command]))
                         return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        if !query.isEmpty {
+                            query = ""
+                            return .handled
+                        }
+                        return onEscape() ? .handled : .ignored
                     }
                     .onKeyPress(phases: .down) { press in onKeyPress?(current, press) ?? .ignored }
             }

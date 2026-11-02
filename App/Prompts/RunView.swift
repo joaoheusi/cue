@@ -15,10 +15,7 @@ struct RunView: View {
                 if let input = run.input { inputRow(input) }
                 output
                 if let message = run.message {
-                    ErrorBanner(error: CueError("RUN_MESSAGE", message), retryTitle: "Dismiss") {
-                        model.closeRun()
-                        model.context.closeCommand()
-                    }
+                    ErrorBanner(error: CueError("RUN_MESSAGE", message), retryTitle: "Dismiss") { run.message = nil }
                 }
             }
             .padding(.horizontal, 20)
@@ -34,7 +31,6 @@ struct RunView: View {
     private func cancel() {
         if run.isRunning { return model.stopRun() }
         model.closeRun()
-        model.context.closeCommand()
     }
 
     private var header: some View {
@@ -321,6 +317,9 @@ struct AskView: View {
             }
             .padding(20)
             CommandFooter { EmptyView() } trailing: { KeyHint(label: "Continue", keys: "↵", primary: true) }
+        }
+        .background {
+            Button("Back", action: back).keyboardShortcut(.cancelAction).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
         }
         .onAppear { DispatchQueue.main.async { focused = questions.first } }
     }

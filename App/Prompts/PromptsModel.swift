@@ -509,7 +509,7 @@ import UniformTypeIdentifiers
         var inputName = "clipboard"
         var target: PasteTarget?
         var generation: Int?
-        var selection = ""
+        var selection: SelectedText?
     }
 
     private func prepare(_ template: String, paste: Bool, assistant: Bool, invocation: Invocation, answers: [String: String],
@@ -527,6 +527,7 @@ import UniformTypeIdentifiers
         do {
             let uses = try Template.uses(template)
             var inputs = Template.Inputs(answers: answers)
+            var selection: SelectedText?
             if uses.clipboard {
                 inputs.clipboard = try context.paste.readText()
                 if inputs.clipboard.isEmpty { throw CueError("CLIPBOARD_EMPTY", "Copy source text before using this action.") }
@@ -537,7 +538,9 @@ import UniformTypeIdentifiers
                 if let sampleSelection {
                     inputs.selection = sampleSelection
                 } else {
-                    inputs.selection = await context.paste.selectedText(in: invocation.front, unchanged: context.paste.changeCount).text ?? ""
+                    let read = await context.paste.selectedText(in: invocation.front, unchanged: context.paste.changeCount)
+                    inputs.selection = read.text ?? ""
+                    selection = SelectedText(text: inputs.selection, copied: read.copied)
                 }
                 if inputs.selection.isEmpty { throw CueError("SELECTION_EMPTY", "Select text before using this action.") }
                 try Template.validateText(inputs.selection, maxBytes: Template.outputLimit)
@@ -545,7 +548,7 @@ import UniformTypeIdentifiers
             let generation = paste || assistant ? context.paste.changeCount : nil
             let output = try Template.renderLocal(template, inputs: inputs)
             return .success(Prepared(output: output, input: uses.clipboard ? inputs.clipboard : uses.selection ? inputs.selection : nil,
-                                     inputName: uses.clipboard ? "clipboard" : "selection", target: target, generation: generation, selection: inputs.selection))
+                                     inputName: uses.clipboard ? "clipboard" : "selection", target: target, generation: generation, selection: selection))
         } catch {
             return .failure(error.cueError)
         }

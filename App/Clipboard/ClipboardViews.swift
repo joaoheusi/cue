@@ -137,7 +137,8 @@ struct ClipboardCommandView: View {
                         row: { entry, selected in row(entry.item, selected) },
                         bar: { bar },
                         detail: { if let current { ClipDetail(item: current, module: module) } },
-                        onSubmit: { entry, alternate in Task { await module.use(entry.item, paste: !alternate) } })
+                        onSubmit: { entry, alternate in Task { await module.use(entry.item, paste: !alternate) } },
+                        onEscape: resetFilters)
                 .overlay { emptyMessage.padding(.top, 96) }
             if module.accessDenied && module.captureEnabled {
                 ErrorBanner(error: ClipboardModule.accessDeniedError, retryTitle: "Open Settings", retry: module.openPasteSettings)
@@ -155,6 +156,13 @@ struct ClipboardCommandView: View {
         }
         .background { shortcuts }
         .task(id: searchKey) { await search(searchKey) }
+    }
+
+    private func resetFilters() -> Bool {
+        guard filter != .all || app != nil else { return false }
+        filter = .all
+        app = nil
+        return true
     }
 
     private var bar: some View {

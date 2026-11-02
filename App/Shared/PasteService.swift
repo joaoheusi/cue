@@ -39,6 +39,13 @@ enum Delivery: Equatable {
     var succeeded: Bool { self == .pasted || self == .copied }
 }
 
+/// The selected text and how Cue read it. Accessibility and ⌘C can format the same selection differently,
+/// so a replace must re-read with the same reader before it compares.
+struct SelectedText: Equatable {
+    let text: String
+    let copied: Bool
+}
+
 enum PasteContent {
     case text(String)
     case data(text: String?, [String: Data])
@@ -121,13 +128,15 @@ enum PasteContent {
         return FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
     }
 
-    func selectedText(in app: NSRunningApplication?, unchanged generation: Int? = nil) async -> (text: String?, copied: Bool) {
+    /// `copied` limits the read to one reader: `false` reads only Accessibility, `true` sends only ⌘C.
+    func selectedText(in app: NSRunningApplication?, unchanged generation: Int? = nil, copied: Bool? = nil) async -> (text: String?, copied: Bool) {
         guard canReadTarget, let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return (nil, false) }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
         let field = element(application, kAXFocusedUIElementAttribute)
         if isSecure(field) { return (nil, false) }
-        if let text = field.flatMap({ attribute($0, kAXSelectedTextAttribute) as? String }), !text.isEmpty { return (text, false) }
+        if copied != true, let text = field.flatMap({ attribute($0, kAXSelectedTextAttribute) as? String }), !text.isEmpty { return (text, false) }
+        if copied == false { return (nil, false) }
         return await copySelection(from: app, application: application, unchanged: generation)
     }
 
@@ -247,7 +256,7 @@ enum PasteContent {
         return text
     }
 
-    func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, replacing original: String? = nil,
+    func deliver(_ text: String, paste: Bool, target: PasteTarget?, generation: Int?, replacing original: SelectedText? = nil,
                  isCancelled: () -> Bool, hide: () -> Void) async -> Delivery {
         guard paste, let target, let original else {
             return await deliver(.text(text), paste: paste, target: target, generation: generation, isCancelled: isCancelled, hide: hide)
@@ -258,10 +267,11 @@ enum PasteContent {
         if let failure = await retry(target, isCancelled: isCancelled, { check(target, foreground: true) ?? (modifiersHeld ? .modifiersHeld : nil) }) {
             return copyInstead(text, expected: generation, failure)
         }
-        let selection = await selectedText(in: target.app, unchanged: generation)
+        let selection = await selectedText(in: target.app, unchanged: generation, copied: original.copied)
         let expected = selection.copied && generation != nil ? changeCount : generation
         if isCancelled() { return copyInstead(text, expected: expected, .cancelled) }
-        if let failure = PasteRules.replace(original: original, current: selection.text) {
+        if let failure = PasteRules.replace(original: original.text, current: selection.text) {
+            log.record("\(failure.error.code) app=\(target.app.bundleIdentifier ?? "?") copied=\(original.copied) length=\(original.text.count)/\(selection.text?.count ?? -1)", "paste.replace")
             return copyInstead(text, expected: expected, failure)
         }
         let written: Int
