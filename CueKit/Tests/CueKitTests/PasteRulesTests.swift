@@ -23,6 +23,15 @@ import Testing
         #expect(PasteRules.check(observe { $0.focusedWindow = .different; $0.focusedField = .missing }, foreground: true) == .targetChanged)
     }
 
+    @Test func unreadableFocusStillAllowsPasteIntoTheSameApp() {
+        #expect(PasteRules.check(observe { $0.focusedWindow = .unknown; $0.focusedField = .unknown }, foreground: true) == nil)
+        #expect(PasteRules.check(observe { $0.focusedField = .unknown }, foreground: true) == nil)
+        #expect(PasteRules.check(observe { $0.focusedWindow = .different; $0.focusedField = .unknown }, foreground: true) == .targetChanged)
+        #expect(PasteRules.check(observe { $0.focusedWindow = .missing; $0.focusedField = .unknown }, foreground: true) == .focusTimeout)
+        #expect(PasteRules.check(observe { $0.focusedField = .unknown; $0.secureField = true }, foreground: true) == .protectedInput)
+        #expect(PasteRules.check(observe { $0.focusedField = .unknown; $0.front = .other }, foreground: true) == .targetChanged)
+    }
+
     @Test func inactiveTargetIsValidatedByExistenceWhileCueIsOpen() {
         #expect(PasteRules.check(observe { $0.front = .cue; $0.focusedField = .missing }, foreground: false) == nil)
         #expect(PasteRules.check(observe { $0.front = .cue; $0.windowExists = false }, foreground: false) == .targetChanged)

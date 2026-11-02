@@ -533,6 +533,15 @@ struct PaletteView: View {
         }
     }
 
+    /// Cue stays closed so the user keeps working where they were. It reopens only when macOS blocks notifications.
+    private func notify(_ title: String, _ failure: CueError) {
+        model.context.notifier.post(title, failure.message) {
+            error = failure
+            recovering = true
+            model.context.showCommandPassively()
+        }
+    }
+
     private func deliver(_ work: @escaping () async -> Result<Delivery, CueError>) {
         guard !busy else { return }
         busy = true
@@ -541,15 +550,9 @@ struct PaletteView: View {
             defer { busy = false }
             switch await work() {
             case .success(.copiedNotPasted(let failure)):
-                error = CueError(failure.code, Delivery.copiedNotPasted(failure).message)
-                recovering = true
-                model.context.showCommandPassively()
+                notify("Copied, not pasted", CueError(failure.code, Delivery.copiedNotPasted(failure).message))
             case .success(.failedBeforeCopy(let failure)):
-                error = failure
-                if !model.context.commandVisible() {
-                    recovering = true
-                    model.context.showCommandPassively()
-                }
+                if model.context.commandVisible() { error = failure } else { notify("Not pasted", failure) }
             case .success:
                 break
             case .failure(let failure):
