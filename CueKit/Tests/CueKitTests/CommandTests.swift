@@ -326,6 +326,13 @@ struct CommandTests {
         #expect(TextDiff.additions(from: "x", to: "") == [])
     }
 
+    @Test func fileRankingPrefersPrefixThenShortThenPath() {
+        let paths = ["/a/my-report.txt", "/b/report.txt", "/a/report.txt", "/a/reports-final.txt", "/a/report.md"]
+        #expect(FileScope.ranked(paths, needle: "Rep", limit: 3).map { paths[$0] } == ["/a/report.md", "/a/report.txt", "/b/report.txt"])
+        #expect(FileScope.ranked(paths, needle: "rep", limit: 9).last == 0)
+        #expect(FileScope.ranked([], needle: "rep", limit: 9).isEmpty)
+    }
+
     @Test func fileScopeHonorsDepthAndSkips() {
         let scope = FileScope(locations: [.init(path: "/Users/a", depth: 2), .init(path: "/Users/a/Projects", depth: nil)],
                               skip: ["node_modules", "venv*"], home: "/Users/a")

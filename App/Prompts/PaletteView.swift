@@ -249,7 +249,7 @@ struct PaletteView: View {
         .onChange(of: model.pendingAsk?.id) { takePendingAsk() }
         .onChange(of: query) {
             error = nil
-            commands.files.clear()
+            commands.files.narrow(to: query)
             if trimmed.isEmpty { filter = .all }
         }
         .task { await commands.reload() }

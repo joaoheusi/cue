@@ -360,7 +360,7 @@ private struct ClipFileIcon: View {
 
     var body: some View {
         let type = path.hasSuffix("/") ? UTType.folder : UTType(filenameExtension: (path as NSString).pathExtension) ?? .data
-        Image(nsImage: IconCache.type(type)).resizable().frame(width: size, height: size)
+        FileIcon(source: .type(type), size: size)
     }
 }
 
