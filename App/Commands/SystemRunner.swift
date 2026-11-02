@@ -7,7 +7,7 @@ import CueKit
     private static let finderID = "com.apple.finder"
 
     private let canPostEvents: @MainActor () -> Bool
-    private var savedMicLevel: Float?
+    private var savedMicLevels: [AudioDeviceID: Float] = [:]
 
     init(canPostEvents: @escaping @MainActor () -> Bool) {
         self.canPostEvents = canPostEvents
@@ -82,10 +82,11 @@ import CueKit
         if let muted = Self.mute(of: device, scope: scope), Self.setMute(!muted, of: device, scope: scope) {
             return muted ? "Microphone unmuted." : "Microphone muted."
         }
-        // Some microphones have no mute switch. Turn the input level to zero and keep the old level to restore.
-        if let saved = savedMicLevel {
+        // Some microphones have no mute switch. Turn the input level to zero and keep the old level
+        // per device, so switching inputs cannot restore one microphone's level onto another.
+        if let saved = savedMicLevels[device] {
             guard Self.setVolume(saved, of: device, scope: scope) else { throw Self.unsupportedMic }
-            savedMicLevel = nil
+            savedMicLevels[device] = nil
             return "Microphone unmuted."
         }
         guard let current = Self.volume(of: device, scope: scope) else { throw Self.unsupportedMic }
@@ -94,7 +95,7 @@ import CueKit
             return "Microphone unmuted."
         }
         guard Self.setVolume(0, of: device, scope: scope) else { throw Self.unsupportedMic }
-        savedMicLevel = current
+        savedMicLevels[device] = current
         return "Microphone muted."
     }
 
