@@ -24,7 +24,8 @@ public enum PasteFailure: Int, Sendable {
 
 public enum PasteRules {
     public enum Front: Sendable { case target, cue, other }
-    public enum Focus: Sendable { case same, different, missing }
+    /// `unknown` means Cue could not read this element when it opened, so there is nothing to compare against.
+    public enum Focus: Sendable { case same, different, missing, unknown }
 
     public struct Observation: Sendable {
         public var canRead = true
@@ -54,9 +55,9 @@ public enum PasteRules {
             return o.windowExists && o.fieldExists ? nil : .targetChanged
         case .target:
             if o.secureField { return .protectedInput }
-            if o.focusedWindow == .same && o.focusedField == .same { return nil }
             if o.focusedWindow == .different || o.focusedField == .different { return .targetChanged }
-            return foreground ? .focusTimeout : nil
+            if o.focusedWindow == .missing || o.focusedField == .missing { return foreground ? .focusTimeout : nil }
+            return nil
         }
     }
 

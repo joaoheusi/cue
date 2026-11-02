@@ -469,19 +469,30 @@ struct ClipboardStatus: Equatable {
             isCancelled: { invocation?.cancelled ?? false }, hide: context.closeCommand)
         switch delivery {
         case .pasted, .copied:
-            let note = fallback ? "Copied, not pasted. \(reason ?? "") Press ⌘V to paste." : loaded.warning.map { "Copied. \($0)" }
-            commandStatus = note.map { ClipboardStatus(text: $0, success: false) } ?? ClipboardStatus(text: delivery.message, success: true)
-            if note != nil { context.showCommandPassively() }
+            if fallback {
+                notify("Copied, not pasted", "\(reason ?? "") Press ⌘V to paste.")
+            } else if let warning = loaded.warning {
+                notify("Copied", warning)
+            } else {
+                commandStatus = ClipboardStatus(text: delivery.message, success: true)
+            }
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .copiedNotPasted(let error):
             context.log.record(error, "clipboard")
-            commandStatus = ClipboardStatus(text: item.content.isText ? delivery.message : "Copied, but not pasted. \(error.message)", success: false)
-            context.showCommandPassively()
+            notify("Copied, not pasted", "\(error.message) Press ⌘V to paste.")
             await run(.command) { try await $0.markUsed(item.id, now: Date()) }
         case .failedBeforeCopy(let error):
             report(error, .command)
         case .cancelled:
             break
+        }
+    }
+
+    /// Cue stays closed so the user keeps working where they were. It reopens only when macOS blocks notifications.
+    private func notify(_ title: String, _ message: String) {
+        context.notifier.post(title, message) { [weak self] in
+            self?.commandStatus = ClipboardStatus(text: "\(title). \(message)", success: false)
+            self?.context.showCommandPassively()
         }
     }
 

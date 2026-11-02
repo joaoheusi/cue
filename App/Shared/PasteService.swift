@@ -6,11 +6,12 @@ import CueKit
 @MainActor final class PasteTarget {
     let app: NSRunningApplication
     let application: AXUIElement
-    let window: AXUIElement
-    let field: AXUIElement
+    /// Nil when the app did not report it. Delivery then checks only the app, like ⌘V would.
+    let window: AXUIElement?
+    let field: AXUIElement?
     let session: Int
 
-    init(app: NSRunningApplication, application: AXUIElement, window: AXUIElement, field: AXUIElement, session: Int) {
+    init(app: NSRunningApplication, application: AXUIElement, window: AXUIElement?, field: AXUIElement?, session: Int) {
         self.app = app
         self.application = application
         self.window = window
@@ -86,14 +87,15 @@ enum PasteContent {
         if Self.isTerminal(app) { return .failure(PasteFailure.terminal.error) }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
-        guard let (window, field) = focus(of: app, application: application) else { return .failure(PasteFailure.targetUnavailable.error) }
+        let (window, field) = focus(of: app, application: application)
         if isSecure(field) { return .failure(PasteFailure.protectedInput.error) }
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
     }
 
     /// Electron keeps its accessibility tree off until a client asks for it, so its first focus read fails.
     /// Capture runs before Cue's panel takes key focus, so the wait must stay synchronous and short.
-    private func focus(of app: NSRunningApplication, application: AXUIElement) -> (window: AXUIElement, field: AXUIElement)? {
+    /// Browsers and Electron apps often hide their focused element. Cue then pastes into the app without an exact-field check.
+    private func focus(of app: NSRunningApplication, application: AXUIElement) -> (window: AXUIElement?, field: AXUIElement?) {
         func readFocus() -> (window: AXUIElement, field: AXUIElement)? {
             guard let window = element(application, kAXFocusedWindowAttribute),
                   let field = element(application, kAXFocusedUIElementAttribute)
@@ -109,9 +111,9 @@ enum PasteContent {
                 if let focus = readFocus() { return focus }
             }
         }
-        let window = read(application, kAXFocusedWindowAttribute).1, field = read(application, kAXFocusedUIElementAttribute).1
-        log.record("\(PasteFailure.targetUnavailable.error.code) app=\(app.bundleIdentifier ?? "?") window=\(window) field=\(field)", "paste.capture")
-        return nil
+        let window = read(application, kAXFocusedWindowAttribute), field = read(application, kAXFocusedUIElementAttribute)
+        log.record("FOCUS_UNREADABLE app=\(app.bundleIdentifier ?? "?") window=\(window.1) field=\(field.1)", "paste.capture")
+        return (window.0, field.0)
     }
 
     private static func isElectron(_ app: NSRunningApplication) -> Bool {
@@ -173,15 +175,15 @@ enum PasteContent {
             o.front = .target
             let (window, windowRead) = read(target.application, kAXFocusedWindowAttribute)
             let (field, fieldRead) = read(target.application, kAXFocusedUIElementAttribute)
-            o.focusedWindow = window.map { CFEqual($0, target.window) ? .same : .different } ?? .missing
-            o.focusedField = field.map { CFEqual($0, target.field) ? .same : .different } ?? .missing
-            o.secureField = field.map(isSecure) ?? false
+            o.focusedWindow = Self.compare(window, to: target.window)
+            o.focusedField = Self.compare(field, to: target.field)
+            o.secureField = isSecure(field)
             lastObservation = "front=target window=\(o.focusedWindow)/\(windowRead) field=\(o.focusedField)/\(fieldRead)"
         } else if front == ProcessInfo.processInfo.processIdentifier {
             o.front = .cue
             let windows = attribute(target.application, kAXWindowsAttribute) as? [AXUIElement] ?? []
-            o.windowExists = windows.contains { CFEqual($0, target.window) }
-            o.fieldExists = attribute(target.field, kAXRoleAttribute) is String
+            o.windowExists = target.window.map { window in windows.contains { CFEqual($0, window) } } ?? true
+            o.fieldExists = target.field.map { attribute($0, kAXRoleAttribute) is String } ?? true
             o.secureField = isSecure(target.field)
             lastObservation = "front=cue windowExists=\(o.windowExists) fieldExists=\(o.fieldExists)"
         } else {
@@ -191,10 +193,15 @@ enum PasteContent {
         return o
     }
 
+    private static func compare(_ current: AXUIElement?, to captured: AXUIElement?) -> PasteRules.Focus {
+        guard let captured else { return .unknown }
+        return current.map { CFEqual($0, captured) ? .same : .different } ?? .missing
+    }
+
     private func activate(_ target: PasteTarget) -> PasteFailure? {
         if let failure = check(target, foreground: false) { return failure }
         guard target.app.activate() else { return .targetChanged }
-        AXUIElementPerformAction(target.window, kAXRaiseAction as CFString)
+        if let window = target.window { AXUIElementPerformAction(window, kAXRaiseAction as CFString) }
         return nil
     }
 

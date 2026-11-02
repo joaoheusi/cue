@@ -394,7 +394,7 @@ import UniformTypeIdentifiers
         if visible {
             run.message = failure.message
             self.run = run
-            context.showCommandPassively()
+            context.notifier.post(run.title, failure.message) { [weak self] in self?.context.showCommandPassively() }
         } else {
             report(run.title, failure)
         }
