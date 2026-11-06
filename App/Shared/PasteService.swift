@@ -95,7 +95,7 @@ enum PasteContent {
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
         let (window, field) = focus(of: app, application: application)
-        if isSecure(field) { return .failure(PasteFailure.protectedInput.error) }
+        if isSecure(field, in: app) { return .failure(PasteFailure.protectedInput.error) }
         return .success(PasteTarget(app: app, application: application, window: window, field: field, session: session))
     }
 
@@ -134,7 +134,7 @@ enum PasteContent {
         let application = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(application, 0.2)
         let field = element(application, kAXFocusedUIElementAttribute)
-        if isSecure(field) { return (nil, false) }
+        if isSecure(field, in: app) { return (nil, false) }
         if copied != true, let text = field.flatMap({ attribute($0, kAXSelectedTextAttribute) as? String }), !text.isEmpty { return (text, false) }
         if copied == false { return (nil, false) }
         return await copySelection(from: app, application: application, unchanged: generation)
@@ -147,7 +147,7 @@ enum PasteContent {
             try? await Task.sleep(for: .milliseconds(20))
         }
         func isFront() -> Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier }
-        guard canPostPaste, !Self.isTerminal(app), !isSecure(element(application, kAXFocusedUIElementAttribute)), isFront() else { return (nil, false) }
+        guard canPostPaste, !Self.isTerminal(app), !isSecure(element(application, kAXFocusedUIElementAttribute), in: app), isFront() else { return (nil, false) }
         let before = changeCount
         guard generation == nil || before == generation, post(kVK_ANSI_C, to: app) else { return (nil, false) }
         let deadline = Date().addingTimeInterval(0.3)
@@ -186,14 +186,14 @@ enum PasteContent {
             let (field, fieldRead) = read(target.application, kAXFocusedUIElementAttribute)
             o.focusedWindow = Self.compare(window, to: target.window)
             o.focusedField = Self.compare(field, to: target.field)
-            o.secureField = isSecure(field)
+            o.secureField = isSecure(field, in: target.app)
             lastObservation = "front=target window=\(o.focusedWindow)/\(windowRead) field=\(o.focusedField)/\(fieldRead)"
         } else if front == ProcessInfo.processInfo.processIdentifier {
             o.front = .cue
             let windows = attribute(target.application, kAXWindowsAttribute) as? [AXUIElement] ?? []
             o.windowExists = target.window.map { window in windows.contains { CFEqual($0, window) } } ?? true
             o.fieldExists = target.field.map { attribute($0, kAXRoleAttribute) is String } ?? true
-            o.secureField = isSecure(target.field)
+            o.secureField = isSecure(target.field, in: target.app)
             lastObservation = "front=cue windowExists=\(o.windowExists) fieldExists=\(o.fieldExists)"
         } else {
             o.front = .other
@@ -373,8 +373,20 @@ enum PasteContent {
         return ((value as! AXUIElement), "ok")
     }
 
-    private func isSecure(_ field: AXUIElement?) -> Bool {
-        field.flatMap { attribute($0, kAXSubroleAttribute) as? String } == kAXSecureTextFieldSubrole || IsSecureEventInputEnabled()
+    private func isSecure(_ field: AXUIElement?, in app: NSRunningApplication) -> Bool {
+        field.flatMap { attribute($0, kAXSubroleAttribute) as? String } == kAXSecureTextFieldSubrole || holdsSecureInput(app)
+    }
+
+    /// Secure input is session-wide, so one app with a focused password field would block every other app.
+    /// Only the app that turned it on has a protected field. If macOS hides the owner, Cue assumes the target.
+    private func holdsSecureInput(_ app: NSRunningApplication) -> Bool {
+        guard IsSecureEventInputEnabled() else { return false }
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        guard let owner = session?["kCGSSessionSecureInputPID"] as? NSNumber else {
+            log.record("SECURE_INPUT_OWNER_UNKNOWN app=\(app.bundleIdentifier ?? "?")", "paste.secure")
+            return true
+        }
+        return owner.int32Value == app.processIdentifier
     }
 
     static func isTerminal(_ app: NSRunningApplication) -> Bool {
