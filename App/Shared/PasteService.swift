@@ -215,6 +215,7 @@ enum PasteContent {
         guard target.app.activate() else { return .targetChanged }
         AXUIElementSetAttributeValue(target.application, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
         guard let window = target.window ?? element(target.application, kAXFocusedWindowAttribute) else { return nil }
+        AXUIElementSetMessagingTimeout(window, 0.2)
         let result = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
         if result != .success { log.record("FOCUS_RESTORE_FAILED app=\(target.app.bundleIdentifier ?? "?") ax\(result.rawValue)", "paste.focus") }
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
