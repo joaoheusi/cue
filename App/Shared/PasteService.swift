@@ -207,10 +207,17 @@ enum PasteContent {
         return current.map { CFEqual($0, captured) ? .same : .different } ?? .missing
     }
 
+    /// Cue's panel takes key focus without activating Cue, so the target app stays frontmost and `activate()` can be a no-op.
+    /// Users saw native fields paste but lose the cursor, and web and Electron fields drop the paste, which points to a window left non-key.
+    /// Setting AXMain asks the window to become key again. Unverified on live apps; `paste.focus` logs when the write fails.
     private func activate(_ target: PasteTarget) -> PasteFailure? {
         if let failure = check(target, foreground: false) { return failure }
         guard target.app.activate() else { return .targetChanged }
-        if let window = target.window { AXUIElementPerformAction(window, kAXRaiseAction as CFString) }
+        AXUIElementSetAttributeValue(target.application, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        guard let window = target.window ?? element(target.application, kAXFocusedWindowAttribute) else { return nil }
+        let result = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        if result != .success { log.record("FOCUS_RESTORE_FAILED app=\(target.app.bundleIdentifier ?? "?") ax\(result.rawValue)", "paste.focus") }
+        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         return nil
     }
 
