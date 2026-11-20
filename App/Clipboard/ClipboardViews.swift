@@ -515,6 +515,15 @@ struct ClipboardSettingsView: View {
                 }
             }
             problems
+            SettingsSection("Screenshots") {
+                SettingsRow("Copy new screenshots to clipboard", note: "Also saved to history when history is on. The file stays where macOS saved it.") {
+                    toggle(\.copyScreenshots, "Copy new screenshots to clipboard")
+                        .accessibilityIdentifier("clipboard.copyScreenshots")
+                }
+            }
+            if module.screenshotFolderDenied && module.settings.copyScreenshots {
+                ErrorBanner(error: ScreenshotWatcher.folderDeniedError, retryTitle: "Open Files & Folders", retry: module.openFilesSettings)
+            }
             SettingsSection("Sensitive content") {
                 SettingsRow("API keys and tokens") {
                     picker(\.sensitive, SensitiveHandling.allCases) { $0.title }

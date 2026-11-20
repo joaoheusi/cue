@@ -3,10 +3,10 @@ import Foundation
 import ImageIO
 
 public enum ClipImage {
-    static let maxPixels = 200_000_000
+    public static let maxPixels = 200_000_000
     static let thumbnailSize = 64
 
-    static func capture(_ data: Data, type: String, maxPixels: Int = maxPixels) -> CaptureDecision {
+    public static func capture(_ data: Data, type: String, maxPixels: Int = maxPixels) -> CaptureDecision {
         guard data.count <= CaptureFilter.maxImageBytes else { return .skip(.tooLarge) }
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],

@@ -30,6 +30,12 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Cue controls System Events to change the system appearance and put this Mac to sleep when you run those commands.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Cue reads new screenshots saved to your Desktop so it can copy them to the clipboard.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Cue reads new screenshots saved to your Documents folder so it can copy them to the clipboard.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Cue reads new screenshots saved to your Downloads folder so it can copy them to the clipboard.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Your prompts, clipboard, and menu bar, on cue.</string>
 	<key>SUAutomaticallyUpdate</key>
