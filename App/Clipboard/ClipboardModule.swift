@@ -335,8 +335,7 @@ struct ClipboardStatus: Equatable {
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let types = board.types?.map(\.rawValue) ?? []
-        if let reason = CaptureFilter.screen(types: types, ownType: PasteService.originType.rawValue, secureInput: IsSecureEventInputEnabled(),
-                                             frontmostApp: frontmost, excludedApps: settings.excludedApps) {
+        if let reason = admission(types: types, frontmost: frontmost) {
             skipCounts[reason, default: 0] += 1
             return
         }
@@ -348,6 +347,12 @@ struct ClipboardStatus: Equatable {
             let elapsed = start.duration(to: .now) / .milliseconds(1)
             self?.finishRead(Task.isCancelled ? .cancelled : outcome, milliseconds: elapsed, types: types, count: count, source: frontmost)
         }
+    }
+
+    /// History admission shared by copies and screenshots: own writes, concealed types, secure input, and excluded apps in front.
+    private func admission(types: [String], frontmost: String?) -> SkipReason? {
+        CaptureFilter.screen(types: types, ownType: PasteService.originType.rawValue, secureInput: IsSecureEventInputEnabled(),
+                             frontmostApp: frontmost, excludedApps: settings.excludedApps)
     }
 
     private func finishRead(_ outcome: ClipboardReadOutcome, milliseconds: Double, types: [String], count: Int, source: String?) {
@@ -394,7 +399,8 @@ struct ClipboardStatus: Equatable {
 
     private func syncScreenshots() {
         guard let screenshots else { return }
-        if settings.copyScreenshots { return screenshots.start() }
+        // Start only from saved settings, so a store that fails to open never overrides a saved "off".
+        if store != nil, settings.copyScreenshots { return screenshots.start() }
         screenshots.stop()
         screenshotFolderDenied = false
     }
@@ -405,7 +411,12 @@ struct ClipboardStatus: Equatable {
         guard case .capture = shot.decision else { return context.log.record("SCREENSHOT_UNREADABLE", "clipboard.screenshot") }
         do {
             let count = try context.paste.write(.image(type: shot.type, shot.data, file: shot.file))
-            if captureEnabled, phase == .ready { finish(shot.decision, count: count, source: Screenshot.sourceApp) }
+            guard captureEnabled, phase == .ready else { return }
+            if let reason = admission(types: [], frontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
+                skipCounts[reason, default: 0] += 1
+                return
+            }
+            finish(shot.decision, count: count, source: Screenshot.sourceApp)
         } catch {
             context.log.record(error.cueError, "clipboard.screenshot")
         }

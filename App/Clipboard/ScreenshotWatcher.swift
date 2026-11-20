@@ -16,6 +16,7 @@ import CueKit
         "macOS is blocking Cue from reading your screenshot folder, so new screenshots are not copied. Allow Cue in System Settings → Privacy & Security → Files & Folders.")
     static let filesSettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
     private nonisolated static let tooLarge = CueError("SCREENSHOT_TOO_LARGE", "The screenshot is larger than 64 MB, so Cue did not copy it.")
+    private nonisolated static let notReady = CueError("SCREENSHOT_NOT_READY", "The screenshot file kept changing for 10 seconds, so Cue did not copy it.")
 
     private(set) var folder: URL?
     private let deliver: (Shot) -> Void
@@ -137,13 +138,16 @@ import CueKit
     private nonisolated static func load(_ file: URL, type: String) async throws -> Shot {
         var size = -1
         for _ in 0..<40 {
-            let current = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            if current > 0, current == size { break }
+            // FileManager stats the file on every call. URL resource values are cached and would never change.
+            let current = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue ?? 0
+            if current > 0, current == size {
+                guard size <= CaptureFilter.maxImageBytes else { throw tooLarge }
+                let data = try Data(contentsOf: file)
+                return Shot(file: file, type: type, data: data, decision: ClipImage.capture(data, type: type))
+            }
             size = current
             try await Task.sleep(for: .milliseconds(250))
         }
-        guard size <= CaptureFilter.maxImageBytes else { throw tooLarge }
-        let data = try Data(contentsOf: file)
-        return Shot(file: file, type: type, data: data, decision: ClipImage.capture(data, type: type))
+        throw notReady
     }
 }
