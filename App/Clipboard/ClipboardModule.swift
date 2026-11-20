@@ -24,6 +24,7 @@ struct ClipboardStatus: Equatable {
     private(set) var captureEnabled = false
     private(set) var capturePaused = false
     private(set) var accessDenied = false
+    private(set) var screenshotFolderDenied = false
     private(set) var hotKeyError: String?
     private(set) var reader = ClipboardReaderState()
     var commandStatus: ClipboardStatus?
@@ -46,6 +47,7 @@ struct ClipboardStatus: Equatable {
     @ObservationIgnored private var keychainKind: ClipboardKeychain.Kind?
     @ObservationIgnored private var appNames: [String: String] = [:]
     @ObservationIgnored private var launchClearDone = false
+    @ObservationIgnored private var screenshots: ScreenshotWatcher?
     @ObservationIgnored private let thumbnails = NSCache<NSString, NSImage>()
 
     private static let owner = "clipboard"
@@ -58,6 +60,8 @@ struct ClipboardStatus: Equatable {
 
     init(context: AppContext) {
         self.context = context
+        screenshots = ScreenshotWatcher(deliver: { [weak self] in self?.copyScreenshot($0) },
+                                        failed: { [weak self] in self?.screenshotFailed($0) })
         NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.startOCR() }
         }
@@ -65,6 +69,7 @@ struct ClipboardStatus: Equatable {
 
     func start() async {
         await openStore()
+        syncScreenshots()
         activateSavedHotKey()
         Task { await loadHistory() }
         purgeTask = Task { [weak self] in
@@ -77,6 +82,7 @@ struct ClipboardStatus: Equatable {
 
     func stop() {
         stopCapture()
+        screenshots?.stop()
         purgeTask?.cancel()
         expiryTask?.cancel()
     }
@@ -119,6 +125,9 @@ struct ClipboardStatus: Equatable {
             ("Excluded apps", "\(settings.excludedApps.count)"),
             ("Shortcut", settings.shortcut ?? "none"),
             ("Captured this session", "\(capturedCount)"),
+            ("Screenshot copy", screenshots?.isRunning == true ? "on" : "off"),
+            ("Screenshot folder", screenshots?.folder?.lastPathComponent ?? "none"),
+            ("Screenshot folder access", screenshotFolderDenied ? "denied" : "not denied"),
         ]
         rows += reader.diagnostics
         rows += ocr.diagnostics(pending: try? await store?.pendingOCRCount())
@@ -180,6 +189,7 @@ struct ClipboardStatus: Equatable {
         if boards != pinboards { pinboards = boards }
         let saved = await store.settings
         if saved != settings { settings = saved }
+        syncScreenshots()
         scheduleExpiry()
     }
 
@@ -381,6 +391,33 @@ struct ClipboardStatus: Equatable {
             report(error, .command)
         }
     }
+
+    private func syncScreenshots() {
+        guard let screenshots else { return }
+        if settings.copyScreenshots { return screenshots.start() }
+        screenshots.stop()
+        screenshotFolderDenied = false
+    }
+
+    /// The copy carries the image and its file. It is marked as Cue's own write, so `poll` skips it and history gets it once, here.
+    private func copyScreenshot(_ shot: ScreenshotWatcher.Shot) {
+        screenshotFolderDenied = false
+        guard case .capture = shot.decision else { return context.log.record("SCREENSHOT_UNREADABLE", "clipboard.screenshot") }
+        do {
+            let count = try context.paste.write(.image(type: shot.type, shot.data, file: shot.file))
+            if captureEnabled, phase == .ready { finish(shot.decision, count: count, source: Screenshot.sourceApp) }
+        } catch {
+            context.log.record(error.cueError, "clipboard.screenshot")
+        }
+    }
+
+    private func screenshotFailed(_ error: Error) {
+        guard ScreenshotWatcher.isDenied(error) else { return context.log.record((error as? CueError)?.code ?? "SCREENSHOT_READ_FAILED", "clipboard.screenshot") }
+        screenshotFolderDenied = true
+        context.log.record(ScreenshotWatcher.folderDeniedError, "clipboard.screenshot")
+    }
+
+    func openFilesSettings() { NSWorkspace.shared.open(ScreenshotWatcher.filesSettingsURL) }
 
     private static var pasteboardDenied: Bool { ClipboardReader.access == .alwaysDeny }
 

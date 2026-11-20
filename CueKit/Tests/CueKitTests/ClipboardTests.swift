@@ -491,6 +491,7 @@ import Testing
         #expect(decoded.retention == .day && decoded.maxItems == 250 && decoded.sensitive == .mask)
         #expect(decoded.maxStorage == ClipboardSettings.defaultMaxStorage)
         #expect(!decoded.clearOnQuit && !decoded.clearSystemClipboard)
+        #expect(decoded.copyScreenshots)
 
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -506,6 +507,7 @@ import Testing
         var settings = await source.settings
         settings.clearOnQuit = true
         settings.clearSystemClipboard = true
+        settings.copyScreenshots = false
         try await source.save(settings)
         let data = try await source.exportData(now: Date()).data
         #expect(try ClipboardExport.decode(data).settings == settings)

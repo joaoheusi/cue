@@ -38,6 +38,9 @@ targets:
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHumanReadableCopyright: Your prompts, clipboard, and menu bar, on cue.
         NSAppleEventsUsageDescription: Cue controls System Events to change the system appearance and put this Mac to sleep when you run those commands.
+        NSDesktopFolderUsageDescription: Cue reads new screenshots saved to your Desktop so it can copy them to the clipboard.
+        NSDocumentsFolderUsageDescription: Cue reads new screenshots saved to your Documents folder so it can copy them to the clipboard.
+        NSDownloadsFolderUsageDescription: Cue reads new screenshots saved to your Downloads folder so it can copy them to the clipboard.
         SUFeedURL: https://github.com/joaoheusi/cue/releases/latest/download/appcast.xml
         SUPublicEDKey: SU5Q3SRAb8XyQO5dDikWbab9z2uf136QrGSHUqboLso=
         SUEnableAutomaticChecks: true

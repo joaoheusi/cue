@@ -50,6 +50,8 @@ enum PasteContent {
     case text(String)
     case data(text: String?, [String: Data])
     case files([String])
+    /// Image data first, then its file, so apps that take images paste the picture.
+    case image(type: String, Data, file: URL)
 }
 
 @MainActor final class PasteService {
@@ -248,6 +250,10 @@ enum PasteContent {
             board.clearContents()
             guard board.writeObjects(paths.map { URL(fileURLWithPath: $0) as NSURL }) else { throw Self.writeFailed }
             board.addTypes([Self.originType], owner: nil)
+        case .image(let type, let data, let file):
+            let imageType = NSPasteboard.PasteboardType(type)
+            board.declareTypes([imageType, .fileURL, Self.originType], owner: nil)
+            guard board.setData(data, forType: imageType), board.setString(file.absoluteString, forType: .fileURL) else { throw Self.writeFailed }
         }
         board.setData(Data(), forType: Self.originType)
         return board.changeCount

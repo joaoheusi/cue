@@ -351,6 +351,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
     public var sensitive = SensitiveHandling.maskAndExpire
     public var clearOnQuit = false
     public var clearSystemClipboard = false
+    public var copyScreenshots = true
 
     public init() {}
 
@@ -393,7 +394,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         if let shortcut, Shortcut(shortcut) == nil { throw .validation("The clipboard shortcut is not valid.") }
     }
 
-    private enum CodingKeys: String, CodingKey { case retention, maxItems, maxStorage, excludedApps, shortcut, sensitive, clearOnQuit, clearSystemClipboard }
+    private enum CodingKeys: String, CodingKey { case retention, maxItems, maxStorage, excludedApps, shortcut, sensitive, clearOnQuit, clearSystemClipboard, copyScreenshots }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -405,6 +406,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         sensitive = try c.decodeIfPresent(SensitiveHandling.self, forKey: .sensitive) ?? .maskAndExpire
         clearOnQuit = try c.decodeIfPresent(Bool.self, forKey: .clearOnQuit) ?? false
         clearSystemClipboard = try c.decodeIfPresent(Bool.self, forKey: .clearSystemClipboard) ?? false
+        copyScreenshots = try c.decodeIfPresent(Bool.self, forKey: .copyScreenshots) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -417,6 +419,7 @@ public struct ClipboardSettings: Codable, Equatable, Sendable {
         try c.encode(sensitive, forKey: .sensitive)
         try c.encode(clearOnQuit, forKey: .clearOnQuit)
         try c.encode(clearSystemClipboard, forKey: .clearSystemClipboard)
+        try c.encode(copyScreenshots, forKey: .copyScreenshots)
     }
 }
 

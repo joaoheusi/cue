@@ -12,6 +12,7 @@
 		113BDB98FB0C17026FA1E471 /* RunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B798B9C28168133C43AEA53A /* RunView.swift */; };
 		15BCAF5665A0D4082B50D4C6 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B5C3C61F3598BBDA569DDDF7 /* AppIcon.icns */; };
 		1713B66D08C632398C8B234F /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96AA1466DDA26AC368B71216 /* Components.swift */; };
+		2ADC37BD4E2C3660AFF08FC8 /* ScreenshotWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18874FCF55F7DD8B11D684D7 /* ScreenshotWatcher.swift */; };
 		2F70C99AC6FAEE7C95340D39 /* PromptsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A1C92CBD8C14172DC05F9B /* PromptsSettingsView.swift */; };
 		3D335B5763E3E2934105EEE5 /* ClipboardModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 968FCDDA73CC2E562E856381 /* ClipboardModule.swift */; };
 		3DB267969F0742BB9979B608 /* Services.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B9B881F433A44A4A73D9E7 /* Services.swift */; };
@@ -60,6 +61,7 @@
 		0C298CD21474644228C5A31D /* PaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaletteView.swift; sourceTree = "<group>"; };
 		15D3B1BA9980DD836D06CC21 /* FileSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSearch.swift; sourceTree = "<group>"; };
 		17A1C92CBD8C14172DC05F9B /* PromptsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptsSettingsView.swift; sourceTree = "<group>"; };
+		18874FCF55F7DD8B11D684D7 /* ScreenshotWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotWatcher.swift; sourceTree = "<group>"; };
 		2A012DD1F7C546BF3BFB4D16 /* Design.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Design.swift; sourceTree = "<group>"; };
 		3193E7A4D20BF4A6C4F4CC4B /* CueUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CueUITests.swift; sourceTree = "<group>"; };
 		3D79C9D058BAD37B44783E3B /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -138,6 +140,7 @@
 				968FCDDA73CC2E562E856381 /* ClipboardModule.swift */,
 				CFB39D860C4ACE6BF365DF90 /* ClipboardReader.swift */,
 				B57374314D42F7B067C91A1E /* ClipboardViews.swift */,
+				18874FCF55F7DD8B11D684D7 /* ScreenshotWatcher.swift */,
 			);
 			path = Clipboard;
 			sourceTree = "<group>";
@@ -375,6 +378,7 @@
 				982E293B00FE49D50631D623 /* PromptsModule.swift in Sources */,
 				2F70C99AC6FAEE7C95340D39 /* PromptsSettingsView.swift in Sources */,
 				113BDB98FB0C17026FA1E471 /* RunView.swift in Sources */,
+				2ADC37BD4E2C3660AFF08FC8 /* ScreenshotWatcher.swift in Sources */,
 				3DB267969F0742BB9979B608 /* Services.swift in Sources */,
 				44FED3272407146DB66DD5C9 /* SettingsWindow.swift in Sources */,
 				72A3836C39DA0E9E36BE8538 /* SystemRunner.swift in Sources */,
